@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "Bocchi Privacy Shield",
+  "version": "1.0.0",
+  "minimum_chrome_version": "111",
+  "description": "Native anti-fingerprinting and privacy protection extension for Chrome.",
+  "permissions": [
+    "declarativeNetRequest",
+    "privacy",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background/service_worker.js"
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "cyt_rules",
+        "enabled": true,
+        "path": "rules/cyt_rules.json"
+      }
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/stealth_engine.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/bridge.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ]
+}

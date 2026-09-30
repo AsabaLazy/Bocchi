@@ -1,0 +1,24 @@
+# OS & editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Browser & Extension metadata / cache
+_metadata/
+
+# Build artifacts
+*.zip
+
+# Temporary files & debug scripts
+scratch_*.js
+scratch/
+apivoid_*.html
+apivoid_*.json
+apivoid_*.js
+
+# Agent environment files
+.agents/
+skills-lock.json
