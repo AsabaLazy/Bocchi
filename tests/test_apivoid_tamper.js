@@ -66,9 +66,10 @@ async function main() {
   const tempDir = fs.mkdtempSync(path.join('/tmp', 'apivoid-test-'));
   const extPath = path.resolve(__dirname, '..');
   const port = 9444;
+  const chromeBin = process.env.CHROME_BIN || 'chromium';
 
   console.log(`Starting Chromium with extension from: ${extPath}`);
-  const chromeProcess = spawn('chromium', [
+  const chromeProcess = spawn(chromeBin, [
     '--headless=new',
     '--no-sandbox',
     '--disable-gpu',

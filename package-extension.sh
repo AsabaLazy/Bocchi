@@ -13,20 +13,23 @@ rm -f "$OUTPUT"
 if command -v zip >/dev/null 2>&1; then
   zip -r "$OUTPUT" . \
     -x ".git/*" \
+    -x ".agents/*" \
     -x "node_modules/*" \
-    -x ".env" \
-    -x "*.map" \
+    -x "_metadata/*" \
     -x "tests/*" \
     -x "__tests__/*" \
+    -x "store-assets/*" \
+    -x ".*" \
+    -x "*.env" \
+    -x "*.map" \
     -x "*.test.*" \
     -x "*.spec.*" \
+    -x "*.zip" \
+    -x "*.sh" \
     -x "CHROMEWEBSTORE.md" \
     -x "README.md" \
     -x "CHANGELOG.md" \
-    -x ".DS_Store" \
-    -x "Thumbs.db" \
-    -x "*.sh" \
-    -x "store-assets/*"
+    -x "skills-lock.json"
 elif command -v python3 >/dev/null 2>&1; then
   python3 - <<EOF
 import os, zipfile, json
@@ -35,8 +38,8 @@ manifest = json.load(open('manifest.json'))
 version = manifest.get('version', '1.0.0')
 output = f"bocchi-privacy-shield-v{version}.zip"
 
-exclude_dirs = {'node_modules', 'tests', '__tests__', 'store-assets', '_metadata'}
-exclude_files = {'CHROMEWEBSTORE.md', 'README.md', 'CHANGELOG.md', 'skills-lock.json', '.DS_Store', 'Thumbs.db', '.env', output}
+exclude_dirs = {'node_modules', 'tests', '__tests__', 'store-assets', '_metadata', '.agents', '.git'}
+exclude_files = {'CHROMEWEBSTORE.md', 'README.md', 'CHANGELOG.md', 'skills-lock.json', '.DS_Store', 'Thumbs.db', '.env', '.gitignore', output}
 
 with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as zf:
     for root, dirs, files in os.walk('.'):

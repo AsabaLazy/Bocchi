@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bocchi Privacy Shield</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="brand">
+        <svg class="shield-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+        <span class="title">Bocchi Privacy Shield</span>
+      </div>
+      <div class="status-badge" id="statusBadge">
+        <span class="status-dot" id="statusDot"></span>
+        <span class="status-text" id="statusText">防御中</span>
+      </div>
+    </header>
+
+    <!-- Master Switch Card -->
+    <div class="card master-card">
+      <div class="card-info">
+        <span class="card-title">全局防御总控</span>
+        <span class="card-desc">一键启用或挂起所有指纹伪装与混淆</span>
+      </div>
+      <label class="switch" title="开启或暂停全局防御">
+        <input type="checkbox" id="globalShieldEnabled" checked>
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <!-- Current Site Bypass Card -->
+    <div class="card site-card" id="siteCard">
+      <div class="site-header">
+        <div class="site-meta">
+          <span class="site-label">当前站点</span>
+          <span class="site-domain" id="siteDomain">检测中...</span>
+        </div>
+        <span class="site-status-badge" id="siteStatusText">受保护</span>
+      </div>
+      <div class="site-action">
+        <span class="site-action-desc">对此站点停用防护 (加入旁路白名单)</span>
+        <label class="switch switch-sm" title="对此站点停用防护">
+          <input type="checkbox" id="siteBypass">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Modules Group -->
+    <div class="section-title">核心防护模块</div>
+    <div class="modules-list" id="modulesList">
+      <div class="module-item">
+        <div class="module-info">
+          <span class="module-name">Canvas &amp; WebGL 画布脱敏</span>
+          <span class="module-desc">2D/3D 画布及 WebGPU 微扰动注入与动态降噪</span>
+        </div>
+        <label class="switch switch-sm" title="切换画布与 WebGL 防护">
+          <input type="checkbox" id="canvasProtection" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="module-item">
+        <div class="module-info">
+          <span class="module-name">WebRTC 隐私隔离</span>
+          <span class="module-desc">代理 UDP 流量并抑制私网 IPv4/mDNS 泄漏</span>
+        </div>
+        <label class="switch switch-sm" title="切换 WebRTC 保护">
+          <input type="checkbox" id="webrtcProtection" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="module-item">
+        <div class="module-info">
+          <span class="module-name">AudioContext 音频微扰</span>
+          <span class="module-desc">频域分析防探针与动态振幅微扰脱敏</span>
+        </div>
+        <label class="switch switch-sm" title="切换音频指纹微扰">
+          <input type="checkbox" id="audioProtection" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="module-item">
+        <div class="module-info">
+          <span class="module-name">动态时区与语言对齐</span>
+          <span class="module-desc">按出站 IP 自动伪装 Date / Intl 本地化参数</span>
+        </div>
+        <label class="switch switch-sm" title="切换时区与语言对齐">
+          <input type="checkbox" id="timezoneProtection" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="module-item">
+        <div class="module-info">
+          <span class="module-name">硬件与设备指纹混淆</span>
+          <span class="module-desc">规范化 Linux x86_64 CPU、内存及并发规格</span>
+        </div>
+        <label class="switch switch-sm" title="切换硬件与设备混淆">
+          <input type="checkbox" id="hardwareProtection" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="module-item">
+        <div class="module-info">
+          <span class="module-name">系统字体探测防御</span>
+          <span class="module-desc">阻断 DOMRect 及 Canvas 指纹扫描探测</span>
+        </div>
+        <label class="switch switch-sm" title="切换系统字体探测防御">
+          <input type="checkbox" id="fontProtection" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Footer Action -->
+    <button id="btnOpenPanel" class="btn-panel" type="button">
+      <span>高级字体脱敏与过滤控制台</span>
+      <span class="arrow-icon">&rarr;</span>
+    </button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

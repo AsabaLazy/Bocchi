@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bocchi Privacy Shield - 浏览器字体管理</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <div class="app">
+    <!-- Top Bar: Mode Selector & Search -->
+    <header class="top-bar">
+      <div class="mode-section">
+        <span class="mode-label">防指纹模式</span>
+        <div class="segmented-control" id="modeControl">
+          <button class="mode-btn active" data-mode="blacklist" type="button">黑名单模式</button>
+          <button class="mode-btn" data-mode="whitelist" type="button">白名单模式</button>
+        </div>
+      </div>
+      <div class="batch-section">
+        <span class="batch-label">冷门小语种脱敏</span>
+        <label class="switch" title="一键将梵文、阿拉伯文、符号及古代文字等其他语种加入脱敏隐藏">
+          <input type="checkbox" id="toggleOtherScripts">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="search-section">
+        <input type="text" id="searchInput" class="search-input" placeholder="快速搜索字体..." spellcheck="false" autocomplete="off">
+        <span class="font-count" id="fontCount">加载中...</span>
+      </div>
+    </header>
+
+    <!-- Hint Bar -->
+    <div class="hint-bar" id="modeHint">
+      黑名单模式：勾选的字体将被脱敏隐藏，未勾选保持可见
+    </div>
+
+    <!-- Font List Table -->
+    <main class="list-container">
+      <div class="table-header">
+        <div class="col-toggle sortable" id="headerToggle" title="点击按开关状态排序">
+          <span id="titleToggle">隐藏状态</span>
+          <span class="sort-icon" id="iconToggle">↕</span>
+        </div>
+        <div class="col-name sortable" id="headerName" title="点击按名称 A-Z 排序">
+          <span>字体名称（原生字形）</span>
+          <span class="sort-icon" id="iconName">↕</span>
+        </div>
+        <div class="col-badge sortable" id="headerCategory" title="点击按中西文分类排序">
+          <span>分类</span>
+          <span class="sort-icon" id="iconCategory">↕</span>
+        </div>
+      </div>
+      <div id="fontRows" class="font-rows">
+        <div class="loading">正在加载底层字体库...</div>
+      </div>
+    </main>
+  </div>
+
+  <script src="panel.js"></script>
+</body>
+</html>

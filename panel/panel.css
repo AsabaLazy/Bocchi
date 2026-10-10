@@ -1,0 +1,347 @@
+:root {
+  --background: #09090b;
+  --foreground: #fafafa;
+  --card: #141416;
+  --card-foreground: #fafafa;
+  --secondary: #222226;
+  --secondary-foreground: #fafafa;
+  --muted: #27272a;
+  --muted-foreground: #a1a1aa;
+  --border: #27272a;
+  --input: #27272a;
+  --ring: #d4d4d8;
+  --radius: 8px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 24px 20px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Top Bar: Mode Selector & Search */
+.top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  background-color: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.mode-section {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mode-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+
+.segmented-control {
+  display: inline-flex;
+  background-color: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.mode-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.mode-btn:hover {
+  color: var(--foreground);
+}
+
+.mode-btn.active {
+  background-color: var(--secondary);
+  color: var(--foreground);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.batch-section {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.batch-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+
+.search-section {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  max-width: 300px;
+  justify-content: flex-end;
+}
+
+.search-input {
+  width: 100%;
+  height: 28px;
+  background-color: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--foreground);
+  font-size: 12px;
+  padding: 0 10px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.search-input:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 1px var(--ring);
+}
+
+.search-input::placeholder {
+  color: #71717a;
+}
+
+.font-count {
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+/* Hint Bar */
+.hint-bar {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  padding: 0 2px;
+}
+
+/* Table */
+.list-container {
+  background-color: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.table-header {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 16px;
+  background-color: rgba(20, 20, 22, 0.95);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  user-select: none;
+}
+
+.col-toggle {
+  width: 85px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.col-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding-right: 16px;
+}
+
+.col-badge {
+  width: 76px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* Sortable Headers (Natural text click) */
+.sortable {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: color 0.15s;
+}
+
+.sortable:hover {
+  color: var(--foreground);
+}
+
+.sortable.active {
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.sort-icon {
+  font-size: 11px;
+  color: #71717a;
+  transition: color 0.15s;
+}
+
+.sortable.active .sort-icon {
+  color: var(--foreground);
+  font-weight: 700;
+}
+
+/* Rows (Dense 36px) */
+.font-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.font-row {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 16px;
+  border-bottom: 1px solid rgba(39, 39, 42, 0.4);
+  transition: background-color 0.1s;
+}
+
+.font-row:hover {
+  background-color: rgba(39, 39, 42, 0.35);
+}
+
+.font-row:last-child {
+  border-bottom: none;
+}
+
+.font-row.is-hidden {
+  background-color: rgba(239, 68, 68, 0.02);
+}
+
+.font-title {
+  font-size: 13.5px;
+  color: var(--foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.font-row.is-hidden .font-title {
+  color: #71717a;
+}
+
+/* Switch (Compact Radix style: 30x16px) */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 30px;
+  height: 16px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: var(--input);
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  border-radius: 9999px;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 12px;
+  width: 12px;
+  left: 2px;
+  bottom: 2px;
+  background-color: #71717a;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+input:checked + .slider {
+  background-color: var(--foreground);
+}
+
+input:checked + .slider:before {
+  transform: translateX(14px);
+  background-color: var(--background);
+}
+
+/* Badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 9999px;
+  line-height: 1.4;
+}
+
+.badge-cjk {
+  background-color: rgba(245, 158, 11, 0.1);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.badge-latin {
+  background-color: rgba(59, 130, 246, 0.1);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+}
+
+.badge-other {
+  background-color: rgba(168, 85, 247, 0.1);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.25);
+}
+
+.loading, .no-result {
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+}

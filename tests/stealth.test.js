@@ -230,15 +230,24 @@ const bridgeMockWin = {
 bridgeMockWin.window = bridgeMockWin;
 vm.runInContext(bridgeCode, vm.createContext(bridgeMockWin));
 
-assert.strictEqual(dispatchedBridgeEvents.length, 1, 'bridge.js must dispatch initial timezone sync event');
-assert.strictEqual(dispatchedBridgeEvents[0].type, '__bocchi_tz_sync__');
-assert.strictEqual(dispatchedBridgeEvents[0].detail.timezone, 'America/New_York');
+const tzEvt = dispatchedBridgeEvents.find(e => e.type === '__bocchi_tz_sync__');
+assert(tzEvt, 'bridge.js must dispatch initial timezone sync event');
+assert.strictEqual(tzEvt.detail.timezone, 'America/New_York');
+
+const fontEvt = dispatchedBridgeEvents.find(e => e.type === '__bocchi_fonts_sync__');
+assert(fontEvt, 'bridge.js must dispatch initial font sync event');
+assert.strictEqual(fontEvt.detail.blockBuiltin, true);
 assert.strictEqual(bridgePostMessageCalled, false, 'bridge.js must never call postMessage');
 
 if (bridgeStorageChangedListener) {
   bridgeStorageChangedListener({ targetTimezone: { newValue: 'Asia/Tokyo' } }, 'local');
-  assert.strictEqual(dispatchedBridgeEvents.length, 2, 'bridge.js must dispatch event on storage onChanged');
-  assert.strictEqual(dispatchedBridgeEvents[1].detail.timezone, 'Asia/Tokyo');
+  const latestTz = dispatchedBridgeEvents[dispatchedBridgeEvents.length - 1];
+  assert.strictEqual(latestTz.type, '__bocchi_tz_sync__');
+  assert.strictEqual(latestTz.detail.timezone, 'Asia/Tokyo');
+
+  bridgeStorageChangedListener({ customHiddenFonts: { newValue: ['CustomFont'] } }, 'local');
+  const latestFont = dispatchedBridgeEvents[dispatchedBridgeEvents.length - 1];
+  assert.strictEqual(latestFont.type, '__bocchi_fonts_sync__');
 }
 assert.strictEqual(bridgePostMessageCalled, false, 'bridge.js must never call postMessage on storage update');
 console.log('✓ content/bridge.js isolated world event synchronization verified.\n');
@@ -794,6 +803,11 @@ function createMockWindow(hostname, platform = 'Linux x86_64') {
       if (!this.listeners[type]) this.listeners[type] = [];
       this.listeners[type].push(listener);
     }
+    removeEventListener(type, listener) {
+      if (!this.listeners[type]) return;
+      const idx = this.listeners[type].indexOf(listener);
+      if (idx !== -1) this.listeners[type].splice(idx, 1);
+    }
     dispatchEvent(event) {
       if (this.listeners[event.type]) {
         for (const l of this.listeners[event.type]) l.call(this, event);
@@ -817,6 +831,7 @@ function createMockWindow(hostname, platform = 'Linux x86_64') {
       this.doNotTrack = null;
       this.globalPrivacyControl = false;
       this.hardwareConcurrency = 16;
+      this.deviceMemory = 32;
       this.permissions = {
         query(param) {
           return Promise.resolve({ state: 'denied' });
@@ -836,6 +851,16 @@ function createMockWindow(hostname, platform = 'Linux x86_64') {
   win.MediaDevices = MediaDevices;
   win.Navigator = Navigator;
   win.navigator = new Navigator();
+
+  class MemoryInfo {
+    get jsHeapSizeLimit() { return 4294967296; }
+    get totalJSHeapSize() { return 100000000; }
+    get usedJSHeapSize() { return 50000000; }
+  }
+  win.performance = {
+    now: () => Date.now(),
+    memory: new MemoryInfo()
+  };
 
   // Plugin
   class Plugin {
@@ -1096,8 +1121,14 @@ assert.strictEqual(testDateSummer.getMonth(), 8, 'getMonth must be 8 (September)
 assert.strictEqual(testDateSummer.getFullYear(), 2026, 'getFullYear must be 2026');
 assert.strictEqual(testDateSummer.getYear(), 126, 'getYear must be 126');
 
-// Test Date() without new returns string
+// Test Date() without new returns string and matches new Date().toString()
 assert.strictEqual(typeof winCYT.Date(), 'string', 'Date() without new must return string');
+assert.strictEqual(winCYT.Date(), (new winCYT.Date()).toString(), 'Date() without new must match (new Date()).toString()');
+
+// Test Date local setter in active timezone
+const modDate = new winCYT.Date('2026-09-29T12:00:00Z');
+modDate.setHours(15);
+assert.strictEqual(modDate.getHours(), 15, 'setHours(15) must result in getHours() === 15 in active timezone');
 
 // Test zero window backdoor leakage
 assert.strictEqual('__BOCCHI_TIMEZONE__' in winCYT, false, '__BOCCHI_TIMEZONE__ must NOT be defined on window');
@@ -1221,6 +1252,12 @@ probeEl.style.fontFamily = '"SimSun", monospace';
 assert.strictEqual(probeEl.offsetWidth, 150, 'SimSun probe offsetWidth must mask to fallback 150');
 assert.strictEqual(probeEl.offsetHeight, 76, 'SimSun probe offsetHeight must mask to fallback 76');
 
+// 2.1 Solitary Chinese font probe (BrowserLeaks style: single font name without generic fallback)
+const singleProbeEl = new winCYT.HTMLElement();
+singleProbeEl.style.fontFamily = 'SimSun';
+assert.strictEqual(singleProbeEl.offsetWidth, 150, 'Solitary SimSun probe offsetWidth must mask to fallback 150 without leaking sans-serif');
+assert.strictEqual(singleProbeEl.offsetHeight, 76, 'Solitary SimSun probe offsetHeight must mask to fallback 76');
+
 // 3. DOM probe getBoundingClientRect masking (inline styles)
 const probeRect = probeEl.getBoundingClientRect();
 assert.strictEqual(probeRect.width, 100, 'SimSun probe getBoundingClientRect width must mask to fallback 100');
@@ -1296,6 +1333,64 @@ const svgG = new winCYT.SVGGraphicsElement();
 svgG.setAttribute('font-family', '"SimSun", monospace');
 assert.strictEqual(svgG.getBBox().width, 100, 'SVGGraphicsElement.getBBox must mask SimSun to 100');
 assert.strictEqual(svgG.getAttribute('font-family'), '"SimSun", monospace', 'SVG font-family attribute restored after getBBox');
+
+// 11.1 Custom hidden font management and dynamic synchronization
+winCYT.document.dispatchEvent({
+  type: '__bocchi_fonts_sync__',
+  detail: {
+    customFonts: ['CustomBrandFont', '/secret-font-\\d+/'],
+    allowedFonts: ['SimSun'], // Explicitly whitelist SimSun
+    blockBuiltin: true
+  },
+  stopImmediatePropagation() {}
+});
+
+assert.strictEqual(winCYT.document.fonts.check('16px "CustomBrandFont"'), false, 'Custom brand font check must return false');
+assert.strictEqual(winCYT.document.fonts.check('16px "secret-font-99"'), false, 'Regex-matched custom font check must return false');
+assert.strictEqual(winCYT.document.fonts.check('16px Arial'), true, 'Standard Arial font check must still return true');
+assert.strictEqual(winCYT.document.fonts.check('16px "SimSun"'), true, 'Explicitly whitelisted SimSun check must return true');
+
+const customProbeEl = new winCYT.HTMLElement();
+customProbeEl.style.fontFamily = 'CustomBrandFont';
+assert.strictEqual(customProbeEl.offsetWidth, 150, 'Custom font offsetWidth must mask to fallback');
+
+// Reset SimSun back to masked
+winCYT.document.dispatchEvent({
+  type: '__bocchi_fonts_sync__',
+  detail: { customFonts: [], allowedFonts: [], blockBuiltin: true },
+  stopImmediatePropagation() {}
+});
+assert.strictEqual(winCYT.document.fonts.check('12px "SimSun"'), false, 'SimSun must be masked after reset');
+
+// 11.2 Whitelist Mode validation
+winCYT.document.dispatchEvent({
+  type: '__bocchi_fonts_sync__',
+  detail: {
+    fontMode: 'whitelist',
+    allowedFonts: ['Arial', 'Liberation Sans'],
+    customFonts: [],
+    blockBuiltin: true
+  },
+  stopImmediatePropagation() {}
+});
+assert.strictEqual(winCYT.document.fonts.check('16px Arial'), true, 'Whitelisted Arial must return true');
+assert.strictEqual(winCYT.document.fonts.check('16px "Liberation Sans"'), true, 'Whitelisted Liberation Sans must return true');
+assert.strictEqual(winCYT.document.fonts.check('16px "Times New Roman"'), false, 'Non-whitelisted Times New Roman must be masked in whitelist mode');
+assert.strictEqual(winCYT.document.fonts.check('16px "SimSun"'), false, 'Non-whitelisted SimSun must be masked in whitelist mode');
+
+// Restore to Blacklist mode
+winCYT.document.dispatchEvent({
+  type: '__bocchi_fonts_sync__',
+  detail: {
+    fontMode: 'blacklist',
+    allowedFonts: [],
+    customFonts: [],
+    blockBuiltin: true
+  },
+  stopImmediatePropagation() {}
+});
+assert.strictEqual(winCYT.document.fonts.check('16px "Times New Roman"'), true, 'Times New Roman must be allowed in blacklist mode');
+assert.strictEqual(winCYT.document.fonts.check('16px "SimSun"'), false, 'SimSun must be masked in blacklist mode');
 
 // 12. Web Worker & SharedWorker cross-context protection
 const worker = new winCYT.Worker('worker.js');
@@ -1488,7 +1583,7 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
   assert.strictEqual(adapter.info.architecture, 'vulkan', 'WebGPU architecture must be vulkan for Linux');
   assert.strictEqual(adapter.info.description, 'NVIDIA GeForce RTX 3060', 'WebGPU description must match Linux RTX 3060 GPU');
 
-  adapter.requestAdapterInfo().then(info => {
+  adapter.requestAdapterInfo().then(async info => {
     assert.strictEqual(info.architecture, 'vulkan', 'WebGPU requestAdapterInfo must return vulkan');
     console.log('✓ WebGPU adapter correctly spoofed with Linux Vulkan architecture.');
 
@@ -1656,6 +1751,254 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     assert.strictEqual(chDataA, chDataA2, 'Repeated getChannelData calls must return same buffer');
 
     console.log('✓ CreepJS 0 lies, descriptor integrity, error stack, font verification, canvas & audio native fidelity passed.\n');
+
+    // 9. Validating Dynamic Toggle Controls & Whitelist Bypass
+    console.log('[Test 9] Validating Dynamic Toggle Controls & Whitelist Bypass...');
+
+    // 9.1 Global Master Switch (globalShieldEnabled)
+    const winToggle = createMockWindow('coveryourtracks.eff.org', 'Linux x86_64');
+    vm.runInContext(stealthCode, vm.createContext(winToggle));
+
+    // Initially active: WebRTC SDP is sanitized, Canvas is farbled, Audio is farbled, Language is en-US
+    const pcTogInit = new winToggle.RTCPeerConnection();
+    const offerInit = await pcTogInit.createOffer();
+    assert(!offerInit.sdp.includes('192.168.1.100'), 'Initially, WebRTC SDP must be sanitized');
+
+    const canvasTogInit = new winToggle.HTMLCanvasElement();
+    const ctxTogInit = canvasTogInit.getContext('2d');
+    for (let i = 0; i < ctxTogInit._pixels.length; i++) ctxTogInit._pixels[i] = 0;
+    const dataUrlInit = canvasTogInit.toDataURL();
+    assert(!dataUrlInit.includes('mockPngR0A0'), 'Initially, Canvas toDataURL must farble on CYT domain');
+
+    const audioBufInit = new winToggle.AudioBuffer(500);
+    const audioDataInit = audioBufInit.getChannelData(0);
+    assert(audioDataInit[0] !== 0, 'Initially, AudioBuffer getChannelData must be farbled on CYT domain');
+
+    // Turn OFF globalShieldEnabled
+    winToggle.document.dispatchEvent({
+      type: '__bocchi_config_sync__',
+      detail: { globalShieldEnabled: false },
+      stopImmediatePropagation() {}
+    });
+
+    // Verify WebRTC retains private IP when global shield is disabled
+    const pcTogOff = new winToggle.RTCPeerConnection();
+    const offerOff = await pcTogOff.createOffer();
+    assert(offerOff.sdp.includes('192.168.1.100'), 'When global shield is disabled, WebRTC SDP must NOT be sanitized');
+
+    // Verify Canvas toDataURL does NOT farble when global shield is disabled
+    const canvasTog = new winToggle.HTMLCanvasElement();
+    const ctxTog = canvasTog.getContext('2d');
+    for (let i = 0; i < ctxTog._pixels.length; i++) ctxTog._pixels[i] = 0;
+    const dataUrlOff = canvasTog.toDataURL();
+    assert.strictEqual(dataUrlOff, 'data:image/png;base64,mockPngR0A0', 'When global shield is disabled, Canvas toDataURL must not farble');
+
+    // Verify AudioBuffer getChannelData does NOT farble when global shield is disabled
+    const audioBufOff = new winToggle.AudioBuffer(500);
+    const audioDataOff = audioBufOff.getChannelData(0);
+    assert.strictEqual(audioDataOff[0], 0, 'When global shield is disabled, AudioBuffer getChannelData must not farble');
+
+    // Verify WebGL renderer returns native renderer when global shield is disabled
+    const glTog = new winToggle.WebGLRenderingContext();
+    assert.strictEqual(glTog.getParameter(37446), 'llvmpipe (LLVM 12.0.0, 256 bits)', 'When global shield is disabled, WebGL unmasked renderer must return native string');
+
+    // Re-enable globalShieldEnabled
+    winToggle.document.dispatchEvent({
+      type: '__bocchi_config_sync__',
+      detail: { globalShieldEnabled: true },
+      stopImmediatePropagation() {}
+    });
+
+    const pcTogOn = new winToggle.RTCPeerConnection();
+    const offerOn = await pcTogOn.createOffer();
+    assert(!offerOn.sdp.includes('192.168.1.100'), 'When global shield is re-enabled, WebRTC SDP must be sanitized again');
+    console.log('✓ Global Master Switch enables and disables all protections dynamically.');
+
+    // 9.2 Per-site Whitelist Bypass (siteBypassList)
+    const winBypass = createMockWindow('sub.figma.com', 'Linux x86_64');
+    vm.runInContext(stealthCode, vm.createContext(winBypass));
+
+    const winProtected = createMockWindow('app.notion.so', 'Linux x86_64');
+    vm.runInContext(stealthCode, vm.createContext(winProtected));
+
+    const bypassConfig = { siteBypassList: ['https://figma.com', '*.canva.com'] };
+    winBypass.document.dispatchEvent({
+      type: '__bocchi_config_sync__',
+      detail: bypassConfig,
+      stopImmediatePropagation() {}
+    });
+    winProtected.document.dispatchEvent({
+      type: '__bocchi_config_sync__',
+      detail: bypassConfig,
+      stopImmediatePropagation() {}
+    });
+
+    // sub.figma.com matches figma.com -> bypassed
+    const pcBypass = new winBypass.RTCPeerConnection();
+    const offerBypass = await pcBypass.createOffer();
+    assert(offerBypass.sdp.includes('192.168.1.100'), 'Whitelisted/bypassed site must bypass WebRTC SDP sanitization');
+
+    // app.notion.so does NOT match -> protected
+    const pcProtected = new winProtected.RTCPeerConnection();
+    const offerProtected = await pcProtected.createOffer();
+    assert(!offerProtected.sdp.includes('192.168.1.100'), 'Non-bypassed site must remain protected');
+    console.log('✓ Per-site whitelist bypass selectively disables spoofing for specified domains and subdomains.');
+
+    // 9.3 Independent Feature Toggles (All 5 Modules)
+    const winFeat = createMockWindow('coveryourtracks.eff.org', 'Linux x86_64');
+    vm.runInContext(stealthCode, vm.createContext(winFeat));
+
+    // Module 1: webrtcProtection toggle
+    winFeat.document.dispatchEvent({
+      type: '__bocchi_config_sync__',
+      detail: { webrtcProtection: false, canvasProtection: true, hardwareProtection: true, audioProtection: true, timezoneProtection: true },
+      stopImmediatePropagation() {}
+    });
+    const pcFeat1 = new winFeat.RTCPeerConnection();
+    const offerFeat1 = await pcFeat1.createOffer();
+    assert(offerFeat1.sdp.includes('192.168.1.100'), 'With webrtcProtection=false, WebRTC SDP must NOT be sanitized');
+
+    // WebRTC enumerateDevices when disabled returns raw device list
+    const devicesRaw = await winFeat.navigator.mediaDevices.enumerateDevices();
+    assert(devicesRaw.some(d => d.deviceId === 'mic-abc-123'), 'With webrtcProtection=false, enumerateDevices must return real deviceId');
+
+    // WebRTC addEventListener & removeEventListener test
+    let receivedCandidate = null;
+    const iceListener = (ev) => { receivedCandidate = ev.candidate; };
+    pcFeat1.addEventListener('icecandidate', iceListener);
+    pcFeat1.dispatchEvent({ type: 'icecandidate', candidate: { candidate: 'candidate:1 1 UDP 2122260223 192.168.1.100 54321 typ host generation 0' } });
+    assert(receivedCandidate !== null, 'With webrtcProtection=false, icecandidate listener receives private candidate');
+    pcFeat1.removeEventListener('icecandidate', iceListener);
+    receivedCandidate = null;
+    pcFeat1.dispatchEvent({ type: 'icecandidate', candidate: { candidate: 'candidate:1 1 UDP 2122260223 192.168.1.100 54321 typ host generation 0' } });
+    assert.strictEqual(receivedCandidate, null, 'removeEventListener must successfully remove icecandidate listener');
+
+    // Canvas still farbled when only webrtcProtection is disabled
+    const canvasFeat1 = new winFeat.HTMLCanvasElement();
+    const ctxFeat1 = canvasFeat1.getContext('2d');
+    for (let i = 0; i < ctxFeat1._pixels.length; i++) ctxFeat1._pixels[i] = 0;
+    const dataUrlFeat1 = canvasFeat1.toDataURL();
+    assert(!dataUrlFeat1.includes('mockPngR0A0'), 'With canvasProtection=true, Canvas toDataURL must still be farbled');
+
+    // Module 2: canvasProtection toggle
+    winFeat.document.dispatchEvent({
+      type: '__bocchi_config_sync__',
+      detail: { webrtcProtection: true, canvasProtection: false, hardwareProtection: true, audioProtection: true },
+      stopImmediatePropagation() {}
+    });
+    const canvasFeat2 = new winFeat.HTMLCanvasElement();
+    const ctxFeat2 = canvasFeat2.getContext('2d');
+    for (let i = 0; i < ctxFeat2._pixels.length; i++) ctxFeat2._pixels[i] = 0;
+    const dataUrlFeat2 = canvasFeat2.toDataURL();
+    assert.strictEqual(dataUrlFeat2, 'data:image/png;base64,mockPngR0A0', 'With canvasProtection=false, Canvas toDataURL must not be farbled');
+
+    const imgDataFeat2 = ctxFeat2.getImageData(0, 0, 1, 1);
+    assert.strictEqual(imgDataFeat2.data[0], 0, 'With canvasProtection=false, getImageData must return unperturbed pixel');
+
+    // Module 3: audioProtection toggle
+    winFeat.document.dispatchEvent({
+      type: '__bocchi_config_sync__',
+      detail: { audioProtection: false },
+      stopImmediatePropagation() {}
+    });
+    const audioBufFeat = new winFeat.AudioBuffer(500);
+    const audioDataFeat = audioBufFeat.getChannelData(0);
+    assert.strictEqual(audioDataFeat[0], 0, 'With audioProtection=false, AudioBuffer getChannelData must not be farbled');
+
+    const destBuf = new Float32Array(500);
+    audioBufFeat.copyFromChannel(destBuf, 0);
+    assert.strictEqual(destBuf[0], 0, 'With audioProtection=false, copyFromChannel must not be farbled');
+
+    // Module 4: timezoneProtection toggle
+    winFeat.document.dispatchEvent({
+      type: '__bocchi_config_sync__',
+      detail: { timezoneProtection: false },
+      stopImmediatePropagation() {}
+    });
+    assert.strictEqual(winFeat.navigator.language, 'zh-CN', 'With timezoneProtection=false, navigator.language returns native language');
+    assert(winFeat.navigator.languages.includes('zh-CN'), 'With timezoneProtection=false, navigator.languages includes native language');
+
+    const dtfFeatDisabled = new winFeat.Intl.DateTimeFormat('zh-CN');
+    assert.strictEqual(dtfFeatDisabled.resolvedOptions().locale, 'zh-CN', 'With timezoneProtection=false, Intl.DateTimeFormat allows native zh-CN locale');
+
+    // Re-enable timezoneProtection
+    winFeat.document.dispatchEvent({
+      type: '__bocchi_config_sync__',
+      detail: { timezoneProtection: true },
+      stopImmediatePropagation() {}
+    });
+    assert.strictEqual(winFeat.navigator.language, 'en-US', 'With timezoneProtection=true, navigator.language is spoofed to en-US');
+    const dtfFeatEnabled = new winFeat.Intl.DateTimeFormat('zh-CN');
+    assert.strictEqual(dtfFeatEnabled.resolvedOptions().locale, 'en-US', 'With timezoneProtection=true, Intl.DateTimeFormat masks zh-CN to en-US');
+
+    // Module 5: hardwareProtection toggle
+    winFeat.document.dispatchEvent({
+      type: '__bocchi_config_sync__',
+      detail: { hardwareProtection: false },
+      stopImmediatePropagation() {}
+    });
+    const glFeat = new winFeat.WebGLRenderingContext();
+    assert.strictEqual(glFeat.getParameter(37446), 'llvmpipe (LLVM 12.0.0, 256 bits)', 'With hardwareProtection=false, WebGL renderer must return native string');
+    assert.strictEqual(winFeat.navigator.hardwareConcurrency, 16, 'With hardwareProtection=false, hardwareConcurrency returns native core count');
+    assert.strictEqual(winFeat.navigator.deviceMemory, 32, 'With hardwareProtection=false, deviceMemory returns native RAM');
+    assert.strictEqual(winFeat.performance.memory.jsHeapSizeLimit, 4294967296, 'With hardwareProtection=false, jsHeapSizeLimit returns native heap size');
+
+    // Module 6: Font protection toggle
+    winFeat.document.dispatchEvent({
+      type: '__bocchi_config_sync__',
+      detail: { fontProtection: false },
+      stopImmediatePropagation() {}
+    });
+    const allFontsDisabled = await winFeat.queryLocalFonts();
+    assert(allFontsDisabled.some(f => f.family === 'SimSun'), 'With fontProtection=false, SimSun must NOT be filtered from queryLocalFonts');
+
+    winFeat.document.dispatchEvent({
+      type: '__bocchi_config_sync__',
+      detail: { fontProtection: true },
+      stopImmediatePropagation() {}
+    });
+    const allFontsEnabled = await winFeat.queryLocalFonts();
+    assert(!allFontsEnabled.some(f => f.family === 'SimSun'), 'With fontProtection=true, SimSun must be filtered from queryLocalFonts');
+    console.log('✓ Independent feature toggles correctly control individual modules.');
+
+    // 9.4 Other Minority Scripts Batch Toggle (blockOtherScripts)
+    const winOther = createMockWindow('fonts-test.com', 'Linux x86_64');
+    winOther.queryLocalFonts = function() {
+      return Promise.resolve([
+        { family: 'Arial', fullName: 'Arial Regular', postscriptName: 'ArialMT' },
+        { family: 'Noto Sans Arabic', fullName: 'Noto Sans Arabic Regular', postscriptName: 'NotoSansArabic' },
+        { family: 'Amiri', fullName: 'Amiri Regular', postscriptName: 'Amiri-Regular' },
+        { family: 'SimSun', fullName: 'SimSun Regular', postscriptName: 'SimSun' }
+      ]);
+    };
+    vm.runInContext(stealthCode, vm.createContext(winOther));
+
+    // Default: blockOtherScripts is false
+    const fontsDefault = await winOther.queryLocalFonts();
+    assert(fontsDefault.some(f => f.family === 'Noto Sans Arabic'), 'By default, Noto Sans Arabic must NOT be filtered');
+    assert(fontsDefault.some(f => f.family === 'Amiri'), 'By default, Amiri must NOT be filtered');
+    assert(!fontsDefault.some(f => f.family === 'SimSun'), 'SimSun must be filtered by default');
+
+    // Turn ON blockOtherScripts
+    winOther.document.dispatchEvent({
+      type: '__bocchi_config_sync__',
+      detail: { blockOtherScripts: true },
+      stopImmediatePropagation() {}
+    });
+    const fontsBlocked = await winOther.queryLocalFonts();
+    assert(!fontsBlocked.some(f => f.family === 'Noto Sans Arabic'), 'When blockOtherScripts=true, Noto Sans Arabic must be filtered');
+    assert(!fontsBlocked.some(f => f.family === 'Amiri'), 'When blockOtherScripts=true, Amiri must be filtered');
+    assert(fontsBlocked.some(f => f.family === 'Arial'), 'Standard Latin font Arial must still be retained');
+
+    // Turn OFF blockOtherScripts
+    winOther.document.dispatchEvent({
+      type: '__bocchi_config_sync__',
+      detail: { blockOtherScripts: false },
+      stopImmediatePropagation() {}
+    });
+    const fontsRestored = await winOther.queryLocalFonts();
+    assert(fontsRestored.some(f => f.family === 'Noto Sans Arabic'), 'When blockOtherScripts=false, Noto Sans Arabic must be restored');
+    console.log('✓ Batch minority scripts toggle (blockOtherScripts) successfully filters and restores non-Latin fonts.\n');
 
     console.log('=== ALL TESTS PASSED SUCCESSFULLY! ===');
   });

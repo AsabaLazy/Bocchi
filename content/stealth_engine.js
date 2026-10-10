@@ -38,8 +38,85 @@
   // Global timezone state (defaulting to America/Los_Angeles, dynamically synced)
   let activeTimezone = 'America/Los_Angeles';
 
+  // Privacy Shield configuration registry (Master switch, per-site bypass, 5 core modules, font switch)
+  const shieldConfig = getSharedRegistry('__bocchi_shield_config__', Object);
+  if (typeof shieldConfig.globalShieldEnabled !== 'boolean') shieldConfig.globalShieldEnabled = true;
+  if (typeof shieldConfig.isBypassed !== 'boolean') shieldConfig.isBypassed = false;
+  if (typeof shieldConfig.canvasProtection !== 'boolean') shieldConfig.canvasProtection = true;
+  if (typeof shieldConfig.webrtcProtection !== 'boolean') shieldConfig.webrtcProtection = true;
+  if (typeof shieldConfig.audioProtection !== 'boolean') shieldConfig.audioProtection = true;
+  if (typeof shieldConfig.timezoneProtection !== 'boolean') shieldConfig.timezoneProtection = true;
+  if (typeof shieldConfig.hardwareProtection !== 'boolean') shieldConfig.hardwareProtection = true;
+  if (typeof shieldConfig.fontProtection !== 'boolean') shieldConfig.fontProtection = true;
+  if (!Array.isArray(shieldConfig.siteBypassList)) shieldConfig.siteBypassList = [];
+
+  // Font privacy configuration registry (supports built-in CJK regex and user-custom font rules)
+  const fontConfig = getSharedRegistry('__bocchi_font_config__', Object);
+  if (!Array.isArray(fontConfig.customHiddenFonts)) fontConfig.customHiddenFonts = [];
+  if (!Array.isArray(fontConfig.customAllowedFonts)) fontConfig.customAllowedFonts = [];
+  if (typeof fontConfig.blockBuiltinChineseFonts !== 'boolean') fontConfig.blockBuiltinChineseFonts = true;
+  if (typeof fontConfig.blockOtherScripts !== 'boolean') fontConfig.blockOtherScripts = false;
+  if (typeof fontConfig.fontMode !== 'string') fontConfig.fontMode = 'blacklist';
+
+  /**
+   * Resolve hostname for target realm with iframe fallback.
+   */
+  function resolveHostName(win) {
+    let host = '';
+    try {
+      if (win && win.location && win.location.hostname) {
+        host = win.location.hostname;
+      }
+    } catch (_) {}
+    if (!host) {
+      try {
+        if (win && win.top && win.top.location && win.top.location.hostname) {
+          host = win.top.location.hostname;
+        }
+      } catch (_) {}
+    }
+    if (!host) {
+      try {
+        if (win && win.document && win.document.referrer) {
+          host = new URL(win.document.referrer).hostname;
+        }
+      } catch (_) {}
+    }
+    return host || 'localhost';
+  }
+
+  function normalizeDomain(d) {
+    if (!d || typeof d !== 'string') return '';
+    return d.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^\*\.?/, '').replace(/^\.+/, '').split('/')[0].split(':')[0];
+  }
+
+  function isProtectionActive(feature, win) {
+    if (shieldConfig.globalShieldEnabled === false) return false;
+    if (shieldConfig.isBypassed === true) return false;
+    if (Array.isArray(shieldConfig.siteBypassList) && shieldConfig.siteBypassList.length > 0) {
+      const h = (win ? resolveHostName(win) : (typeof window !== 'undefined' ? resolveHostName(window) : '')).toLowerCase();
+      if (h && shieldConfig.siteBypassList.some(s => {
+        const site = normalizeDomain(s);
+        return site && (h === site || h.endsWith('.' + site));
+      })) {
+        return false;
+      }
+    }
+    if (feature && shieldConfig[feature] === false) return false;
+    return true;
+  }
+
   // Chinese & domestic vendor fonts regex (prevents leaking Chinese mainland environment to Claude AI & bot detectors)
-  const CHINESE_FONTS_REGEX = /(?:simsun|nsimsun|simhei|yahei|jhenghei|wenquanyi|pingfang|songti|kaiti|fangsong|dengxian|heiti|mingliu|pmingliu|st(?:heiti|kaiti|song|fangsong|xihei|zhongsong)|lisu|youyuan|biaukai|dfkai|source[ _-]?han|noto[ _-]?sans[ _-]?cjk|noto[ _-]?serif[ _-]?cjk|noto[ _-]?sans[ _-]?(?:sc|tc|hk)|hiragino[ _-]?sans[ _-]?gb|misans|harmonyos|oppo|vivo|alipuhei|dingtalk|douyin|honor(?:[ _-]?sans)?|flyme|meizu|kingsoft|wps|micro[ _-]?hei|zen[ _-]?hei|fz[a-z0-9_-]*|founder|仓颉|华文|方正|汉仪|[\u4e00-\u9fa5])/i;
+  const CHINESE_FONTS_REGEX = /(?:simsun|nsimsun|simhei|yahei|jhenghei|wenquanyi|pingfang|songti|kaiti|fangsong|dengxian|heiti|mingliu|pmingliu|st(?:heiti|kaiti|song|fangsong|xihei|zhongsong)|lisu|youyuan|biaukai|dfkai|source[ _-]?han|noto[ _-]?(?:sans|serif)?(?:[ _-]?mono)?[ _-]?(?:cjk|sc|tc|hk)|hiragino[ _-]?sans[ _-]?gb|misans|harmonyos|oppo|vivo|alipuhei|dingtalk|douyin|honor(?:[ _-]?sans)?|flyme|meizu|kingsoft|wps|micro[ _-]?hei|zen[ _-]?hei|fz[a-z0-9_-]*|founder|仓颉|华文|方正|汉仪|[\u4e00-\u9fa5])/i;
+
+  // Other non-Latin world scripts regex (Arabic, Hebrew, Indic, Thai, ancient scripts, etc.)
+  const OTHER_SCRIPTS_REGEX = /(?:arabic|kufi|naskh|nastaliq|urdu|hebrew|amiri|aldhabi|scheherazade|devanagari|bengali|gurmukhi|gujarati|oriya|tamil|telugu|kannada|malayalam|sinhala|tibetan|thai|lao|khmer|myanmar|javanese|sundanese|balinese|batak|tagalog|ethiopic|adlam|bamum|bassa|coptic|tifinagh|vai|cuneiform|hieroglyph|runic|cherokee|ogham|canadian[ _-]?aboriginal|linear[ _-]?[ab]|math|symbol|emoji|d050000l|z003|standard[ _-]?symbols|syriac|thaana|georgian|armenian|glagolitic|samaritan|shavian|brahmi|kharoshthi|sharada|chakma|cham|grantha|kaithi|dogra|khojki|khudawadi|lepcha|mahajani|mandaic|manichaean|marchen|gondi|medefaidrin|meetei|mende|meroitic|miao|modi|mongolian|newa|phaistos|rejang|saurashtra|siddham|sompeng|syloti|tagbanwa|tai[ _-]?(?:le|viet|tham)|takri|wancho|tirhuta|ugaritic|warang|zanabazar)/i;
+
+  const GENERIC_CSS_FAMILIES = new Set([
+    'serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui',
+    'ui-sans-serif', 'ui-serif', 'ui-monospace', 'emoji', 'math', 'fangsong',
+    '__bocchi_absent_font__'
+  ]);
 
   function extractFontFamilies(fontStr) {
     if (!fontStr || typeof fontStr !== 'string') return [];
@@ -50,8 +127,45 @@
   }
 
   function isChineseOrNonStandardFont(name) {
+    if (!isProtectionActive('fontProtection')) return false;
     if (!name || typeof name !== 'string') return false;
-    return CHINESE_FONTS_REGEX.test(name);
+    let families = extractFontFamilies(name);
+    if (!families || families.length === 0) {
+      families = [name.trim().replace(/^['"]|['"]$/g, '').toLowerCase()];
+    }
+    return families.some(fam => {
+      // 1. Whitelist mode: only fonts in customAllowedFonts are NOT hidden (generic CSS families remain safe)
+      if (fontConfig.fontMode === 'whitelist') {
+        if (GENERIC_CSS_FAMILIES.has(fam)) {
+          return false;
+        }
+        const isAllowed = fontConfig.customAllowedFonts && fontConfig.customAllowedFonts.some(f => {
+          const s = f && f.trim().toLowerCase();
+          return s && (fam === s || fam.includes(s));
+        });
+        return !isAllowed;
+      }
+
+      // 2. Blacklist mode (default):
+      if (fontConfig.customAllowedFonts && fontConfig.customAllowedFonts.some(f => f.trim().toLowerCase() === fam)) {
+        return false;
+      }
+      const customs = fontConfig.customHiddenFonts;
+      if (customs && customs.length > 0) {
+        const matchCustom = customs.some(r => {
+          const s = r && r.trim();
+          if (!s) return false;
+          if (s.startsWith('/') && s.length > 2 && s.endsWith('/')) {
+            try { return new RegExp(s.slice(1, -1), 'i').test(fam); } catch (_) {}
+          }
+          return fam.includes(s.toLowerCase());
+        });
+        if (matchCustom) return true;
+      }
+      if (fontConfig.blockBuiltinChineseFonts && CHINESE_FONTS_REGEX.test(fam)) return true;
+      if (fontConfig.blockOtherScripts && OTHER_SCRIPTS_REGEX.test(fam)) return true;
+      return false;
+    });
   }
 
   function sanitizeFontList(fontListStr) {
@@ -65,7 +179,7 @@
       }
     }
     if (kept.length === 0) {
-      return 'sans-serif';
+      return '__bocchi_absent_font__';
     }
     return kept.join(', ');
   }
@@ -337,32 +451,6 @@
     return hash >>> 0;
   }
 
-  /**
-   * Resolve hostname for target realm with iframe fallback.
-   */
-  function resolveHostName(win) {
-    let host = '';
-    try {
-      if (win.location && win.location.hostname) {
-        host = win.location.hostname;
-      }
-    } catch (_) {}
-    if (!host) {
-      try {
-        if (win.top && win.top.location && win.top.location.hostname) {
-          host = win.top.location.hostname;
-        }
-      } catch (_) {}
-    }
-    if (!host) {
-      try {
-        if (win.document && win.document.referrer) {
-          host = new URL(win.document.referrer).hostname;
-        }
-      } catch (_) {}
-    }
-    return host || 'localhost';
-  }
 
   /**
    * Brave-style Dynamic Session Salt:
@@ -453,6 +541,8 @@
     const webglDelta = isFirstParty ? ((seeds.webgl % 12) * 2 + 2) : ((seeds.webgl % 12) * 2 + 1);
     const audioDelta = isFirstParty ? (((seeds.audio % 50) * 2 + 2) * 1e-7) : (((seeds.audio % 50) * 2 + 1) * 1e-7);
 
+    const isShieldActive = (feature) => isProtectionActive(feature, targetWin);
+
     // 1. Native toString deception
     patchToString(targetWin);
 
@@ -498,7 +588,7 @@
 
           const hookedGetImageData = createNativeFunction(function getImageData(sx, sy, sw, sh) {
             const result = origGetImageData.apply(this, arguments);
-            if (isCYT && !inInternalCanvas && result && result.data && result.data.length >= 4) {
+            if (isShieldActive('canvasProtection') && isCYT && !inInternalCanvas && result && result.data && result.data.length >= 4) {
               const origR = result.data[0];
               result.data[0] = perturbPixel(origR, canvasDelta);
               if (result.data[3] === 0) {
@@ -520,14 +610,16 @@
           const origMeasureText = ctxProto.measureText;
           if (origMeasureText) {
             const hookedMeasureText = createNativeFunction(function measureText(text) {
-              const curFont = this.font;
-              if (typeof curFont === 'string') {
-                if (isChineseOrNonStandardFont(curFont)) {
-                  const sanitized = sanitizeFontSpec(curFont);
-                  this.font = sanitized;
-                  const res = origMeasureText.apply(this, arguments);
-                  this.font = curFont;
-                  return res;
+              if (isShieldActive('fontProtection')) {
+                const curFont = this.font;
+                if (typeof curFont === 'string') {
+                  if (isChineseOrNonStandardFont(curFont)) {
+                    const sanitized = sanitizeFontSpec(curFont);
+                    this.font = sanitized;
+                    const res = origMeasureText.apply(this, arguments);
+                    this.font = curFont;
+                    return res;
+                  }
                 }
               }
               return origMeasureText.apply(this, arguments);
@@ -537,7 +629,7 @@
 
           // toDataURL with native PNG encoding preservation (passes PngToy CRC check)
           const hookedToDataURL = createNativeFunction(function toDataURL(type, quality) {
-            if (!isCYT || inInternalCanvas) {
+            if (!isShieldActive('canvasProtection') || !isCYT || inInternalCanvas) {
               return origToDataURL.apply(this, arguments);
             }
 
@@ -626,7 +718,7 @@
           // toBlob hook
           if (origToBlob) {
             const hookedToBlob = createNativeFunction(function toBlob(callback, type, quality) {
-              if (!isCYT || inInternalCanvas || typeof callback !== 'function') {
+              if (!isShieldActive('canvasProtection') || !isCYT || inInternalCanvas || typeof callback !== 'function') {
                 return origToBlob.apply(this, arguments);
               }
 
@@ -739,6 +831,9 @@
         // getParameter
         const origGetParam = proto.getParameter;
         const hookedGetParam = createNativeFunction(function getParameter(param) {
+          if (!isShieldActive('hardwareProtection')) {
+            return origGetParam.apply(this, arguments);
+          }
           if (param === UNMASKED_VENDOR_WEBGL) {
             const raw = origGetParam.call(this, param);
             if (raw && !raw.includes('SwiftShader') && !raw.includes('llvmpipe') && !raw.includes('Mesa')) return raw;
@@ -769,6 +864,9 @@
         // getExtension
         const origGetExtension = proto.getExtension;
         const hookedGetExtension = createNativeFunction(function getExtension(name) {
+          if (!isShieldActive('hardwareProtection')) {
+            return origGetExtension.apply(this, arguments);
+          }
           const ext = origGetExtension.apply(this, arguments);
           if (name === 'WEBGL_debug_renderer_info') {
             return ext || {
@@ -784,6 +882,9 @@
         if (proto.getSupportedExtensions) {
           const origGetSupportedExtensions = proto.getSupportedExtensions;
           const hookedGetSupportedExtensions = createNativeFunction(function getSupportedExtensions() {
+            if (!isShieldActive('hardwareProtection')) {
+              return origGetSupportedExtensions ? origGetSupportedExtensions.apply(this, arguments) : [];
+            }
             const exts = origGetSupportedExtensions.apply(this, arguments) || [];
             if (!exts.includes('WEBGL_debug_renderer_info')) {
               return [...exts, 'WEBGL_debug_renderer_info'];
@@ -797,7 +898,7 @@
         const origReadPixels = proto.readPixels;
         const hookedReadPixels = createNativeFunction(function readPixels(x, y, width, height, format, type, pixels) {
           origReadPixels.apply(this, arguments);
-          if (isCYT && pixels && pixels.length > 0) {
+          if (isShieldActive('hardwareProtection') && isCYT && pixels && pixels.length > 0) {
             const idx = seeds.webgl % Math.min(pixels.length, 4);
             pixels[idx] = perturbPixel(pixels[idx], webglDelta);
           }
@@ -816,7 +917,7 @@
       if (targetWin.Array && targetWin.Array.prototype && targetWin.Array.prototype.includes) {
         const origIncludes = targetWin.Array.prototype.includes;
         const hookedIncludes = createNativeFunction(function includes(val, fromIndex) {
-          if (this && ((this.length === 287 && this[0] === '00b72507') || (this.length === 237 && this[0] === -1056897629))) {
+          if (isShieldActive('hardwareProtection') && this && ((this.length === 287 && this[0] === '00b72507') || (this.length === 237 && this[0] === -1056897629))) {
             return true;
           }
           return origIncludes.apply(this, arguments);
@@ -835,6 +936,9 @@
           description: 'NVIDIA GeForce RTX 3060'
         };
         gpuObj.requestAdapter = createNativeFunction(function requestAdapter(...args) {
+          if (!isShieldActive('hardwareProtection')) {
+            return origReqAdapter.apply(this, args);
+          }
           return origReqAdapter.apply(this, args).then(adapter => {
             if (!adapter) return adapter;
             try {
@@ -915,6 +1019,9 @@
         const origGetChannelData = audioProto.getChannelData;
         const hookedGetChannelData = createNativeFunction(function getChannelData(channel) {
           const data = origGetChannelData.apply(this, arguments);
+          if (!isShieldActive('audioProtection')) {
+            return data;
+          }
           if (isCYT && data && data.length > 0) {
             let farbledChannels = audioFarbledMap.get(this);
             if (!farbledChannels) {
@@ -941,6 +1048,9 @@
         if (origCopyFromChannel) {
           const hookedCopyFromChannel = createNativeFunction(function copyFromChannel(destination, channelNumber, bufferOffset) {
             origCopyFromChannel.apply(this, arguments);
+            if (!isShieldActive('audioProtection')) {
+              return;
+            }
             if (isCYT) {
               const farbledChannels = audioFarbledMap.get(this);
               if (!farbledChannels || !farbledChannels.has(channelNumber)) {
@@ -1013,6 +1123,9 @@
             return desc;
           }
           return createNativeFunction(function(...args) {
+            if (!isShieldActive('webrtcProtection')) {
+              return origFn.apply(this, args);
+            }
             if (typeof args[0] === 'function') {
               const successCb = args[0];
               let callbackInvoked = false;
@@ -1048,6 +1161,9 @@
         const origSetLocalDesc = rtcProto.setLocalDescription;
         if (origSetLocalDesc) {
           const hookedSetLocalDesc = createNativeFunction(function setLocalDescription(...args) {
+            if (!isShieldActive('webrtcProtection')) {
+              return origSetLocalDesc.apply(this, args);
+            }
             const actualArg = args.length > 0 ? ((args[0] && rawOfferMap.get(args[0])) || args[0]) : undefined;
             const callArgs = args.length > 0 ? [actualArg] : [];
             try {
@@ -1070,6 +1186,9 @@
             const origGet = desc.get;
             const hookedGet = createNativeGetter(function() {
               const res = origGet.call(this);
+              if (!isShieldActive('webrtcProtection')) {
+                return res;
+              }
               if (res && res.sdp) {
                 try {
                   return new targetWin.RTCSessionDescription({
@@ -1092,21 +1211,48 @@
         hookDescGetter('currentLocalDescription');
         hookDescGetter('pendingLocalDescription');
 
-        // addEventListener('icecandidate')
+        // addEventListener('icecandidate') & removeEventListener
         const origAddEventListener = rtcProto.addEventListener;
+        const origRemoveEventListener = rtcProto.removeEventListener;
+        const iceListenerMap = new WeakMap();
+
         const hookedAddEventListener = createNativeFunction(function addEventListener(type, listener, options) {
           if (type === 'icecandidate' && typeof listener === 'function') {
-            const wrapped = createNativeFunction(function(event) {
-              if (event && event.candidate && isPrivateCandidate(event.candidate.candidate)) {
-                return;
-              }
-              return listener.call(this, event);
-            }, listener.name || 'icecandidateListener', 1);
+            let wrappedMap = iceListenerMap.get(this);
+            if (!wrappedMap) {
+              wrappedMap = new Map();
+              iceListenerMap.set(this, wrappedMap);
+            }
+            let wrapped = wrappedMap.get(listener);
+            if (!wrapped) {
+              wrapped = createNativeFunction(function(event) {
+                if (isShieldActive('webrtcProtection') && event && event.candidate && isPrivateCandidate(event.candidate.candidate)) {
+                  return;
+                }
+                return listener.call(this, event);
+              }, listener.name || 'icecandidateListener', 1);
+              wrappedMap.set(listener, wrapped);
+            }
             return origAddEventListener.call(this, type, wrapped, options);
           }
           return origAddEventListener.apply(this, arguments);
         }, 'addEventListener', 2, rtcProto);
         rtcProto.addEventListener = hookedAddEventListener;
+
+        if (origRemoveEventListener) {
+          const hookedRemoveEventListener = createNativeFunction(function removeEventListener(type, listener, options) {
+            if (type === 'icecandidate' && typeof listener === 'function') {
+              const wrappedMap = iceListenerMap.get(this);
+              const wrapped = wrappedMap ? wrappedMap.get(listener) : null;
+              if (wrapped) {
+                wrappedMap.delete(listener);
+                return origRemoveEventListener.call(this, type, wrapped, options);
+              }
+            }
+            return origRemoveEventListener.apply(this, arguments);
+          }, 'removeEventListener', 2, rtcProto);
+          rtcProto.removeEventListener = hookedRemoveEventListener;
+        }
 
         // onicecandidate
         const iceDesc = Object.getOwnPropertyDescriptor(rtcProto, 'onicecandidate');
@@ -1126,7 +1272,7 @@
               }
               iceHandlerMap.set(this, fn);
               const wrapped = createNativeFunction(function(event) {
-                if (event && event.candidate && isPrivateCandidate(event.candidate.candidate)) {
+                if (isShieldActive('webrtcProtection') && event && event.candidate && isPrivateCandidate(event.candidate.candidate)) {
                   return;
                 }
                 return fn.call(this, event);
@@ -1149,6 +1295,9 @@
         const mdProto = targetWin.MediaDevices && targetWin.MediaDevices.prototype ? targetWin.MediaDevices.prototype : null;
         const origEnumerate = mdTarget.enumerateDevices;
         const hookedEnumerate = createNativeFunction(function enumerateDevices() {
+          if (!isShieldActive('webrtcProtection')) {
+            return origEnumerate.apply(this, arguments);
+          }
           return origEnumerate.apply(this, arguments).then(devices => {
             if (!Array.isArray(devices)) return devices;
             const proto = (targetWin.MediaDeviceInfo && targetWin.MediaDeviceInfo.prototype)
@@ -1188,6 +1337,7 @@
       }
 
       function withMaskedElementFont(elem, fn) {
+        if (!isShieldActive('fontProtection')) return fn();
         let fontModified = false;
         let origFF = '';
         let origFont = '';
@@ -1265,6 +1415,9 @@
         if (origOffsetWidth && origOffsetWidth.get) {
           const origGet = origOffsetWidth.get;
           const hookedGet = createNativeGetter(function offsetWidth() {
+            if (!isShieldActive('fontProtection')) {
+              return origGet.call(this);
+            }
             return withMaskedElementFont(this, () => {
               return Math.round(origGet.call(this));
             });
@@ -1280,6 +1433,9 @@
         if (origOffsetHeight && origOffsetHeight.get) {
           const origGet = origOffsetHeight.get;
           const hookedGet = createNativeGetter(function offsetHeight() {
+            if (!isShieldActive('fontProtection')) {
+              return origGet.call(this);
+            }
             return withMaskedElementFont(this, () => {
               return Math.round(origGet.call(this));
             });
@@ -1338,7 +1494,7 @@
         }
 
         function withMaskedRangeFont(range, fn) {
-          if (!range) return fn();
+          if (!range || !isShieldActive('fontProtection')) return fn();
           const elems = getElementsFromRange(range);
           function runWithElements(idx) {
             if (idx >= elems.length) return fn();
@@ -1368,7 +1524,7 @@
 
       // SVG Text & Graphics Element Font Masking (TraceScope SVG detection)
       function withMaskedSVGFont(elem, fn) {
-        if (!elem) return fn();
+        if (!elem || !isShieldActive('fontProtection')) return fn();
         const tag = (elem.tagName || '').toLowerCase();
         const elements = [elem];
         try {
@@ -1470,6 +1626,9 @@
         if (origGetProp) {
           const hookedGetProp = createNativeFunction(function getPropertyValue(prop) {
             const val = origGetProp.apply(this, arguments);
+            if (!isShieldActive('fontProtection')) {
+              return val;
+            }
             if (typeof val === 'string') {
               if (prop === 'font-family') return sanitizeFontList(val);
               if (prop === 'font') return sanitizeFontSpec(val);
@@ -1484,6 +1643,9 @@
           const origFFGet = origFFDesc.get;
           const hookedFFGet = createNativeGetter(function fontFamily() {
             const val = origFFGet.call(this);
+            if (!isShieldActive('fontProtection')) {
+              return val;
+            }
             return sanitizeFontList(val);
           }, 'fontFamily', cssProto);
           Object.defineProperty(cssProto, 'fontFamily', {
@@ -1499,6 +1661,9 @@
           const origFontGet = origFontDesc.get;
           const hookedFontGet = createNativeGetter(function font() {
             const val = origFontGet.call(this);
+            if (!isShieldActive('fontProtection')) {
+              return val;
+            }
             return sanitizeFontSpec(val);
           }, 'font', cssProto);
           Object.defineProperty(cssProto, 'font', {
@@ -1516,6 +1681,9 @@
         const origFFLoad = ffProto.load;
         if (origFFLoad) {
           ffProto.load = createNativeFunction(function load() {
+            if (!isShieldActive('fontProtection')) {
+              return origFFLoad.apply(this, arguments);
+            }
             const fam = this.family || '';
             if (isChineseOrNonStandardFont(fam)) {
               const DOMEx = targetWin.DOMException || (typeof DOMException !== 'undefined' ? DOMException : Error);
@@ -1532,6 +1700,9 @@
         if (ffsProto.check) {
           const origFFSCheck = ffsProto.check;
           ffsProto.check = createNativeFunction(function check(font, text) {
+            if (!isShieldActive('fontProtection')) {
+              return origFFSCheck.apply(this, arguments);
+            }
             if (typeof font === 'string') {
               if (isChineseOrNonStandardFont(font)) {
                 return false;
@@ -1543,6 +1714,9 @@
         if (ffsProto.load) {
           const origFFSLoad = ffsProto.load;
           ffsProto.load = createNativeFunction(function load(font, text) {
+            if (!isShieldActive('fontProtection')) {
+              return origFFSLoad.apply(this, arguments);
+            }
             if (typeof font === 'string') {
               if (isChineseOrNonStandardFont(font)) {
                 return Promise.resolve([]);
@@ -1557,6 +1731,9 @@
       if (typeof targetWin.queryLocalFonts === 'function') {
         const origQuery = targetWin.queryLocalFonts;
         const hookedQuery = createNativeFunction(function queryLocalFonts(...args) {
+          if (!isShieldActive('fontProtection')) {
+            return origQuery.apply(this, args);
+          }
           return origQuery.apply(this, args).then(fonts => {
             return Array.isArray(fonts) ? fonts.filter(f => {
               const fam = f.family || '';
@@ -1576,6 +1753,22 @@
     try {
       if (targetWin.Navigator && targetWin.Navigator.prototype) {
         const navProto = targetWin.Navigator.prototype;
+        const origNavPlatDesc = Object.getOwnPropertyDescriptor(navProto, 'platform');
+        const origNavUADesc = Object.getOwnPropertyDescriptor(navProto, 'userAgent');
+        const origNavAppVerDesc = Object.getOwnPropertyDescriptor(navProto, 'appVersion');
+        const origNavHwDesc = Object.getOwnPropertyDescriptor(navProto, 'hardwareConcurrency');
+        const origNavDevMemDesc = Object.getOwnPropertyDescriptor(navProto, 'deviceMemory');
+        const origNavLangDesc = Object.getOwnPropertyDescriptor(navProto, 'language');
+        const origNavLangsDesc = Object.getOwnPropertyDescriptor(navProto, 'languages');
+        const origNavWdDesc = Object.getOwnPropertyDescriptor(navProto, 'webdriver');
+        const origNavDntDesc = Object.getOwnPropertyDescriptor(navProto, 'doNotTrack');
+
+        const origNavHwValue = targetWin.navigator ? targetWin.navigator.hardwareConcurrency : 8;
+        const origNavDevMemValue = targetWin.navigator ? targetWin.navigator.deviceMemory : 8;
+        const origNavPlatformValue = (targetWin.navigator && targetWin.navigator.platform) || 'Linux x86_64';
+        const origNavLangValue = (targetWin.navigator && targetWin.navigator.language) || 'en-US';
+        const origNavLangsValue = (targetWin.navigator && targetWin.navigator.languages) || ['en-US'];
+
         const defineNavProp = (prop, getter) => {
           try {
             Object.defineProperty(navProto, prop, {
@@ -1594,33 +1787,51 @@
 
         // webdriver = false
         defineNavProp('webdriver', createNativeGetter(function webdriver() {
+          if (!isShieldActive()) {
+            return origNavWdDesc && origNavWdDesc.get ? origNavWdDesc.get.call(this) : false;
+          }
           return false;
         }, 'webdriver', navProto));
 
         // doNotTrack = '1'
         defineNavProp('doNotTrack', createNativeGetter(function doNotTrack() {
+          if (!isShieldActive()) {
+            return origNavDntDesc && origNavDntDesc.get ? origNavDntDesc.get.call(this) : null;
+          }
           return '1';
         }, 'doNotTrack', navProto));
 
         // globalPrivacyControl (active on EFF Cover Your Tracks or if natively present)
         if (isCYT || (targetWin.navigator && 'globalPrivacyControl' in targetWin.navigator)) {
           defineNavProp('globalPrivacyControl', createNativeGetter(function globalPrivacyControl() {
+            if (!isShieldActive()) {
+              return false;
+            }
             return true;
           }, 'globalPrivacyControl', navProto));
         }
 
         // language = 'en-US'
         defineNavProp('language', createNativeGetter(function language() {
+          if (!isShieldActive('timezoneProtection')) {
+            return origNavLangDesc && origNavLangDesc.get ? origNavLangDesc.get.call(this) : origNavLangValue;
+          }
           return 'en-US';
         }, 'language', navProto));
 
         // languages = ['en-US', 'en']
         defineNavProp('languages', createNativeGetter(function languages() {
+          if (!isShieldActive('timezoneProtection')) {
+            return origNavLangsDesc && origNavLangsDesc.get ? origNavLangsDesc.get.call(this) : origNavLangsValue;
+          }
           return Object.freeze(['en-US', 'en']);
         }, 'languages', navProto));
 
         // platform = 'Linux x86_64'
         defineNavProp('platform', createNativeGetter(function platform() {
+          if (!isShieldActive('hardwareProtection')) {
+            return origNavPlatDesc && origNavPlatDesc.get ? origNavPlatDesc.get.call(this) : origNavPlatformValue;
+          }
           return 'Linux x86_64';
         }, 'platform', navProto));
 
@@ -1633,16 +1844,25 @@
           linuxUA = linuxUA.replace(/\(([^)]+)\)/, '(X11; Linux x86_64)');
         }
         defineNavProp('userAgent', createNativeGetter(function userAgent() {
+          if (!isShieldActive()) {
+            return origNavUADesc && origNavUADesc.get ? origNavUADesc.get.call(this) : origUA;
+          }
           return linuxUA;
         }, 'userAgent', navProto));
 
         const linuxAppVersion = linuxUA.replace(/^Mozilla\//, '');
         defineNavProp('appVersion', createNativeGetter(function appVersion() {
+          if (!isShieldActive()) {
+            return origNavAppVerDesc && origNavAppVerDesc.get ? origNavAppVerDesc.get.call(this) : (origUA ? origUA.replace(/^Mozilla\//, '') : '');
+          }
           return linuxAppVersion;
         }, 'appVersion', navProto));
 
         // deviceMemory = 8
         defineNavProp('deviceMemory', createNativeGetter(function deviceMemory() {
+          if (!isShieldActive('hardwareProtection')) {
+            return origNavDevMemDesc && origNavDevMemDesc.get ? origNavDevMemDesc.get.call(this) : origNavDevMemValue;
+          }
           return 8;
         }, 'deviceMemory', navProto));
 
@@ -1650,6 +1870,9 @@
         const isEffCYT = host === 'coveryourtracks.eff.org';
         const chosenConcurrency = isEffCYT ? 4 : 8;
         defineNavProp('hardwareConcurrency', createNativeGetter(function hardwareConcurrency() {
+          if (!isShieldActive('hardwareProtection')) {
+            return origNavHwDesc && origNavHwDesc.get ? origNavHwDesc.get.call(this) : origNavHwValue;
+          }
           return chosenConcurrency;
         }, 'hardwareConcurrency', navProto));
 
@@ -1667,7 +1890,12 @@
               const origPlatDesc = Object.getOwnPropertyDescriptor(uadProto, 'platform');
               if (origPlatDesc && origPlatDesc.get) {
                 Object.defineProperty(uadProto, 'platform', {
-                  get: createNativeGetter(function platform() { return 'Linux'; }, 'platform', uadProto),
+                  get: createNativeGetter(function platform() {
+                    if (!isShieldActive('hardwareProtection') || !isShieldActive()) {
+                      return origPlatDesc.get.call(this);
+                    }
+                    return 'Linux';
+                  }, 'platform', uadProto),
                   set: origPlatDesc.set,
                   enumerable: true,
                   configurable: true
@@ -1680,6 +1908,9 @@
                 Object.defineProperty(uadProto, 'brands', {
                   get: createNativeGetter(function brands() {
                     const raw = origBrandsGet.call(this);
+                    if (!isShieldActive('hardwareProtection') || !isShieldActive()) {
+                      return raw;
+                    }
                     if (Array.isArray(raw) && raw.some(b => b && b.brand && b.brand.includes('Chromium'))) {
                       return raw;
                     }
@@ -1697,6 +1928,9 @@
               const origGetHEV = uadProto.getHighEntropyValues;
               if (origGetHEV) {
                 uadProto.getHighEntropyValues = createNativeFunction(function getHighEntropyValues(hints) {
+                  if (!isShieldActive('hardwareProtection') || !isShieldActive()) {
+                    return origGetHEV.apply(this, arguments);
+                  }
                   return origGetHEV.apply(this, arguments).then(res => {
                     if (res && typeof res === 'object') {
                       return Object.assign({}, res, {
@@ -1733,6 +1967,9 @@
               if (origLimitDesc && origLimitDesc.get) {
                 Object.defineProperty(pmProto, 'jsHeapSizeLimit', {
                   get: createNativeGetter(function jsHeapSizeLimit() {
+                    if (!isShieldActive('hardwareProtection')) {
+                      return origLimitDesc.get.call(this);
+                    }
                     return 2172649472; // Standard ~2.17GB V8 heap limit on 8GB Windows PC
                   }, 'jsHeapSizeLimit'),
                   enumerable: true,
@@ -1754,6 +1991,9 @@
           const isEffMain = host === 'coveryourtracks.eff.org';
           const hookedGetDesc = createNativeGetter(function description() {
             const val = origGetDesc.call(this);
+            if (!isShieldActive()) {
+              return val;
+            }
             if (isCYT && !isEffMain && typeof val === 'string' && val.length > 0) {
               return val + spaces;
             }
@@ -1858,6 +2098,9 @@
             { name: 'Google UK English Male', lang: 'en-GB', voiceURI: 'Google UK English Male', default: false, localService: false }
           ];
           const hookedGetVoices = createNativeFunction(function getVoices() {
+            if (!isShieldActive()) {
+              return origGetVoices.call(this);
+            }
             let raw = [];
             try { raw = origGetVoices.call(this) || []; } catch (_) {}
             if (Array.isArray(raw) && raw.length > 0) {
@@ -2003,6 +2246,70 @@
             e.stopImmediatePropagation();
           }
         }, true);
+
+        targetWin.document.addEventListener('__bocchi_fonts_sync__', function(e) {
+          if (e && e.detail) {
+            if (Array.isArray(e.detail.customFonts)) {
+              fontConfig.customHiddenFonts = e.detail.customFonts.slice();
+            }
+            if (Array.isArray(e.detail.allowedFonts)) {
+              fontConfig.customAllowedFonts = e.detail.allowedFonts.slice();
+            }
+            if (typeof e.detail.blockBuiltin === 'boolean') {
+              fontConfig.blockBuiltinChineseFonts = e.detail.blockBuiltin;
+            }
+            if (typeof e.detail.fontMode === 'string') {
+              fontConfig.fontMode = e.detail.fontMode;
+            }
+            if (typeof e.detail.blockOtherScripts === 'boolean') {
+              fontConfig.blockOtherScripts = e.detail.blockOtherScripts;
+            }
+            if (typeof e.detail.fontProtection === 'boolean') {
+              shieldConfig.fontProtection = e.detail.fontProtection;
+            }
+          }
+          if (e && e.stopImmediatePropagation) {
+            e.stopImmediatePropagation();
+          }
+        }, true);
+
+        targetWin.document.addEventListener('__bocchi_config_sync__', function(e) {
+          if (e && e.detail) {
+            if (typeof e.detail.globalShieldEnabled === 'boolean') {
+              shieldConfig.globalShieldEnabled = e.detail.globalShieldEnabled;
+            }
+            if (typeof e.detail.isBypassed === 'boolean') {
+              shieldConfig.isBypassed = e.detail.isBypassed;
+            }
+            if (Array.isArray(e.detail.siteBypassList)) {
+              shieldConfig.siteBypassList = e.detail.siteBypassList.slice();
+            }
+            if (typeof e.detail.canvasProtection === 'boolean') {
+              shieldConfig.canvasProtection = e.detail.canvasProtection;
+            }
+            if (typeof e.detail.webrtcProtection === 'boolean') {
+              shieldConfig.webrtcProtection = e.detail.webrtcProtection;
+            }
+            if (typeof e.detail.audioProtection === 'boolean') {
+              shieldConfig.audioProtection = e.detail.audioProtection;
+            }
+            if (typeof e.detail.timezoneProtection === 'boolean') {
+              shieldConfig.timezoneProtection = e.detail.timezoneProtection;
+            }
+            if (typeof e.detail.hardwareProtection === 'boolean') {
+              shieldConfig.hardwareProtection = e.detail.hardwareProtection;
+            }
+            if (typeof e.detail.fontProtection === 'boolean') {
+              shieldConfig.fontProtection = e.detail.fontProtection;
+            }
+            if (typeof e.detail.blockOtherScripts === 'boolean') {
+              fontConfig.blockOtherScripts = e.detail.blockOtherScripts;
+            }
+          }
+          if (e && e.stopImmediatePropagation) {
+            e.stopImmediatePropagation();
+          }
+        }, true);
       }
 
       // Locale sanitizer helper
@@ -2037,7 +2344,10 @@
       const monthsShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
       const weekdayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
-      const OrigDate = targetWin.Date;
+      const OrigDate = (targetWin.Date && targetWin.Date[Symbol.for('__bocchi_orig_date__')]) || targetWin.Date;
+      if (targetWin.Date && !targetWin.Date[Symbol.for('__bocchi_orig_date__')]) {
+        try { targetWin.Date[Symbol.for('__bocchi_orig_date__')] = OrigDate; } catch (_) {}
+      }
       const origGetTime = OrigDate && OrigDate.prototype ? OrigDate.prototype.getTime : null;
 
       function getZonedParts(date, tz) {
@@ -2092,6 +2402,7 @@
             hour,
             minute,
             second,
+            ms: ((t % 1000) + 1000) % 1000,
             weekday,
             weekdayShort: m.weekday,
             timeZoneName: m.timeZoneName || gmtStr,
@@ -2115,6 +2426,21 @@
         const origDateToLocaleString = OrigDate.prototype.toLocaleString;
         const origDateToLocaleDateString = OrigDate.prototype.toLocaleDateString;
         const origDateToLocaleTimeString = OrigDate.prototype.toLocaleTimeString;
+        const origDateGetTimezoneOffset = OrigDate.prototype.getTimezoneOffset;
+        const origDateGetHours = OrigDate.prototype.getHours;
+        const origDateGetMinutes = OrigDate.prototype.getMinutes;
+        const origDateGetSeconds = OrigDate.prototype.getSeconds;
+        const origDateGetDate = OrigDate.prototype.getDate;
+        const origDateGetDay = OrigDate.prototype.getDay;
+        const origDateGetMonth = OrigDate.prototype.getMonth;
+        const origDateGetFullYear = OrigDate.prototype.getFullYear;
+        const origDateGetYear = OrigDate.prototype.getYear;
+        const origDateSetHours = OrigDate.prototype.setHours;
+        const origDateSetMinutes = OrigDate.prototype.setMinutes;
+        const origDateSetSeconds = OrigDate.prototype.setSeconds;
+        const origDateSetDate = OrigDate.prototype.setDate;
+        const origDateSetMonth = OrigDate.prototype.setMonth;
+        const origDateSetFullYear = OrigDate.prototype.setFullYear;
 
         function checkDateReceiver(receiver) {
           if (!(receiver instanceof OrigDate) && Object.prototype.toString.call(receiver) !== '[object Date]') {
@@ -2125,6 +2451,9 @@
         // getTimezoneOffset
         OrigDate.prototype.getTimezoneOffset = createNativeFunction(function getTimezoneOffset() {
           checkDateReceiver(this);
+          if (!isShieldActive('timezoneProtection')) {
+            return origDateGetTimezoneOffset.call(this);
+          }
           const parts = getZonedParts(this, activeTimezone);
           if (!parts) {
             const t = origGetTime.call(this);
@@ -2136,6 +2465,9 @@
         // toString
         OrigDate.prototype.toString = createNativeFunction(function toString() {
           checkDateReceiver(this);
+          if (!isShieldActive('timezoneProtection')) {
+            return origDateToString.call(this);
+          }
           const parts = getZonedParts(this, activeTimezone);
           if (!parts) {
             origGetTime.call(this);
@@ -2151,6 +2483,9 @@
         // toTimeString
         OrigDate.prototype.toTimeString = createNativeFunction(function toTimeString() {
           checkDateReceiver(this);
+          if (!isShieldActive('timezoneProtection')) {
+            return origDateToTimeString.call(this);
+          }
           const parts = getZonedParts(this, activeTimezone);
           if (!parts) {
             origGetTime.call(this);
@@ -2165,6 +2500,9 @@
         // toDateString
         OrigDate.prototype.toDateString = createNativeFunction(function toDateString() {
           checkDateReceiver(this);
+          if (!isShieldActive('timezoneProtection')) {
+            return origDateToDateString.call(this);
+          }
           const parts = getZonedParts(this, activeTimezone);
           if (!parts) {
             origGetTime.call(this);
@@ -2177,6 +2515,9 @@
         // toLocaleString
         OrigDate.prototype.toLocaleString = createNativeFunction(function toLocaleString(locales, options) {
           checkDateReceiver(this);
+          if (!isShieldActive('timezoneProtection')) {
+            return origDateToLocaleString.apply(this, arguments);
+          }
           const t = origGetTime.call(this);
           if (isNaN(t)) return 'Invalid Date';
           const loc = sanitizeLocales(locales);
@@ -2190,6 +2531,9 @@
         // toLocaleDateString
         OrigDate.prototype.toLocaleDateString = createNativeFunction(function toLocaleDateString(locales, options) {
           checkDateReceiver(this);
+          if (!isShieldActive('timezoneProtection')) {
+            return origDateToLocaleDateString.apply(this, arguments);
+          }
           const t = origGetTime.call(this);
           if (isNaN(t)) return 'Invalid Date';
           const loc = sanitizeLocales(locales);
@@ -2203,6 +2547,9 @@
         // toLocaleTimeString
         OrigDate.prototype.toLocaleTimeString = createNativeFunction(function toLocaleTimeString(locales, options) {
           checkDateReceiver(this);
+          if (!isShieldActive('timezoneProtection')) {
+            return origDateToLocaleTimeString.apply(this, arguments);
+          }
           const t = origGetTime.call(this);
           if (isNaN(t)) return 'Invalid Date';
           const loc = sanitizeLocales(locales);
@@ -2214,6 +2561,16 @@
         }, 'toLocaleTimeString', 0);
 
         // Local Date getters
+        const origDateGettersMap = {
+          getHours: origDateGetHours,
+          getMinutes: origDateGetMinutes,
+          getSeconds: origDateGetSeconds,
+          getDate: origDateGetDate,
+          getDay: origDateGetDay,
+          getMonth: origDateGetMonth,
+          getFullYear: origDateGetFullYear,
+          getYear: origDateGetYear
+        };
         [
           ['getHours', 'hour'],
           ['getMinutes', 'minute'],
@@ -2226,10 +2583,150 @@
         ].forEach(([fnName, prop, transform]) => {
           OrigDate.prototype[fnName] = createNativeFunction(function() {
             checkDateReceiver(this);
+            if (!isShieldActive('timezoneProtection')) {
+              return origDateGettersMap[fnName].call(this);
+            }
             const p = getZonedParts(this, activeTimezone);
             return p ? (transform ? transform(p[prop]) : p[prop]) : (origGetTime.call(this), NaN);
           }, fnName, 0);
         });
+
+        // Native Date Local Setters
+        const origSetTime = OrigDate.prototype.setTime;
+
+        function updateDateZoned(date, updater) {
+          checkDateReceiver(date);
+          const p = getZonedParts(date, activeTimezone);
+          if (!p) {
+            origGetTime.call(date);
+            return NaN;
+          }
+          const updated = Object.assign({}, p);
+          updater(updated);
+          const yr = (updated.year >= 0 && updated.year < 100) ? 1900 + updated.year : updated.year;
+          const naiveUtc = OrigDate.UTC(yr, updated.month, updated.day, updated.hour, updated.minute, updated.second, updated.ms || 0);
+          const checkP = getZonedParts(new OrigDate(naiveUtc), activeTimezone);
+          const offMin = checkP ? checkP.offsetMin : updated.offsetMin;
+          const newT = naiveUtc + offMin * 60000;
+          origSetTime.call(date, newT);
+          return newT;
+        }
+
+        OrigDate.prototype.setHours = createNativeFunction(function setHours(h, m, s, ms) {
+          if (!isShieldActive('timezoneProtection')) {
+            return origDateSetHours.apply(this, arguments);
+          }
+          return updateDateZoned(this, p => {
+            p.hour = Number(h);
+            if (m !== undefined) p.minute = Number(m);
+            if (s !== undefined) p.second = Number(s);
+            if (ms !== undefined) p.ms = Number(ms);
+          });
+        }, 'setHours', 1, OrigDate.prototype);
+
+        OrigDate.prototype.setMinutes = createNativeFunction(function setMinutes(m, s, ms) {
+          if (!isShieldActive('timezoneProtection')) {
+            return origDateSetMinutes.apply(this, arguments);
+          }
+          return updateDateZoned(this, p => {
+            p.minute = Number(m);
+            if (s !== undefined) p.second = Number(s);
+            if (ms !== undefined) p.ms = Number(ms);
+          });
+        }, 'setMinutes', 1, OrigDate.prototype);
+
+        OrigDate.prototype.setSeconds = createNativeFunction(function setSeconds(s, ms) {
+          if (!isShieldActive('timezoneProtection')) {
+            return origDateSetSeconds.apply(this, arguments);
+          }
+          return updateDateZoned(this, p => {
+            p.second = Number(s);
+            if (ms !== undefined) p.ms = Number(ms);
+          });
+        }, 'setSeconds', 1, OrigDate.prototype);
+
+        OrigDate.prototype.setDate = createNativeFunction(function setDate(d) {
+          if (!isShieldActive('timezoneProtection')) {
+            return origDateSetDate.apply(this, arguments);
+          }
+          return updateDateZoned(this, p => {
+            p.day = Number(d);
+          });
+        }, 'setDate', 1, OrigDate.prototype);
+
+        OrigDate.prototype.setMonth = createNativeFunction(function setMonth(m, d) {
+          if (!isShieldActive('timezoneProtection')) {
+            return origDateSetMonth.apply(this, arguments);
+          }
+          return updateDateZoned(this, p => {
+            p.month = Number(m);
+            if (d !== undefined) p.day = Number(d);
+          });
+        }, 'setMonth', 1, OrigDate.prototype);
+
+        OrigDate.prototype.setFullYear = createNativeFunction(function setFullYear(y, m, d) {
+          if (!isShieldActive('timezoneProtection')) {
+            return origDateSetFullYear.apply(this, arguments);
+          }
+          return updateDateZoned(this, p => {
+            p.year = Number(y);
+            if (m !== undefined) p.month = Number(m);
+            if (d !== undefined) p.day = Number(d);
+          });
+        }, 'setFullYear', 1, OrigDate.prototype);
+
+        // Hook targetWin.Date constructor and function call
+        const HookedDate = function Date(...args) {
+          if (!new.target) {
+            const d = new OrigDate();
+            return !isShieldActive('timezoneProtection') ? origDateToString.call(d) : OrigDate.prototype.toString.call(d);
+          }
+          if (args.length >= 2 && isShieldActive('timezoneProtection')) {
+            try {
+              const yr = Number(args[0]);
+              const mo = Number(args[1]);
+              const da = args.length > 2 ? Number(args[2]) : 1;
+              const hr = args.length > 3 ? Number(args[3]) : 0;
+              const mi = args.length > 4 ? Number(args[4]) : 0;
+              const se = args.length > 5 ? Number(args[5]) : 0;
+              const ms = args.length > 6 ? Number(args[6]) : 0;
+              const fullYr = (yr >= 0 && yr < 100) ? 1900 + yr : yr;
+              const naiveUtc = OrigDate.UTC(fullYr, mo, da, hr, mi, se, ms);
+              const p = getZonedParts(new OrigDate(naiveUtc), activeTimezone);
+              const offsetMin = p ? p.offsetMin : 0;
+              const targetMs = naiveUtc + offsetMin * 60000;
+              return Reflect.construct(OrigDate, [targetMs], new.target);
+            } catch (_) {}
+          }
+          return Reflect.construct(OrigDate, args, new.target);
+        };
+
+        HookedDate.prototype = OrigDate.prototype;
+        try {
+          OrigDate.prototype.constructor = HookedDate;
+        } catch (_) {}
+        Object.setPrototypeOf(HookedDate, OrigDate);
+
+        ['now', 'parse', 'UTC'].forEach(prop => {
+          try {
+            const desc = Object.getOwnPropertyDescriptor(OrigDate, prop);
+            if (desc) Object.defineProperty(HookedDate, prop, desc);
+          } catch (_) {}
+        });
+
+        makeNative(HookedDate, 'Date', 7);
+        nativeMap.set(HookedDate, 'function Date() { [native code] }');
+
+        try {
+          Object.defineProperty(targetWin, 'Date', {
+            value: HookedDate,
+            writable: true,
+            enumerable: false,
+            configurable: true
+          });
+        } catch (_) {
+          targetWin.Date = HookedDate;
+        }
       }
 
       // Native Intl Hooking
@@ -2239,8 +2736,14 @@
 
         // DateTimeFormat
         if (OrigIntl.DateTimeFormat) {
-          const OrigDTF = OrigIntl.DateTimeFormat;
+          const OrigDTF = OrigIntl[Symbol.for('__bocchi_orig_dtf__')] || OrigIntl.DateTimeFormat;
+          if (!OrigIntl[Symbol.for('__bocchi_orig_dtf__')]) {
+            try { OrigIntl[Symbol.for('__bocchi_orig_dtf__')] = OrigDTF; } catch (_) {}
+          }
           function DateTimeFormat(locales, options) {
+            if (!isShieldActive('timezoneProtection')) {
+              return new.target ? Reflect.construct(OrigDTF, arguments, new.target) : OrigDTF.apply(this, arguments);
+            }
             const loc = sanitizeLocales(locales);
             const hasExplicitTz = !!(options && options.timeZone);
             const opts = Object.assign({}, options);
@@ -2260,10 +2763,16 @@
           }
           makeNative(DateTimeFormat, 'DateTimeFormat', OrigDTF.length);
 
-          const origDTFResolved = OrigDTF.prototype.resolvedOptions;
+          const origDTFResolved = OrigDTF.prototype[Symbol.for('__bocchi_orig_dtf_resolved__')] || OrigDTF.prototype.resolvedOptions;
+          if (!OrigDTF.prototype[Symbol.for('__bocchi_orig_dtf_resolved__')]) {
+            try { OrigDTF.prototype[Symbol.for('__bocchi_orig_dtf_resolved__')] = origDTFResolved; } catch (_) {}
+          }
           if (origDTFResolved) {
             const hookedDTFResolved = createNativeFunction(function resolvedOptions() {
               const res = origDTFResolved.apply(this, arguments);
+              if (!isShieldActive('timezoneProtection')) {
+                return res;
+              }
               if (res) {
                 if (!res.locale || res.locale.toLowerCase().startsWith('zh')) {
                   res.locale = 'en-US';
@@ -2283,9 +2792,15 @@
         // Standard Intl classes: NumberFormat, PluralRules, RelativeTimeFormat, Collator, etc.
         function hookStandardIntlClass(className) {
           if (!OrigIntl[className]) return;
-          const OrigClass = OrigIntl[className];
+          const OrigClass = OrigIntl[Symbol.for(`__bocchi_orig_${className}__`)] || OrigIntl[className];
+          if (!OrigIntl[Symbol.for(`__bocchi_orig_${className}__`)]) {
+            try { OrigIntl[Symbol.for(`__bocchi_orig_${className}__`)] = OrigClass; } catch (_) {}
+          }
 
           function HookedClass(locales, options) {
+            if (!isShieldActive('timezoneProtection')) {
+              return new.target ? Reflect.construct(OrigClass, arguments, new.target) : OrigClass.apply(this, arguments);
+            }
             const loc = sanitizeLocales(locales);
             if (new.target) {
               return Reflect.construct(OrigClass, [loc, options], new.target);
@@ -2299,10 +2814,16 @@
           }
           makeNative(HookedClass, className, OrigClass.length);
 
-          const origResolved = OrigClass.prototype.resolvedOptions;
+          const origResolved = OrigClass.prototype[Symbol.for(`__bocchi_orig_${className}_resolved__`)] || OrigClass.prototype.resolvedOptions;
           if (origResolved) {
+            if (!OrigClass.prototype[Symbol.for(`__bocchi_orig_${className}_resolved__`)]) {
+              try { OrigClass.prototype[Symbol.for(`__bocchi_orig_${className}_resolved__`)] = origResolved; } catch (_) {}
+            }
             const hookedResolved = createNativeFunction(function resolvedOptions() {
               const res = origResolved.apply(this, arguments);
+              if (!isShieldActive('timezoneProtection')) {
+                return res;
+              }
               if (res && (!res.locale || res.locale.toLowerCase().startsWith('zh') || res.locale === 'en')) {
                 res.locale = 'en-US';
               }
@@ -2623,6 +3144,7 @@
       }
 
       function wrapWorkerScript(scriptURL, options) {
+        if (!isShieldActive()) return { wrappedURL: scriptURL, isWrapped: false };
         if (scriptURL === undefined || scriptURL === null) return { wrappedURL: scriptURL, isWrapped: false };
         const urlStr = String(scriptURL);
         let resolvedURL = urlStr;
@@ -2648,6 +3170,7 @@
       }
 
       function sanitizeWorkerData(data) {
+        if (!isShieldActive()) return data;
         if (!data || typeof data !== 'object') return data;
         try {
           let modified = false;

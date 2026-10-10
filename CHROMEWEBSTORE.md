@@ -1,6 +1,6 @@
 # Chrome Web Store Listing — Bocchi Privacy Shield
 
-> Last Updated: 2026-09-30
+> Last Updated: 2026-10-04
 
 ## Store Listing
 
@@ -43,7 +43,7 @@ English
 
 | Asset | Dimensions | Status | Filename |
 |-------|-----------|--------|----------|
-| Store Icon [REQUIRED] | 128×128 PNG | ⬜ Not created (Omitted in manifest during dev) | `icons/icon-128.png` |
+| Store Icon [REQUIRED] | 128×128 PNG | ✅ Created | `icons/icon-128.png` |
 | Screenshot 1 [REQUIRED] | 1280×800 or 640×400 | ⬜ Not created | `promo/screenshot-1.png` |
 | Screenshot 2 [RECOMMENDED] | 1280×800 or 640×400 | ⬜ Not created | `promo/screenshot-2.png` |
 | Small Promo Tile [RECOMMENDED] | 440×280 | ⬜ Not created | `promo/promo-small.png` |
@@ -57,6 +57,7 @@ English
 
 | Permission | Type | Justification |
 |------------|------|---------------|
+| `alarms` | permissions | Periodically refreshes exit-node timezone mapping so privacy shields adapt automatically when connecting to different VPN endpoints without restarting Chrome. |
 | `declarativeNetRequest` | permissions | Blocks known third-party tracking domains and applies privacy headers (DNT, Sec-GPC) at the network layer without inspecting user page contents. |
 | `privacy` | permissions | Configures the browser WebRTC IP handling policy to `disable_non_proxied_udp`, preventing internal and private LAN IP addresses from leaking. |
 | `storage` | permissions | Stores local privacy preferences and caches exit-node timezone mapping on the user's device to prevent repeated network requests. |

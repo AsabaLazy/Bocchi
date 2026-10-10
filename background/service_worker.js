@@ -7,13 +7,39 @@ const DEFAULT_TIMEZONE = 'America/Los_Angeles';
  * Setting 'disable_non_proxied_udp' forces WebRTC traffic through proxies if configured
  * and disables unproxied UDP, effectively blocking local IPv4/IPv6 address leakage.
  */
-async function applyWebRTCPolicy() {
+async function applyWebRTCPolicy(specifiedEnabled) {
   if (typeof chrome !== 'undefined' && chrome.privacy && chrome.privacy.network && chrome.privacy.network.webRTCIPHandlingPolicy) {
     try {
+      let isEnabled = specifiedEnabled;
+      if (isEnabled === undefined && typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        let syncRead = false;
+        try {
+          chrome.storage.local.get(['globalShieldEnabled', 'webrtcProtection'], (res) => {
+            syncRead = true;
+            if (res) {
+              isEnabled = (res.globalShieldEnabled !== false) && (res.webrtcProtection !== false);
+            }
+          });
+        } catch (_) {}
+        if (!syncRead) {
+          try {
+            const res = await new Promise(resolve => {
+              chrome.storage.local.get(['globalShieldEnabled', 'webrtcProtection'], resolve);
+            });
+            if (res) {
+              isEnabled = (res.globalShieldEnabled !== false) && (res.webrtcProtection !== false);
+            }
+          } catch (_) {}
+        }
+      }
+      if (isEnabled === undefined) {
+        isEnabled = true;
+      }
+      const policyValue = isEnabled ? 'disable_non_proxied_udp' : 'default';
       await chrome.privacy.network.webRTCIPHandlingPolicy.set({
-        value: 'disable_non_proxied_udp'
+        value: policyValue
       });
-      console.log('[Bocchi Privacy Shield] WebRTC IP handling policy configured: disable_non_proxied_udp');
+      console.log(`[Bocchi Privacy Shield] WebRTC IP handling policy configured: ${policyValue}`);
     } catch (err) {
       console.error('[Bocchi Privacy Shield] Failed to set webRTCIPHandlingPolicy:', err);
     }
@@ -25,9 +51,13 @@ async function applyWebRTCPolicy() {
  * Tries ipwho.is first, then ipapi.co as fallback, defaulting to America/Los_Angeles.
  */
 async function fetchEgressTimezone(fallback = DEFAULT_TIMEZONE) {
+  const fetchOpts = (typeof AbortSignal !== 'undefined' && AbortSignal.timeout)
+    ? { signal: AbortSignal.timeout(4000) }
+    : {};
+
   // Try ipwho.is
   try {
-    const res = await fetch('https://ipwho.is/');
+    const res = await fetch('https://ipwho.is/', fetchOpts);
     if (res.ok) {
       const data = await res.json();
       const tz = (data && data.timezone && (data.timezone.id || data.timezone)) || data.timezone;
@@ -39,7 +69,7 @@ async function fetchEgressTimezone(fallback = DEFAULT_TIMEZONE) {
 
   // Fallback to get.geojs.io
   try {
-    const res = await fetch('https://get.geojs.io/v1/ip/geo.json');
+    const res = await fetch('https://get.geojs.io/v1/ip/geo.json', fetchOpts);
     if (res.ok) {
       const data = await res.json();
       if (data && typeof data.timezone === 'string' && data.timezone.includes('/')) {
@@ -50,7 +80,7 @@ async function fetchEgressTimezone(fallback = DEFAULT_TIMEZONE) {
 
   // Fallback to ipapi.co
   try {
-    const res = await fetch('https://ipapi.co/json/');
+    const res = await fetch('https://ipapi.co/json/', fetchOpts);
     if (res.ok) {
       const data = await res.json();
       if (data && typeof data.timezone === 'string' && data.timezone.includes('/')) {
@@ -152,22 +182,47 @@ async function syncUserAgentRule() {
   }
 }
 
+function setupPeriodicTimezoneAlarm() {
+  if (typeof chrome !== 'undefined' && chrome.alarms) {
+    try {
+      chrome.alarms.create('bocchi_tz_sync', { periodInMinutes: 60 });
+    } catch (_) {}
+  }
+}
+
 function init() {
   applyWebRTCPolicy();
   syncTimezone();
   syncUserAgentRule();
+  setupPeriodicTimezoneAlarm();
 }
 
 // Apply immediately when service worker starts
 init();
 
-// Ensure policy and timezone are refreshed on extension installation or update
+// Ensure policy, timezone, and alarms are refreshed on extension installation or update
 if (typeof chrome !== 'undefined' && chrome.runtime) {
   ['onInstalled', 'onStartup'].forEach(event => {
     if (chrome.runtime[event]) {
       chrome.runtime[event].addListener(init);
     }
   });
+
+  if (typeof chrome !== 'undefined' && chrome.alarms && chrome.alarms.onAlarm) {
+    chrome.alarms.onAlarm.addListener((alarm) => {
+      if (alarm && alarm.name === 'bocchi_tz_sync') {
+        syncTimezone(true);
+      }
+    });
+  }
+
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged && chrome.storage.onChanged.addListener) {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && (changes.globalShieldEnabled || changes.webrtcProtection)) {
+        applyWebRTCPolicy();
+      }
+    });
+  }
 
   if (chrome.runtime.onMessage) {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

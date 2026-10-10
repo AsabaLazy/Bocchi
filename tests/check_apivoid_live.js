@@ -47,7 +47,7 @@ async function main() {
   const tempDir = fs.mkdtempSync(path.join('/tmp', 'apivoid-check-'));
   const extPath = path.resolve('.');
   const port = 9580;
-  const chrome = spawn('chromium', [
+  const chrome = spawn(process.env.CHROME_BIN || 'chromium', [
     '--headless=new',
     '--no-sandbox',
     '--disable-gpu',
