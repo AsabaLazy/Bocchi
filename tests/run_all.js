@@ -41,8 +41,8 @@ const LIVE_SCRIPTS = [
  *   env    environment for the child (defaults to the runner's environment)
  *   inherit pass stdio through to this process instead of capturing it
  */
-function runNode(script, { env = process.env, inherit = false } = {}) {
-  const result = spawnSync(NODE, [script], {
+function runNode(script, { env = process.env, inherit = false, args = [] } = {}) {
+  const result = spawnSync(NODE, [script, ...args], {
     cwd: REPO_ROOT,
     env,
     ...(inherit ? { stdio: 'inherit' } : { encoding: 'utf8' }),
@@ -125,6 +125,17 @@ function modeLive(headed) {
   return rows.every(({ r }) => r.ok) ? 0 : 1;
 }
 
+/* Bench and soak are on-demand single-script modes: the benchmark is
+ * informational (no gate) and the soak takes ~30 minutes by default, so
+ * neither belongs in the `live` regression chain or in `all`. */
+function modeScript(script, label, extraArgs = []) {
+  console.log(`=== [${label}] ${script} ${extraArgs.join(' ')}===`);
+  const r = runNode(path.join(__dirname, script), { inherit: true, args: extraArgs });
+  const exit = r.error ? (r.error.code || 'ERR') : r.status;
+  console.log(`\n${label}: ${script} -> ${r.ok ? 'PASS' : `FAIL (exit ${exit})`}`);
+  return r.ok ? 0 : 1;
+}
+
 function modeAll() {
   const stages = [
     ['unit', modeUnit],
@@ -167,6 +178,12 @@ Modes:
            (visible browser windows).
   all      unit -> tz -> live, in that order.
            Exits 1 if any stage failed.
+  bench    Run the engine-hook performance benchmark (perf_bench.js, ~6s).
+           The extension is always loaded (the shared harness cannot launch
+           a bare browser); compare runs via the JSON reports in
+           tests/reports/.
+  soak     Run the long-run leak soak (soak_verify.js, default 30 minutes).
+           Pass a duration in minutes: \`node tests/run_all.js soak 5\`.
 
 Environment (live/headed modes):
   CHROME_BIN  Path to the Chrome/Chromium binary for the live scripts.
@@ -182,6 +199,8 @@ const MODES = {
   live: () => modeLive(false),
   headed: () => modeLive(true),
   all: modeAll,
+  bench: () => modeScript('perf_bench.js', 'bench'),
+  soak: () => modeScript('soak_verify.js', 'soak', process.argv.slice(3)),
 };
 
 const mode = process.argv[2];

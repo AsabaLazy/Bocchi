@@ -70,20 +70,25 @@ This generates `bocchi-privacy-shield-v1.0.0.zip`.
 
 ## Testing
 
-Run the test suites with Node.js:
+Run the test suites with Node.js (all live scripts need a local Chromium, override the binary via `CHROME_BIN`):
 
 ```bash
-# Run unit tests
-node tests/stealth.test.js
-
-# Run live CreepJS audit (requires Chromium installed)
-node tests/live_creep_verify.js
-
-# Performance baseline: extension off vs on, same workload (deltas are the output)
-CHROME_BIN=/path/to/chrome node tests/perf_bench.js both
-
-# Leak soak: mixed workload churn, retained-heap sampling every minute
-CHROME_BIN=/path/to/chrome node tests/soak_verify.js 30
+npm test              # unit suite (no browser, ~0.2s)
+npm run test:tz       # unit suite × 5 timezones (portability matrix)
+npm run test:live     # live regression chain, sequential (creep gate → apivoid → tamper)
+npm run test:headed   # same chain in visible desktop windows (deployment-realistic)
+npm run bench         # engine-hook performance benchmark (~6s, report in tests/reports/)
+npm run soak          # long-run leak soak, default 30 minutes (npm run soak -- 5 to shorten)
 ```
+
+Every live script runs on the shared harness (`tests/lib/live_harness.js`): it
+discovers the browser, allocates a free port, retries transient launch
+failures, verifies the engine actually applied before probing (a bare
+browser cannot masquerade as a result), cleans up its temp profile and drops
+a timestamped JSON report under `tests/reports/`. `live_creep_verify.js` is a
+gated regression test (13 checks, exits 1 on failure); the apivoid scripts
+are diagnostics (no gate) — note APIVoid rate-limits rapid POSTs and its
+verdict can flip between runs where only the extension's per-session
+randomized canvas/webgl/audio hashes differ.
 
 The live verification scripts (`live_creep_verify.js`, `check_apivoid_live.js`, `diagnose_apivoid.js`, `test_apivoid_tamper.js`, `perf_bench.js`, `soak_verify.js`) drive a real browser over the Chrome DevTools Protocol and therefore require a local Chromium installation (override the binary via the `CHROME_BIN` environment variable). **Note:** branded Google Chrome 137+ silently ignores `--load-extension` — for live/bench scripts use Chromium or Chrome for Testing (`npx @puppeteer/browsers install chrome@stable --path /tmp/cft`). The unit test suite runs under plain Node.js with no browser required.

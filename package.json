@@ -9,6 +9,8 @@
     "test:live": "node tests/run_all.js live",
     "test:headed": "node tests/run_all.js headed",
     "test:all": "node tests/run_all.js all",
+    "bench": "node tests/run_all.js bench",
+    "soak": "node tests/run_all.js soak",
     "package": "./package-extension.sh"
   }
 }

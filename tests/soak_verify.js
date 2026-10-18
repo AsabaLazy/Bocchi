@@ -4,8 +4,9 @@
 /**
  * tests/soak_verify.js — Long-running leak check for the extension.
  *
- * Loads the extension in headless Chrome (Chromium / Chrome for Testing),
- * drives a continuous mixed workload (canvas exports, audio buffers, worker
+ * Launches Chromium with the extension loaded through the shared live
+ * harness (tests/lib/live_harness.js: launch/retry/cleanup/report), drives a
+ * continuous mixed workload (canvas exports, audio buffers, worker
  * spawn/terminate, iframe churn, font/layout probes) and samples RETAINED
  * memory every minute (HeapProfiler.collectGarbage before each sample, so
  * garbage in flight is not mistaken for a leak). Every 5 minutes it toggles
@@ -15,6 +16,8 @@
  * A retained-memory slope near zero with stable Nodes / JSEventListeners
  * counts means no leak; growth in any of the three is investigated.
  *
+ * Results are saved to tests/reports/ via h.saveReport('soak', ...).
+ *
  * Requirements: CHROME_BIN pointing at Chromium or Chrome for Testing
  * (branded Google Chrome 137+ ignores --load-extension — see perf_bench.js).
  *
@@ -22,47 +25,8 @@
  *   CHROME_BIN=/path/to/chrome node tests/soak_verify.js [minutes]   # default 30
  */
 
-const { spawn } = require('child_process');
-const fs = require('fs');
 const http = require('http');
-const path = require('path');
-
-const EXT_PATH = path.resolve(__dirname, '..');
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-function httpGetJson(url) {
-  return new Promise((resolve, reject) => {
-    http.get(url, res => {
-      let d = '';
-      res.on('data', c => d += c);
-      res.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { resolve(d); } });
-    }).on('error', reject);
-  });
-}
-
-class CDP {
-  constructor(wsUrl) {
-    this.ws = new WebSocket(wsUrl);
-    this.id = 1;
-    this.cb = new Map();
-    this.ready = new Promise((res, rej) => { this.ws.onopen = res; this.ws.onerror = rej; });
-    this.ws.onmessage = e => {
-      const m = JSON.parse(e.data);
-      if (m.id && this.cb.has(m.id)) {
-        const { resolve, reject } = this.cb.get(m.id);
-        this.cb.delete(m.id);
-        m.error ? reject(m.error) : resolve(m.result);
-      }
-    };
-  }
-  send(method, params = {}) {
-    return new Promise((resolve, reject) => {
-      const id = this.id++;
-      this.cb.set(id, { resolve, reject });
-      this.ws.send(JSON.stringify({ id, method, params }));
-    });
-  }
-}
+const h = require('./lib/live_harness');
 
 const SOAK_HTML = `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
 <body><div id="host" style="font-family:sans-serif">soak</div>
@@ -110,88 +74,94 @@ window.__soakCycle = async () => {
 };
 </script></body></html>`;
 
-async function main() {
-  const minutes = Number(process.argv[2]) || 30;
-  const httpPort = 8895;
-  const devtoolsPort = 9895;
-  const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'content-type': 'text/html' });
-    res.end(SOAK_HTML);
-  });
-  await new Promise(r => server.listen(httpPort, '127.0.0.1', r));
-
-  const chrome = spawn(process.env.CHROME_BIN || 'chromium', [
-    '--headless=new', '--no-sandbox', '--disable-gpu',
-    `--user-data-dir=${fs.mkdtempSync('/tmp/soak-')}`,
-    `--remote-debugging-port=${devtoolsPort}`,
-    `--load-extension=${EXT_PATH}`,
-    `--disable-extensions-except=${EXT_PATH}`,
-    'about:blank'
-  ], { stdio: 'ignore' });
-
-  try {
-    let targets = null;
-    for (let i = 0; i < 40; i++) {
-      try {
-        targets = await httpGetJson(`http://127.0.0.1:${devtoolsPort}/json/list`);
-        if (Array.isArray(targets) && targets.length) break;
-      } catch (_) {}
-      await sleep(300);
-    }
-    if (!targets || !targets.length) throw new Error('Chrome did not expose a CDP endpoint; check CHROME_BIN');
-    const page = targets.find(t => t.type === 'page');
-    const cdp = new CDP(page.webSocketDebuggerUrl);
-    await cdp.ready;
-    await cdp.send('Page.enable');
-    await cdp.send('Runtime.enable');
-    await cdp.send('Performance.enable');
-
-    await cdp.send('Page.navigate', { url: `http://127.0.0.1:${httpPort}/a` });
-    await sleep(2500);
-    await cdp.send('Page.navigate', { url: `http://127.0.0.1:${httpPort}/b` });
-    await sleep(2500);
-
-    const engineOn = (await cdp.send('Runtime.evaluate', {
-      expression: `typeof window[Symbol.for('__bpc_pm_7e4b1c92')]`,
-      returnByValue: true
-    })).result.value === 'object';
-    if (!engineOn) {
-      console.error('WARNING: extension engine did not apply — soak would measure a bare browser. Aborting.');
-      process.exit(1);
-    }
-
-    // Attach to the extension service worker for periodic config toggles.
-    let swCdp = null;
-    try {
-      const t2 = await httpGetJson(`http://127.0.0.1:${devtoolsPort}/json/list`);
-      const sw = (t2 || []).find(t => t.type === 'service_worker' && /background\/service_worker\.js$/.test(t.url || ''));
-      if (sw) {
-        swCdp = new CDP(sw.webSocketDebuggerUrl);
-        await swCdp.ready;
-        await swCdp.send('Runtime.enable');
-        console.log('Attached to extension service worker for config toggles.');
-      } else {
-        console.log('NOTE: extension service worker target not found; config-toggle part of the soak is skipped.');
+// The shared harness binds its `cdp` to the page target and does not export
+// its CDPClient class, so the config-toggle leg of the soak — which needs an
+// independent connection to the extension service worker target — keeps this
+// minimal SW-only client (same shape as the harness's internal one; relies on
+// the Node >= 22 global WebSocket, like the harness itself).
+class SwCdp {
+  constructor(wsUrl) {
+    this.ws = new WebSocket(wsUrl);
+    this.id = 1;
+    this.cb = new Map();
+    this.ready = new Promise((res, rej) => { this.ws.onopen = res; this.ws.onerror = rej; });
+    this.ws.onmessage = e => {
+      const m = JSON.parse(e.data);
+      if (m.id && this.cb.has(m.id)) {
+        const { resolve, reject } = this.cb.get(m.id);
+        this.cb.delete(m.id);
+        m.error ? reject(m.error) : resolve(m.result);
       }
-    } catch (e) {
-      console.log('NOTE: service worker attach failed (' + e.message + '); config-toggle part skipped.');
-    }
-
-    const ev = async (expr) => (await cdp.send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result.value;
-
-    const sample = async () => {
-      try { await cdp.send('HeapProfiler.collectGarbage'); } catch (_) {}
-      const m = await cdp.send('Performance.getMetrics');
-      const g = n => { const x = m.metrics.find(y => y.name === n); return x ? x.value : -1; };
-      return {
-        t: Date.now(),
-        heapMB: Math.round(g('JSHeapUsedSize') / 1048576 * 100) / 100,
-        nodes: g('Nodes'),
-        listeners: g('JSEventListeners'),
-        docs: g('Documents')
-      };
     };
+  }
+  send(method, params = {}) {
+    return new Promise((resolve, reject) => {
+      const id = this.id++;
+      this.cb.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+  close() { this.ws.close(); }
+}
 
+/**
+ * Soak body (runs inside h.runWithRetry — fresh profile per attempt). Serves
+ * SOAK_HTML from `server` on 127.0.0.1:httpPort (started by main), navigates
+ * the harness-launched browser there, then samples retained memory while
+ * cycling the workload.
+ */
+async function runSoak(ctx, httpPort, minutes) {
+  const cdp = ctx.cdp;
+
+  await cdp.send('Page.enable');
+  await cdp.send('Runtime.enable');
+  await cdp.send('Performance.enable');
+
+  await cdp.send('Page.navigate', { url: `http://127.0.0.1:${httpPort}/a` });
+  await h.sleep(2500);
+  await cdp.send('Page.navigate', { url: `http://127.0.0.1:${httpPort}/b` });
+  await h.sleep(2500);
+
+  // Bare-browser guard: if the extension engine never injected, fail loudly
+  // (runWithRetry retries once with a fresh profile) instead of soaking an
+  // unprotected page.
+  const engine = await h.ensureEngine(cdp);
+  console.log('ENGINE SANITY:', JSON.stringify(engine.detail));
+
+  // Attach to the extension service worker for periodic config toggles.
+  let swCdp = null;
+  try {
+    const t2 = await (await fetch(`http://127.0.0.1:${ctx.port}/json/list`)).json();
+    const sw = (t2 || []).find(t => t.type === 'service_worker' && /background\/service_worker\.js$/.test(t.url || ''));
+    if (sw) {
+      swCdp = new SwCdp(sw.webSocketDebuggerUrl);
+      await swCdp.ready;
+      await swCdp.send('Runtime.enable');
+      console.log('Attached to extension service worker for config toggles.');
+    } else {
+      console.log('NOTE: extension service worker target not found; config-toggle part of the soak is skipped.');
+    }
+  } catch (e) {
+    console.log('NOTE: service worker attach failed (' + e.message + '); config-toggle part skipped.');
+  }
+
+  const ev = async (expr) => (await cdp.send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result.value;
+
+  const sample = async () => {
+    try { await cdp.send('HeapProfiler.collectGarbage'); } catch (_) {}
+    const m = await cdp.send('Performance.getMetrics');
+    const g = n => { const x = m.metrics.find(y => y.name === n); return x ? x.value : -1; };
+    return {
+      t: Date.now(),
+      heapMB: Math.round(g('JSHeapUsedSize') / 1048576 * 100) / 100,
+      nodes: g('Nodes'),
+      listeners: g('JSEventListeners'),
+      docs: g('Documents')
+    };
+  };
+
+  let summary;
+  try {
     const start = Date.now();
     const endAt = start + minutes * 60 * 1000;
     let nextSample = start + 60000;
@@ -226,7 +196,7 @@ async function main() {
         }
         nextToggle += 300000;
       }
-      await sleep(1000);
+      await h.sleep(1000);
     }
 
     // Analysis: skip the first 4 samples (warmup), fit the retained-heap slope.
@@ -242,11 +212,63 @@ async function main() {
       console.log(`nodes: ${first.nodes} -> ${last.nodes}  listeners: ${first.listeners} -> ${last.listeners}  docs: ${first.docs} -> ${last.docs}`);
       const leaky = slope > 30 || (last.nodes > first.nodes * 1.5 + 50) || (last.listeners > first.listeners * 1.5 + 20);
       console.log(leaky ? 'VERDICT: growth exceeds baseline noise — investigate the trend.' : 'VERDICT: no significant retained growth (heap slope, nodes and listeners all stable).');
+      summary = {
+        warmSamples: warm.length,
+        retainedHeapMB: { first: first.heapMB, last: last.heapMB },
+        windowMin: Math.round(hours * 60 * 10) / 10,
+        heapSlopeMBPerHour: Math.round(slope * 10) / 10,
+        nodes: { first: first.nodes, last: last.nodes },
+        listeners: { first: first.listeners, last: last.listeners },
+        docs: { first: first.docs, last: last.docs },
+        leaky,
+        verdict: leaky
+          ? 'growth exceeds baseline noise — investigate the trend'
+          : 'no significant retained growth (heap slope, nodes and listeners all stable)'
+      };
     } else {
       console.log('Not enough samples for slope analysis.');
+      summary = { warmSamples: warm.length, verdict: 'not-enough-samples' };
     }
+
+    return {
+      name: 'soak',
+      timestamp: new Date().toISOString(),
+      config: {
+        minutes,
+        headed: ctx.headed,
+        bin: ctx.bin,
+        sampleIntervalMs: 60000,
+        toggleIntervalMs: 300000
+      },
+      engine: engine.detail,
+      serviceWorkerAttached: !!swCdp,
+      cycles,
+      samples,
+      summary
+    };
   } finally {
-    chrome.kill('SIGKILL');
+    try { if (swCdp) swCdp.close(); } catch (_) {}
+  }
+}
+
+async function main() {
+  const minutes = Number(process.argv[2]) || 30;
+  const httpPort = await h.freePort();
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end(SOAK_HTML);
+  });
+  await new Promise(r => server.listen(httpPort, '127.0.0.1', r));
+
+  try {
+    // runWithRetry: up to 2 attempts, each with a fresh profile; retries when
+    // launch fails or the body throws EngineMissingError; auto-cleanup.
+    const report = await h.runWithRetry('soak', { headed: process.env.HEADED === '1' },
+      (ctx) => runSoak(ctx, httpPort, minutes));
+
+    const reportPath = h.saveReport('soak', report);
+    console.log(`Report saved: ${reportPath}`);
+  } finally {
     server.close();
   }
 }
