@@ -42,7 +42,7 @@ function getFontCategory(name) {
 function isFontChecked(name) {
   const lower = name.toLowerCase();
   if (fontMode === 'blacklist') {
-    // 黑名单模式：勾选 = 加入黑名单（脱敏隐藏）
+    // 黑名单模式：勾选 = 加入黑名单（隐藏，字体仍正常渲染）
     if (customAllowedFonts.some(f => f.toLowerCase() === lower)) {
       return false;
     }
@@ -103,7 +103,7 @@ function getProcessedFonts() {
       const cat = getFontCategory(f);
       if (searchQuery === '中文' && cat === 'cjk') return true;
       if (searchQuery === '西文' && cat === 'latin') return true;
-      if ((searchQuery === '其他' || searchQuery === '其他语种' || searchQuery === '多语种') && cat === 'other') return true;
+      if ((searchQuery === '其他' || searchQuery === '其他语种' || searchQuery === '多语种' || searchQuery === '小语种' || searchQuery === '冷门') && cat === 'other') return true;
       return false;
     });
   }
@@ -177,7 +177,7 @@ function updateSortHeaders() {
       } else if (sortOrder === 'latin-first') {
         $iconCategory.textContent = '↑ 西文';
       } else if (sortOrder === 'other-first') {
-        $iconCategory.textContent = '↑ 其他';
+        $iconCategory.textContent = '↑ 小语种';
       }
       $headerCategory.classList.add('active');
     } else {
@@ -196,7 +196,7 @@ function renderList() {
   });
   if ($modeHint) {
     if (fontMode === 'blacklist') {
-      $modeHint.textContent = '黑名单模式：勾选的字体将被脱敏隐藏，未勾选保持可见';
+      $modeHint.textContent = '黑名单模式：勾选的字体将被隐藏，未勾选保持可见';
     } else {
       $modeHint.textContent = '白名单模式：仅勾选的字体允许显示，未勾选全部隐藏';
     }
@@ -226,14 +226,14 @@ function renderList() {
     if (cat === 'cjk') {
       badgeHtml = '<span class="badge badge-cjk">中文</span>';
     } else if (cat === 'other') {
-      badgeHtml = '<span class="badge badge-other">其他语种</span>';
+      badgeHtml = '<span class="badge badge-other">小语种</span>';
     } else {
       badgeHtml = '<span class="badge badge-latin">西文</span>';
     }
 
     const switchTooltip = fontMode === 'blacklist'
-      ? (checked ? '已加入黑名单（脱敏隐藏），点击移出黑名单' : '未在黑名单（保持可见），点击加入黑名单')
-      : (checked ? '已加入白名单（保持可见），点击移出白名单' : '未在白名单（脱敏隐藏），点击加入白名单');
+      ? (checked ? '已加入黑名单（隐藏），点击移出黑名单' : '未在黑名单（保持可见），点击加入黑名单')
+      : (checked ? '已加入白名单（保持可见），点击移出白名单' : '未在白名单（隐藏），点击加入白名单');
 
     return `
       <div class="font-row ${hidden ? 'is-hidden' : ''}" data-font="${escapeHtml(f)}">
