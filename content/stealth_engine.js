@@ -497,6 +497,46 @@
   }
 
   /**
+   * GPU persona pool (entropy reduction via per-session randomization).
+   *
+   * A single hardcoded UNMASKED_RENDERER / WebGPU architecture pair is a value
+   * every user of this extension shares — i.e. a global, cross-site-stable
+   * "signature" that is itself a fingerprint (the fixed Intel/Mesa renderer was
+   * reported as a high-confidence detection). Instead of one constant, the
+   * renderer is picked from the pool below with the per-domain + per-page-load
+   * `seeds.webgl` seed: stable while one site is loaded, but different across
+   * sites and across reloads. Every entry is a real, common Linux Chrome
+   * Intel/Mesa combination consistent with the surrounding persona (vendor
+   * 'Google Inc. (Intel)', architecture matching the GPU generation), so no
+   * single choice stands out — only the *fixedness* went away.
+   *
+   * wgpuArch mirrors Chrome's Dawn architecture spelling (lowercase,
+   * hyphenated). Mapping is generation-based; where Dawn's exact string for a
+   * generation is ambiguous the closest documented value is used (approximate,
+   * see per-entry notes).
+   */
+  const GPU_PROFILES = [
+    // Comet Lake (10th gen) — the previous hardcoded persona; Dawn reports Gen9.
+    { renderer: 'Mesa Intel(R) UHD Graphics (CML GT2)', wgpuArch: 'gen-9' },
+    // Tiger Lake (11th gen, Xe) — Dawn reports Gen12LP.
+    { renderer: 'Mesa Intel(R) Iris(R) Xe Graphics (TGL GT2)', wgpuArch: 'gen-12lp' },
+    // Kaby Lake (7th gen) — Gen9.
+    { renderer: 'Mesa Intel(R) UHD Graphics 620 (KBL GT2)', wgpuArch: 'gen-9' },
+    // Skylake (6th gen) — Gen9.
+    { renderer: 'Mesa Intel(R) HD Graphics 530 (SKL GT2)', wgpuArch: 'gen-9' },
+    // Ice Lake (10th gen, Gen11 graphics) — Dawn reports Gen11 (approximate:
+    // Ice Lake is sometimes bucketed as gen-12lp like Tiger Lake).
+    { renderer: 'Mesa Intel(R) Iris(R) Plus Graphics (ICL GT2)', wgpuArch: 'gen-11' }
+  ];
+
+  // Linux Intel vendor tokens: WebGL's UNMASKED_VENDOR_WEBGL is the full
+  // 'Google Inc. (Intel)' string, WebGPU's adapter.info vendor is the short
+  // lowercase token. Both are crowd-common, hardware-driven values and stay
+  // constant across the pool.
+  const GPU_VENDOR_WEBGL = 'Google Inc. (Intel)';
+  const GPU_VENDOR_WGPU = 'intel';
+
+  /**
    * Deterministic non-clamping pixel perturbation:
    * Always changes by non-zero step, wrapping safely away from boundaries [0, 255].
    */
@@ -681,6 +721,17 @@
     const canvasDelta = (seeds.canvas % 12) * 2 + 1;
     const webglDelta = (seeds.webgl % 12) * 2 + 1;
     const audioDelta = ((seeds.audio % 50) * 2 + 1) * 1e-7;
+
+    // GPU persona for this window, picked from the module-scope GPU_PROFILES
+    // pool by the per-domain + per-page-load `seeds.webgl` seed (same seed as
+    // the WebGL readPixels delta; the two uses are independent modulo
+    // operations — the delta uses % 12, this uses % pool length — so they do
+    // not disturb each other).
+    // Declared here (function scope, not inside a section try block) so the
+    // WebGL/WebGPU section and the section-10 worker bootstrap below all read
+    // the exact same profile: a worker that reported a different renderer than
+    // the main thread would itself be a cross-context inconsistency signal.
+    const gpuProfile = GPU_PROFILES[seeds.webgl % GPU_PROFILES.length];
 
     const isShieldActive = (feature) => isProtectionActive(feature, targetWin);
 
@@ -1115,12 +1166,19 @@
       const UNMASKED_VENDOR_WEBGL = 37445;
       const UNMASKED_RENDERER_WEBGL = 37446;
 
-      // Uniform Linux Chrome (Intel UHD / Mesa) GPU persona — applied unconditionally
-      // while hardwareProtection is active so real-GPU tracking vectors are not passed through.
+      // Linux Chrome (Intel / Mesa) GPU persona from the pooled profile chosen
+      // above — applied unconditionally while hardwareProtection is active so
+      // real-GPU tracking vectors are not passed through. The pool + seed
+      // selection is the entropy-reduction move: instead of all users sharing
+      // one hardcoded renderer string (a cross-site-stable signature), each
+      // site/load gets a real-looking Intel renderer that stays stable within
+      // the loaded site. VENDOR (0x1F00) / RENDERER (0x1F01) stay the native
+      // 'WebKit' / 'WebKit WebGL' values, and MAX_TEXTURE_SIZE stays 16384
+      // (crowd-common for these GPUs).
       function getSpoofedInfo(win) {
         return {
-          vendor: 'Google Inc. (Intel)',
-          renderer: 'Mesa Intel(R) UHD Graphics (CML GT2)'
+          vendor: GPU_VENDOR_WEBGL,
+          renderer: gpuProfile.renderer
         };
       }
 
@@ -1228,10 +1286,13 @@
         if (!gpuObj || !gpuObj.requestAdapter) return;
         const origReqAdapter = gpuObj.requestAdapter;
         // Real Linux Chrome WebGPU values for an Intel iGPU: short vendor token,
-        // Chrome's own architecture spelling (lowercase, hyphenated), empty device/description.
+        // Chrome's own architecture spelling (lowercase, hyphenated), empty
+        // device/description. architecture comes from the pooled profile so the
+        // WebGPU generation matches the WebGL renderer the same page sees
+        // (a fixed 'gen-12lp' next to an older renderer was itself a mismatch).
         const spoofedGpuInfo = {
-          vendor: 'intel',
-          architecture: 'gen-12lp',
+          vendor: GPU_VENDOR_WGPU,
+          architecture: gpuProfile.wgpuArch,
           device: '',
           description: ''
         };
@@ -2297,7 +2358,6 @@
         const origNavHwDesc = Object.getOwnPropertyDescriptor(navProto, 'hardwareConcurrency');
         const origNavDevMemDesc = Object.getOwnPropertyDescriptor(navProto, 'deviceMemory');
         const origNavWdDesc = Object.getOwnPropertyDescriptor(navProto, 'webdriver');
-        const origNavDntDesc = Object.getOwnPropertyDescriptor(navProto, 'doNotTrack');
 
         const origNavHwValue = targetWin.navigator ? targetWin.navigator.hardwareConcurrency : 8;
         const origNavDevMemValue = targetWin.navigator ? targetWin.navigator.deviceMemory : 8;
@@ -2326,13 +2386,11 @@
           return false;
         }, 'webdriver', navProto));
 
-        // doNotTrack = '1'
-        defineNavProp('doNotTrack', createNativeGetter(function doNotTrack() {
-          if (!isShieldActive()) {
-            return origNavDntDesc && origNavDntDesc.get ? origNavDntDesc.get.call(this) : null;
-          }
-          return '1';
-        }, 'doNotTrack', navProto));
+        // navigator.doNotTrack: intentionally NOT overridden. The DNT signal is
+        // already sent at the network layer (Sec-GPC/DNT headers via DNR), and a
+        // JS-level forced '1' is a detectable deviation from native Chrome
+        // defaults (CreepJS flags it in the Navigator section). Native value
+        // passes through untouched.
 
         // globalPrivacyControl (active on EFF Cover Your Tracks or if natively present)
         if (isCYT || (targetWin.navigator && 'globalPrivacyControl' in targetWin.navigator)) {
@@ -2769,9 +2827,52 @@
 
     // 9. Timezone & Intl Localization Protection
     try {
+      // --- Real-timezone probe: "no spoof needed" fast path ---
+      // The system zone is probed ONCE per realm, here, before any Date/Intl hook
+      // in this realm is installed, through the original (still unwrapped) Intl
+      // constructor. A nested frame gets its own realm's native zone because
+      // applyStealth runs per realm and targetWin.Intl is still pristine at this
+      // point.
+      //
+      // Why this exists: when the spoof target equals the real system zone there
+      // is nothing to hide, and *any* re-implementation of Date/Intl (even a
+      // faithful one) risks contradicting the native output somewhere (zone-name
+      // locale, DST edge instants, sub-minute historical offsets). In that case
+      // every hook in this section passes straight through to the native method,
+      // so the realm's Date/Intl behaviour is bit-identical to a browser without
+      // the extension. Only when the target differs from the real zone (VPN /
+      // exit-IP mismatch) is the conversion path activated.
+      //
+      // Fail-safe: if the probe throws or yields nothing we cannot tell whether
+      // the target matches reality, so tzSpoofNeeded stays true and the previous
+      // convert-everything behaviour is kept.
+      let realTimezone = null;
+      try {
+        const probeIntl = targetWin.Intl;
+        if (probeIntl && probeIntl.DateTimeFormat) {
+          const probed = new probeIntl.DateTimeFormat().resolvedOptions();
+          if (probed && typeof probed.timeZone === 'string' && probed.timeZone.length > 0) {
+            realTimezone = probed.timeZone;
+          }
+        }
+      } catch (_) {
+        realTimezone = null;
+      }
+
+      let tzSpoofNeeded = true;
+      function refreshTzSpoofNeed() {
+        // realTimezone is stable for the lifetime of a realm; only the target
+        // (activeTimezone) moves when the bridge pushes a new zone.
+        tzSpoofNeeded = realTimezone === null || realTimezone !== activeTimezone;
+      }
+      refreshTzSpoofNeed();
+
       function updateActiveTimezone(tz) {
         if (typeof tz === 'string' && tz.includes('/')) {
           activeTimezone = tz;
+          // A target that now equals the real system zone switches every hook
+          // below back to native passthrough (and vice versa when it diverges).
+          refreshTzSpoofNeed();
         }
       }
 
@@ -2955,13 +3056,24 @@
           const second = parseInt(m.second, 10);
           const weekday = weekdayMap[m.weekday] !== undefined ? weekdayMap[m.weekday] : 0;
 
-          const asUTC = Date.UTC(year, month, day, hour, minute, second);
-          const offsetMin = Math.round((t - asUTC) / 60000);
+          const ms = ((t % 1000) + 1000) % 1000;
+          // The millisecond remainder must be part of the wall-as-UTC instant, or
+          // every offset would carry a sub-minute epsilon and truncation below
+          // would report e.g. GMT+0759 for Asia/Shanghai.
+          const asUTC = Date.UTC(year, month, day, hour, minute, second, ms);
+          // Wall->epoch resolution keeps minute-rounded offsets, but the offset we
+          // *report* (getTimezoneOffset / toString's GMT field) must match V8,
+          // which truncates toward zero for zones with sub-minute LMT-era offsets
+          // (verified against native: Africa/Monrovia 1969 => 44, not 45;
+          // Asia/Shanghai 1900 => GMT+0805, not GMT+0806).
+          const offsetExactMin = (t - asUTC) / 60000;
+          const offsetMin = Math.round(offsetExactMin);
+          const reportedOffsetMin = Math.trunc(offsetExactMin);
 
-          const absOffset = Math.abs(offsetMin);
+          const absOffset = Math.abs(reportedOffsetMin);
           const offH = String(Math.floor(absOffset / 60)).padStart(2, '0');
           const offM = String(absOffset % 60).padStart(2, '0');
-          const sign = offsetMin <= 0 ? '+' : '-';
+          const sign = reportedOffsetMin <= 0 ? '+' : '-';
           const gmtStr = 'GMT' + sign + offH + offM;
 
           const res = {
@@ -2971,11 +3083,12 @@
             hour,
             minute,
             second,
-            ms: ((t % 1000) + 1000) % 1000,
+            ms,
             weekday,
             weekdayShort: m.weekday,
             timeZoneName: m.timeZoneName || gmtStr,
             offsetMin,
+            reportedOffsetMin,
             gmtStr
           };
           lastDateT = t;
@@ -3022,7 +3135,10 @@
         // getTimezoneOffset
         OrigDate.prototype.getTimezoneOffset = createNativeFunction(function getTimezoneOffset() {
           checkDateReceiver(this, 'getTimezoneOffset');
-          if (!isShieldActive('timezoneProtection')) {
+          // tzSpoofNeeded false => the target matches the real system zone; fall
+          // through to the native method so the result cannot differ from a
+          // browser without the extension.
+          if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
             return origDateGetTimezoneOffset.call(this);
           }
           const parts = getZonedParts(this, activeTimezone);
@@ -3030,13 +3146,14 @@
             const t = origGetTime.call(this);
             return isNaN(t) ? NaN : 0;
           }
-          return parts.offsetMin;
+          // V8 truncates sub-minute offsets toward zero (see getZonedParts).
+          return parts.reportedOffsetMin;
         }, 'getTimezoneOffset', 0);
 
         // toString
         OrigDate.prototype.toString = createNativeFunction(function toString() {
           checkDateReceiver(this, 'toString');
-          if (!isShieldActive('timezoneProtection')) {
+          if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
             return origDateToString.call(this);
           }
           const parts = getZonedParts(this, activeTimezone);
@@ -3054,7 +3171,7 @@
         // toTimeString
         OrigDate.prototype.toTimeString = createNativeFunction(function toTimeString() {
           checkDateReceiver(this, 'toTimeString');
-          if (!isShieldActive('timezoneProtection')) {
+          if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
             return origDateToTimeString.call(this);
           }
           const parts = getZonedParts(this, activeTimezone);
@@ -3071,7 +3188,7 @@
         // toDateString
         OrigDate.prototype.toDateString = createNativeFunction(function toDateString() {
           checkDateReceiver(this, 'toDateString');
-          if (!isShieldActive('timezoneProtection')) {
+          if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
             return origDateToDateString.call(this);
           }
           const parts = getZonedParts(this, activeTimezone);
@@ -3086,7 +3203,7 @@
         // toLocaleString
         OrigDate.prototype.toLocaleString = createNativeFunction(function toLocaleString(locales, options) {
           checkDateReceiver(this, 'toLocaleString');
-          if (!isShieldActive('timezoneProtection')) {
+          if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
             return origDateToLocaleString.apply(this, arguments);
           }
           const t = origGetTime.call(this);
@@ -3103,7 +3220,7 @@
         // toLocaleDateString
         OrigDate.prototype.toLocaleDateString = createNativeFunction(function toLocaleDateString(locales, options) {
           checkDateReceiver(this, 'toLocaleDateString');
-          if (!isShieldActive('timezoneProtection')) {
+          if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
             return origDateToLocaleDateString.apply(this, arguments);
           }
           const t = origGetTime.call(this);
@@ -3118,7 +3235,7 @@
         // toLocaleTimeString
         OrigDate.prototype.toLocaleTimeString = createNativeFunction(function toLocaleTimeString(locales, options) {
           checkDateReceiver(this, 'toLocaleTimeString');
-          if (!isShieldActive('timezoneProtection')) {
+          if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
             return origDateToLocaleTimeString.apply(this, arguments);
           }
           const t = origGetTime.call(this);
@@ -3153,7 +3270,7 @@
         ].forEach(([fnName, prop, transform]) => {
           OrigDate.prototype[fnName] = createNativeFunction(function() {
             checkDateReceiver(this, fnName);
-            if (!isShieldActive('timezoneProtection')) {
+            if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
               return origDateGettersMap[fnName].call(this);
             }
             const p = getZonedParts(this, activeTimezone);
@@ -3164,49 +3281,55 @@
         // Native Date Local Setters
         const origSetTime = OrigDate.prototype.setTime;
 
-        // Resolve a target wall time to an epoch the way V8 does: unambiguous walls use
-        // their true offset, the repeated hour keeps the earlier instant, and the skipped
-        // hour applies the pre-transition offset. Candidate offsets come from the guess,
-        // the wall-as-UTC instant, and the first guess's real offset (few fixed lookups,
-        // no unbounded iteration).
+        // Resolve a target wall time to an epoch the way V8 does (verified against
+        // native zone data for America/Los_Angeles, America/New_York,
+        // Europe/London, Europe/Berlin, Australia/Sydney, Pacific/Chatham,
+        // Asia/Kolkata and Asia/Shanghai incl. their 1988 DST era): an
+        // unambiguous wall uses its true offset, the repeated hour of a
+        // fall-back transition keeps the EARLIER instant, and a wall inside a
+        // spring-forward gap is shifted forward by the gap length (equivalent to
+        // resolving with the pre-transition offset).
+        //
+        // The only two offsets that can apply are the offsets in effect one day
+        // before and one day after the naive wall instant; a single probe on each
+        // side brackets any transition (including 30/45-minute DST zones) with a
+        // fixed, tiny number of lookups. The previous candidate set was seeded
+        // from the caller's guess / the wall-as-UTC instant only, so when all of
+        // those landed on the post-transition side the pre-transition offset was
+        // never tested and the ambiguous hour resolved one hour late versus
+        // native (reproduced for Europe/London 2025-10-26 01:30,
+        // Europe/Berlin 2025-10-26 02:30, Australia/Sydney 2025-04-06 02:30 and
+        // Asia/Shanghai 1988-09-11 01:30).
         function resolveWallTime(naiveUtc, firstGuessOffset) {
           const offsetAt = (t) => {
             const p = getZonedParts(new OrigDate(t), activeTimezone);
             return p ? p.offsetMin : null;
           };
+          const before = offsetAt(naiveUtc - 86400000);
+          const after = offsetAt(naiveUtc + 86400000);
+          const guess = (typeof firstGuessOffset === 'number' && !isNaN(firstGuessOffset)) ? firstGuessOffset : 0;
+          if (before === null && after === null) {
+            // Zone lookup unavailable (e.g. NaN wall clock): keep the caller's
+            // estimate instead of inventing one.
+            return naiveUtc + guess * 60000;
+          }
           const candidates = [];
-          const seen = Object.create(null);
-          const addCandidate = (o) => {
-            if (o === null || o === undefined || seen[o]) return;
-            seen[o] = true;
-            candidates.push(o);
-          };
-          addCandidate(firstGuessOffset);
-          const firstGuessT = naiveUtc + firstGuessOffset * 60000;
-          addCandidate(offsetAt(naiveUtc));
-          addCandidate(offsetAt(firstGuessT));
-          let best = firstGuessOffset;
-          const consistent = [];
+          if (before !== null) candidates.push(before);
+          if (after !== null && after !== before) candidates.push(after);
+          let earliest = null;
           for (let i = 0; i < candidates.length; i++) {
-            if (offsetAt(naiveUtc + candidates[i] * 60000) === candidates[i]) {
-              consistent.push(candidates[i]);
+            const t = naiveUtc + candidates[i] * 60000;
+            // A candidate is real iff the zone's offset at the resulting instant
+            // is exactly that candidate (i.e. the wall clock round-trips).
+            if (offsetAt(t) === candidates[i] && (earliest === null || t < earliest)) {
+              earliest = t;
             }
           }
-          if (consistent.length > 0) {
-            best = consistent[0];
-            for (let i = 1; i < consistent.length; i++) {
-              if (consistent[i] < best) best = consistent[i];
-            }
-          } else {
-            let earliestT = Infinity;
-            for (let i = 0; i < candidates.length; i++) {
-              const t = naiveUtc + candidates[i] * 60000;
-              if (t < earliestT) earliestT = t;
-            }
-            const pre = earliestT !== Infinity ? offsetAt(earliestT) : null;
-            if (pre !== null) best = pre;
-          }
-          return naiveUtc + best * 60000;
+          if (earliest !== null) return earliest;
+          // No candidate round-trips: the requested wall clock does not exist
+          // (spring-forward gap). V8 resolves it with the pre-transition offset,
+          // pushing the result past the gap; that offset is `before`.
+          return naiveUtc + (before !== null ? before : after) * 60000;
         }
 
         function updateDateZoned(date, updater, methodName) {
@@ -3227,7 +3350,7 @@
         }
 
         OrigDate.prototype.setHours = createNativeFunction(function setHours(h, m, s, ms) {
-          if (!isShieldActive('timezoneProtection')) {
+          if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
             return origDateSetHours.apply(this, arguments);
           }
           return updateDateZoned(this, p => {
@@ -3239,7 +3362,7 @@
         }, 'setHours', 1);
 
         OrigDate.prototype.setMinutes = createNativeFunction(function setMinutes(m, s, ms) {
-          if (!isShieldActive('timezoneProtection')) {
+          if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
             return origDateSetMinutes.apply(this, arguments);
           }
           return updateDateZoned(this, p => {
@@ -3250,7 +3373,7 @@
         }, 'setMinutes', 1);
 
         OrigDate.prototype.setSeconds = createNativeFunction(function setSeconds(s, ms) {
-          if (!isShieldActive('timezoneProtection')) {
+          if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
             return origDateSetSeconds.apply(this, arguments);
           }
           return updateDateZoned(this, p => {
@@ -3260,7 +3383,7 @@
         }, 'setSeconds', 1);
 
         OrigDate.prototype.setDate = createNativeFunction(function setDate(d) {
-          if (!isShieldActive('timezoneProtection')) {
+          if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
             return origDateSetDate.apply(this, arguments);
           }
           return updateDateZoned(this, p => {
@@ -3269,7 +3392,7 @@
         }, 'setDate', 1);
 
         OrigDate.prototype.setMonth = createNativeFunction(function setMonth(m, d) {
-          if (!isShieldActive('timezoneProtection')) {
+          if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
             return origDateSetMonth.apply(this, arguments);
           }
           return updateDateZoned(this, p => {
@@ -3279,7 +3402,7 @@
         }, 'setMonth', 1);
 
         OrigDate.prototype.setFullYear = createNativeFunction(function setFullYear(y, m, d) {
-          if (!isShieldActive('timezoneProtection')) {
+          if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
             return origDateSetFullYear.apply(this, arguments);
           }
           return updateDateZoned(this, p => {
@@ -3292,10 +3415,15 @@
         // Hook targetWin.Date constructor and function call
         const HookedDate = function Date(...args) {
           if (!new.target) {
+            // No spoof needed => the native toString (same call the unwrapped
+            // Date() makes) is the only correct answer.
             const d = new OrigDate();
-            return !isShieldActive('timezoneProtection') ? origDateToString.call(d) : OrigDate.prototype.toString.call(d);
+            return (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) ? origDateToString.call(d) : OrigDate.prototype.toString.call(d);
           }
-          if (args.length >= 2 && isShieldActive('timezoneProtection')) {
+          // Wall-clock constructor args only need remapping when the target zone
+          // differs from the real one; otherwise let Reflect.construct take the
+          // untouched native path below.
+          if (args.length >= 2 && isShieldActive('timezoneProtection') && tzSpoofNeeded) {
             try {
               const yr = Number(args[0]);
               const mo = Number(args[1]);
@@ -3351,7 +3479,10 @@
         if (OrigIntl.DateTimeFormat) {
           const OrigDTF = OrigIntl.DateTimeFormat;
           function DateTimeFormat(locales, options) {
-            if (!isShieldActive('timezoneProtection')) {
+            if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
+              // Target zone == real system zone (or protection off): construct
+              // through the original constructor so the instance, its resolved
+              // options and every formatted string are exactly native.
               return new.target ? Reflect.construct(OrigDTF, arguments, new.target) : OrigDTF.apply(this, arguments);
             }
             // Locale passes through natively (entropy-reduction strategy); only
@@ -3379,10 +3510,15 @@
             // Real local timezone, derived dynamically through the original (unhooked)
             // constructor. Replaces the old hardcoded Chinese-city list, which missed
             // zones like Asia/Macau.
-            let realLocalTz = null;
-            try {
-              realLocalTz = origDTFResolved.call(new OrigDTF()).timeZone || null;
-            } catch (_) {}
+            // Reuse the realm-level probe when it succeeded (single source of
+            // truth for "the zone this machine is really in"); fall back to a
+            // local probe of the pristine resolvedOptions otherwise.
+            let realLocalTz = realTimezone;
+            if (!realLocalTz) {
+              try {
+                realLocalTz = origDTFResolved.call(new OrigDTF()).timeZone || null;
+              } catch (_) {}
+            }
             // Long display name ("Pacific Daylight Time") derived from activeTimezone
             // with the original Intl constructor, so a replaced timeZone stays
             // consistent with any timeZoneName the formatter resolved.
@@ -3397,7 +3533,8 @@
             };
             const hookedDTFResolved = createNativeFunction(function resolvedOptions() {
               const res = origDTFResolved.apply(this, arguments);
-              if (!isShieldActive('timezoneProtection')) {
+              if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
+                // Nothing to rewrite: report the untouched native resolved options.
                 return res;
               }
               if (res) {
@@ -3619,10 +3756,15 @@
           ctx.getParameter = makeNative(function(pname) {
             if (pname === 0x1F00) return 'WebKit';
             if (pname === 0x1F01) return 'WebKit WebGL';
-            if (pname === 37445) return 'Google Inc. (Intel)';
-            if (pname === 37446) return 'Mesa Intel(R) UHD Graphics (CML GT2)';
+            // Same pooled GPU profile as the main thread (interpolated from the
+            // applyStealth-scope gpuProfile) — a worker reporting a different
+            // renderer than its page is a cross-context contradiction and would
+            // be a detection point. Pool strings are plain literals (no quotes
+            // or backslashes), so single-quoted interpolation is safe here.
+            if (pname === 37445) return '${GPU_VENDOR_WEBGL}';
+            if (pname === 37446) return '${gpuProfile.renderer}';
             // MAX_TEXTURE_SIZE: keep worker reads identical to the main-thread
-            // Intel UHD (CML GT2) persona.
+            // GPU persona (16384, crowd-common for these Intel GPUs).
             if (pname === 0x0D33) return 16384;
             return origGP.apply(this, arguments);
           }, 'getParameter');
