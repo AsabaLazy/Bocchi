@@ -11,7 +11,42 @@
   // Realm-local registries (closure-scoped). Previously these were shared across
   // realms via Symbol.for keys on window.top; page scripts could look up those
   // well-known symbols and tamper with nativeMap / shieldConfig directly.
-  const nativeMap = new WeakMap();
+  //
+  // nativeMap is the one registry that MUST cross same-origin realms: a lie
+  // detector reads a patched API's source with a foreign realm's
+  // Function.prototype.toString (CreepJS builds a nested about:blank iframe
+  // chain and uses its contentWindow as `scope`), so a per-instance map made
+  // every API patched in another realm read back as its raw hook source ->
+  // "failed toString" for each one. One shared WeakMap keeps the fake sources
+  // symmetric in all directions. Exposure: window.top under a Symbol.for key
+  // (same mechanism and same accepted residual risk as SHARED_MARK_KEY below);
+  // cross-origin frames cannot reach window.top and fall back to a realm-local
+  // map, which is correct because no other realm can use them as `scope`
+  // either.
+  const NATIVE_MAP_SALT = '9c2e6b41';
+  const NATIVE_MAP_KEY = Symbol.for('__bpc_nm_' + NATIVE_MAP_SALT);
+  function getSharedNativeMap() {
+    try {
+      if (typeof window === 'undefined') return new WeakMap();
+      const root = window.top || window;
+      const existing = root[NATIVE_MAP_KEY];
+      if (existing && typeof existing.get === 'function' &&
+          typeof existing.set === 'function' && typeof existing.has === 'function') {
+        return existing;
+      }
+      const map = new WeakMap();
+      Object.defineProperty(root, NATIVE_MAP_KEY, {
+        value: map,
+        enumerable: false,
+        configurable: false,
+        writable: false
+      });
+      return map;
+    } catch (_) {
+      return new WeakMap();
+    }
+  }
+  const nativeMap = getSharedNativeMap();
   const protectedWindows = new WeakSet();
   const canvasContextTypeMap = new WeakMap();
   const audioFarbledMap = new WeakMap();
@@ -497,16 +532,18 @@
   }
 
   /**
-   * GPU persona pool (entropy reduction via per-session randomization).
+   * GPU persona pool (entropy reduction via pooled hardware personas).
    *
    * A single hardcoded UNMASKED_RENDERER / WebGPU architecture pair is a value
    * every user of this extension shares — i.e. a global, cross-site-stable
    * "signature" that is itself a fingerprint (the fixed Intel/Mesa renderer was
    * reported as a high-confidence detection). Instead of one constant, the
-   * renderer is picked from the pool below with the per-domain + per-page-load
-   * `seeds.webgl` seed: stable while one site is loaded, but different across
-   * sites and across reloads. Every entry is a real, common Linux Chrome
-   * Intel/Mesa combination consistent with the surrounding persona (vendor
+   * renderer is picked from the pool below with djb2(eTLD+1 of the frame's
+   * host) % length: identical for every frame of one site (the pool key holds
+   * no salt, so per-frame salts cannot split the choice) and stable across
+   * reloads, while remaining uninformative to the site itself — the key is the
+   * site's own domain. Every entry is a real, common Linux Chrome Intel/Mesa
+   * combination consistent with the surrounding persona (vendor
    * 'Google Inc. (Intel)', architecture matching the GPU generation), so no
    * single choice stands out — only the *fixedness* went away.
    *
@@ -723,15 +760,32 @@
     const audioDelta = ((seeds.audio % 50) * 2 + 1) * 1e-7;
 
     // GPU persona for this window, picked from the module-scope GPU_PROFILES
-    // pool by the per-domain + per-page-load `seeds.webgl` seed (same seed as
-    // the WebGL readPixels delta; the two uses are independent modulo
-    // operations — the delta uses % 12, this uses % pool length — so they do
-    // not disturb each other).
+    // pool by a hash of the site's eTLD+1 approximation (last two host labels).
+    //
+    // Design: the selection key must NOT contain the per-load salt. Every frame
+    // derives its own salt, so a salt-derived profile makes two frames of the
+    // same site disagree about the GPU — a cross-frame contradiction real GPUs
+    // never produce (reported as "same-site frame profile mismatch"). Deriving
+    // from the hostname instead gives: (a) all frames of one site agree even
+    // though each frame computes it independently (including cross-origin
+    // iframes, which cannot share anything else), and (b) the profile is stable
+    // across reloads and sessions, like real hardware. Privacy cost is zero:
+    // the key is the site's own domain, already known to that site, so it adds
+    // no entropy a site or tracker can use — nothing to link across sites, and
+    // no way to distinguish two visitors of the same site. Users on the same
+    // site share one pool entry, which is exactly the crowd-blending we want.
+    // Note: `host` may be '' (opaque origin / about:blank); djb2('') is a fixed
+    // value, so those frames also stay consistent with each other.
+    //
+    // webglDelta (pixel perturbation) intentionally keeps using the salted
+    // `seeds.webgl` seed: farbled pixel values *should* differ per load, only
+    // the hardware persona must be stable. The two are independent anyway (% 12
+    // vs % pool length).
     // Declared here (function scope, not inside a section try block) so the
     // WebGL/WebGPU section and the section-10 worker bootstrap below all read
     // the exact same profile: a worker that reported a different renderer than
     // the main thread would itself be a cross-context inconsistency signal.
-    const gpuProfile = GPU_PROFILES[seeds.webgl % GPU_PROFILES.length];
+    const gpuProfile = GPU_PROFILES[djb2(host.split('.').slice(-2).join('.')) % GPU_PROFILES.length];
 
     const isShieldActive = (feature) => isProtectionActive(feature, targetWin);
 
@@ -2355,12 +2409,7 @@
     try {
       if (targetWin.Navigator && targetWin.Navigator.prototype) {
         const navProto = targetWin.Navigator.prototype;
-        const origNavHwDesc = Object.getOwnPropertyDescriptor(navProto, 'hardwareConcurrency');
-        const origNavDevMemDesc = Object.getOwnPropertyDescriptor(navProto, 'deviceMemory');
         const origNavWdDesc = Object.getOwnPropertyDescriptor(navProto, 'webdriver');
-
-        const origNavHwValue = targetWin.navigator ? targetWin.navigator.hardwareConcurrency : 8;
-        const origNavDevMemValue = targetWin.navigator ? targetWin.navigator.deviceMemory : 8;
 
         const defineNavProp = (prop, getter) => {
           try {
@@ -2402,24 +2451,14 @@
           }, 'globalPrivacyControl', navProto));
         }
 
-        // deviceMemory = 8
-        defineNavProp('deviceMemory', createNativeGetter(function deviceMemory() {
-          if (!isShieldActive('hardwareProtection')) {
-            return origNavDevMemDesc && origNavDevMemDesc.get ? origNavDevMemDesc.get.call(this) : origNavDevMemValue;
-          }
-          return 8;
-        }, 'deviceMemory', navProto));
-
-        // Low-entropy hardware value: degrade to a common constant on every
-        // site (no per-domain divergence games — divergence only pays off for
-        // high-entropy vectors, which are seed-farbled).
-        const chosenConcurrency = 8;
-        defineNavProp('hardwareConcurrency', createNativeGetter(function hardwareConcurrency() {
-          if (!isShieldActive('hardwareProtection')) {
-            return origNavHwDesc && origNavHwDesc.get ? origNavHwDesc.get.call(this) : origNavHwValue;
-          }
-          return chosenConcurrency;
-        }, 'hardwareConcurrency', navProto));
+        // navigator.deviceMemory / hardwareConcurrency: intentionally NOT
+        // overridden anymore. A fixed degraded value cannot be kept consistent
+        // across realms: SharedWorker script URLs cannot be safely wrapped
+        // (blob wrapping breaks cross-tab worker sharing — a documented
+        // Vite/Parcel regression class), so an unwrapped SharedWorker reports
+        // the real values and contradicts a degraded main thread. Consistency
+        // beats a marginal entropy reduction on these low-signal vectors
+        // (common values like 8/16 are large crowds anyway).
 
         // performance.memory heap size limit clamping to prevent 32GB estimation
         if (targetWin.performance && targetWin.performance.memory) {
@@ -2476,15 +2515,35 @@
 
 
       // Screen geometry + devicePixelRatio spoof (common Linux desktop profile).
-      // Consistency guard: if the real browser window is larger than the spoofed screen
-      // (e.g. a maximized window on a 2560px display), the spoof is skipped so we never
-      // present an impossible outerWidth > screen.width combination.
+      // Consistency guard: skip the spoof when it would be obviously contradictory:
+      // (a) the real window is larger than the profile (impossible outerWidth >
+      //     screen.width), or (b) the real screen is smaller than the profile (a
+      //     device claiming a bigger screen than it physically has contradicts
+      //     matchMedia/rendering — headless VMs land here and pass through).
+      // The real dimensions are read once from the original getters (reading
+      // targetWin.screen.width after hooking would recurse into this guard).
       const SCREEN_PROFILE = { width: 1920, height: 1080, availWidth: 1920, availHeight: 1040, colorDepth: 24, pixelDepth: 24 };
+      let realScreenW = 0;
+      let realScreenH = 0;
+      try {
+        if (targetWin.Screen && targetWin.Screen.prototype && targetWin.screen) {
+          const swDesc = Object.getOwnPropertyDescriptor(targetWin.Screen.prototype, 'width');
+          const shDesc = Object.getOwnPropertyDescriptor(targetWin.Screen.prototype, 'height');
+          if (swDesc && swDesc.get) realScreenW = swDesc.get.call(targetWin.screen);
+          if (shDesc && shDesc.get) realScreenH = shDesc.get.call(targetWin.screen);
+        }
+      } catch (_) {}
       const canSpoofScreen = () => {
         try {
           const ow = targetWin.outerWidth;
           const oh = targetWin.outerHeight;
           if ((typeof ow === 'number' && ow > SCREEN_PROFILE.width) || (typeof oh === 'number' && oh > SCREEN_PROFILE.height)) {
+            return false;
+          }
+          if (realScreenW > 0 && realScreenW < SCREEN_PROFILE.width) {
+            return false;
+          }
+          if (realScreenH > 0 && realScreenH < SCREEN_PROFILE.height) {
             return false;
           }
         } catch (_) {}
@@ -3560,15 +3619,10 @@
 
     // 10. Web Worker & SharedWorker Cross-Context Protection
     try {
-      // Mirror the main-thread degradation (hardwareConcurrency is a fixed
-      // common value on both sides — no CYT special-casing).
-      const workerConcurrency = 8;
-
       function generateWorkerBootstrap() {
         return `(function() {
   'use strict';
   try {
-    const chosenConcurrency = ${workerConcurrency};
     const targetTz = ${JSON.stringify(activeTimezone)};
 
     // Self-contained native-look patch: without this, String(hookFn) inside the
@@ -3618,11 +3672,10 @@
       }
     };
 
-    // Only hardware values stay spoofed here, mirroring the main-thread
-    // navigator hooks (deviceMemory / hardwareConcurrency); UA-family persona
-    // values are native on both the main thread and workers now.
-    defineProp(navProto, nav, 'hardwareConcurrency', () => chosenConcurrency);
-    defineProp(navProto, nav, 'deviceMemory', () => 8);
+    // navigator.deviceMemory / hardwareConcurrency are native on both the
+    // main thread and workers (a degraded fixed value cannot stay consistent
+    // across realms because SharedWorker cannot be safely wrapped — see the
+    // main-thread note; native values pass through untouched here).
 
     // performance.memory in worker
     if (self.performance && self.performance.memory) {
@@ -3772,6 +3825,58 @@
         return ctx;
       }, 'getContext');
     }
+
+    // WebGPU adapter info in worker: same masking as the main-thread
+    // hookWebGPU (short 'intel' vendor token, Dawn architecture spelling
+    // interpolated from the same gpuProfile as the WebGL renderer above, empty
+    // device/description). Without this a worker's requestAdapter() leaks the
+    // real adapter while its page reports the pooled persona — a cross-context
+    // contradiction and a straight detection point. Best-effort: any failure
+    // leaves the native API untouched.
+    try {
+      const gpuObj = self.navigator && self.navigator.gpu;
+      if (gpuObj && typeof gpuObj.requestAdapter === 'function') {
+        const origReqAdapter = gpuObj.requestAdapter;
+        const spoofedGpuInfo = {
+          vendor: '${GPU_VENDOR_WGPU}',
+          architecture: '${gpuProfile.wgpuArch}',
+          device: '',
+          description: ''
+        };
+        gpuObj.requestAdapter = makeNative(function requestAdapter() {
+          return origReqAdapter.apply(this, arguments).then(function(adapter) {
+            if (!adapter) return adapter;
+            try {
+              const baseInfo = adapter.info ? adapter.info : {};
+              const infoProto = (self.GPUAdapterInfo && self.GPUAdapterInfo.prototype) || Object.prototype;
+              // Stable record (same reference on every read), GPUAdapterInfo-shaped.
+              const fakeInfo = Object.assign(Object.create(infoProto), baseInfo, spoofedGpuInfo);
+              if (adapter.info) {
+                // Native info is a non-enumerable prototype accessor; expose ours
+                // as a non-enumerable getter on the adapter instead of an own
+                // enumerable value (mirrors the main-thread hook).
+                Object.defineProperty(adapter, 'info', {
+                  get: makeNative(function info() { return fakeInfo; }, 'get info'),
+                  configurable: true,
+                  enumerable: false
+                });
+              }
+              if (typeof adapter.requestAdapterInfo === 'function') {
+                Object.defineProperty(adapter, 'requestAdapterInfo', {
+                  value: makeNative(function requestAdapterInfo() {
+                    return Promise.resolve(fakeInfo);
+                  }, 'requestAdapterInfo'),
+                  writable: true,
+                  configurable: true,
+                  enumerable: false
+                });
+              }
+            } catch (_) {}
+            return adapter;
+          });
+        }, 'requestAdapter');
+      }
+    } catch (_) {}
   } catch (_) {}
 })();`;
       }
