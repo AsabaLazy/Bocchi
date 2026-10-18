@@ -8,38 +8,21 @@
 (() => {
   'use strict';
 
-  // Shared registries across all realms/windows within the same page session
-  function getSharedRegistry(symName, ctor) {
-    try {
-      const rootWin = (typeof window !== 'undefined' && window.top) || (typeof self !== 'undefined' && self) || globalThis;
-      const sym = Symbol.for(symName);
-      if (!rootWin[sym]) {
-        Object.defineProperty(rootWin, sym, {
-          value: new ctor(),
-          enumerable: false,
-          configurable: false,
-          writable: false
-        });
-      }
-      return rootWin[sym];
-    } catch (_) {
-      return new ctor();
-    }
-  }
-
-  // Global registries for native functions and protected realms
-  const nativeMap = getSharedRegistry('__bocchi_native_map__', WeakMap);
-  const protectedWindows = getSharedRegistry('__bocchi_protected_windows__', WeakSet);
-  const canvasContextTypeMap = getSharedRegistry('__bocchi_canvas_ctx_map__', WeakMap);
-  const audioFarbledMap = getSharedRegistry('__bocchi_audio_farbled_map__', WeakMap);
-  const audioCalibratedSet = getSharedRegistry('__bocchi_audio_calibrated_set__', WeakSet);
-  const windowSaltMap = getSharedRegistry('__bocchi_window_salt_map__', WeakMap);
+  // Realm-local registries (closure-scoped). Previously these were shared across
+  // realms via Symbol.for keys on window.top; page scripts could look up those
+  // well-known symbols and tamper with nativeMap / shieldConfig directly.
+  const nativeMap = new WeakMap();
+  const protectedWindows = new WeakSet();
+  const canvasContextTypeMap = new WeakMap();
+  const audioFarbledMap = new WeakMap();
+  // Per-window memo of the per-page-load farbling salt (see applyStealth).
+  const windowSaltMap = new WeakMap();
 
   // Global timezone state (defaulting to America/Los_Angeles, dynamically synced)
   let activeTimezone = 'America/Los_Angeles';
 
   // Privacy Shield configuration registry (Master switch, per-site bypass, 5 core modules, font switch)
-  const shieldConfig = getSharedRegistry('__bocchi_shield_config__', Object);
+  const shieldConfig = {};
   if (typeof shieldConfig.globalShieldEnabled !== 'boolean') shieldConfig.globalShieldEnabled = true;
   if (typeof shieldConfig.isBypassed !== 'boolean') shieldConfig.isBypassed = false;
   if (typeof shieldConfig.canvasProtection !== 'boolean') shieldConfig.canvasProtection = true;
@@ -51,7 +34,7 @@
   if (!Array.isArray(shieldConfig.siteBypassList)) shieldConfig.siteBypassList = [];
 
   // Font privacy configuration registry (supports built-in CJK regex and user-custom font rules)
-  const fontConfig = getSharedRegistry('__bocchi_font_config__', Object);
+  const fontConfig = {};
   if (!Array.isArray(fontConfig.customHiddenFonts)) fontConfig.customHiddenFonts = [];
   if (!Array.isArray(fontConfig.customAllowedFonts)) fontConfig.customAllowedFonts = [];
   if (typeof fontConfig.blockBuiltinChineseFonts !== 'boolean') fontConfig.blockBuiltinChineseFonts = true;
@@ -90,17 +73,30 @@
     return d.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^\*\.?/, '').replace(/^\.+/, '').split('/')[0].split(':')[0];
   }
 
+  // Hot-path cache for isProtectionActive: per-window {host, isBypassed}.
+  // Replaced (invalidated) whenever a bridge config event arrives (section 9),
+  // since siteBypassList may have changed.
+  let shieldStateCache = new WeakMap();
+
   function isProtectionActive(feature, win) {
     if (shieldConfig.globalShieldEnabled === false) return false;
     if (shieldConfig.isBypassed === true) return false;
-    if (Array.isArray(shieldConfig.siteBypassList) && shieldConfig.siteBypassList.length > 0) {
-      const h = (win ? resolveHostName(win) : (typeof window !== 'undefined' ? resolveHostName(window) : '')).toLowerCase();
-      if (h && shieldConfig.siteBypassList.some(s => {
-        const site = normalizeDomain(s);
-        return site && (h === site || h.endsWith('.' + site));
-      })) {
-        return false;
+    const bypassList = Array.isArray(shieldConfig.siteBypassList) ? shieldConfig.siteBypassList : [];
+    if (bypassList.length > 0) {
+      const targetWin = win || (typeof window !== 'undefined' ? window : null);
+      let state = targetWin ? shieldStateCache.get(targetWin) : null;
+      if (!state) {
+        const h = (targetWin ? resolveHostName(targetWin) : '').toLowerCase();
+        const isBypassed = !!h && bypassList.some(s => {
+          const site = normalizeDomain(s);
+          return site && (h === site || h.endsWith('.' + site));
+        });
+        state = { host: h, isBypassed: isBypassed };
+        if (targetWin) {
+          try { shieldStateCache.set(targetWin, state); } catch (_) {}
+        }
       }
+      if (state.isBypassed) return false;
     }
     if (feature && shieldConfig[feature] === false) return false;
     return true;
@@ -114,8 +110,7 @@
 
   const GENERIC_CSS_FAMILIES = new Set([
     'serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui',
-    'ui-sans-serif', 'ui-serif', 'ui-monospace', 'emoji', 'math', 'fangsong',
-    '__bocchi_absent_font__'
+    'ui-sans-serif', 'ui-serif', 'ui-monospace', 'emoji', 'math', 'fangsong'
   ]);
 
   function extractFontFamilies(fontStr) {
@@ -134,11 +129,13 @@
       families = [name.trim().replace(/^['"]|['"]$/g, '').toLowerCase()];
     }
     return families.some(fam => {
+      // 0. Generic CSS family keywords are always protected first (fangsong is both a
+      // generic CSS family and a CHINESE_FONTS_REGEX match; the generic keyword wins)
+      if (GENERIC_CSS_FAMILIES.has(fam)) {
+        return false;
+      }
       // 1. Whitelist mode: only fonts in customAllowedFonts are NOT hidden (generic CSS families remain safe)
       if (fontConfig.fontMode === 'whitelist') {
-        if (GENERIC_CSS_FAMILIES.has(fam)) {
-          return false;
-        }
         const isAllowed = fontConfig.customAllowedFonts && fontConfig.customAllowedFonts.some(f => {
           const s = f && f.trim().toLowerCase();
           return s && (fam === s || fam.includes(s));
@@ -179,7 +176,17 @@
       }
     }
     if (kept.length === 0) {
-      return '__bocchi_absent_font__';
+      // Never emit an extension-specific beacon token: fall back to the last
+      // generic CSS family in the original declaration ('SimSun, monospace' -> 'monospace'),
+      // or 'monospace' when the declaration had none.
+      let genericFallback = '';
+      for (let i = 0; i < parts.length; i++) {
+        const fam = parts[i].trim().replace(/^['"]|['"]$/g, '').toLowerCase();
+        if (fam && GENERIC_CSS_FAMILIES.has(fam)) {
+          genericFallback = fam;
+        }
+      }
+      return genericFallback || 'monospace';
     }
     return kept.join(', ');
   }
@@ -194,7 +201,6 @@
     }
     return sanitizeFontList(spec);
   }
-
 
   /**
    * Helper to disguise a function as a native browser function.
@@ -416,6 +422,14 @@
         enumerable: false,
         configurable: true
       });
+      // Cross-realm follow-up (kept intentionally — NOT a guaranteed no-op):
+      // for the common applyStealth(window) call in a single realm these blocks
+      // are skipped (Function.prototype === targetWin.Function.prototype), but
+      // section 8 adopts same-origin child frames by calling applyStealth on
+      // their windows, where this realm's Function.prototype differs from
+      // targetWin's. They also self-heal this realm's hook if a page script
+      // reverts the configurable toString patch above. Only this engine's own
+      // realm prototypes are touched here; targetWin was patched above.
       if (typeof Function !== 'undefined' && Function.prototype && Function.prototype !== targetWin.Function.prototype) {
         try {
           Object.defineProperty(Function.prototype, 'toString', {
@@ -495,21 +509,114 @@
   }
 
   /**
-   * Helper to identify EFF Cover Your Tracks evaluation domains
-   * (where dynamic canvas/webgl/audio farbling is needed for the 3/3 Green Shields).
-   * For all other domains (including browserleaks.com, TraceScope, Claude AI, and regular websites),
-   * Canvas, WebGL readPixels, and AudioBuffer render 100% natively without pixel perturbation,
-   * blending perfectly into the real hardware crowd and eliminating the 100% uniqueness anomaly.
+   * Helper to identify EFF Cover Your Tracks family evaluation domains.
+   * Used by the GPC-injection and timezone sections; canvas/WebGL/audio
+   * farbling no longer depends on it — it now applies on every domain with
+   * per-load-salt + per-domain-seed randomization (stable within one site
+   * during a page load, different across sites and visits).
    */
-  function isCYTDomain(hostname) {
+  // Exact-match list of CYT-family evaluation domains. Substring matching
+  // (e.g. includes('eff.org')) also matched hostile look-alikes such as
+  // not-eff.org or eff.org.evil.example; match on domain boundaries instead.
+  const CYT_DOMAINS = [
+    'coveryourtracks.org',
+    'trackersimulator.org',
+    'eviltracker.net',
+    'do-not-tracker.org',
+    'firstpartysimulator.net',
+    'eff.org'
+  ];
+
+  // Exact host-vs-domain boundary match. Substring matching (e.g.
+  // includes('eff.org')) also matched hostile look-alikes such as
+  // not-eff.org or eff.org.evil.example; match on domain boundaries instead.
+  function isExactHost(hostname, domain) {
     if (!hostname || typeof hostname !== 'string') return false;
     const h = hostname.toLowerCase();
-    return h.includes('coveryourtracks') ||
-           h.includes('trackersimulator') ||
-           h.includes('eviltracker') ||
-           h.includes('do-not-tracker') ||
-           h.includes('firstparty') ||
-           h.includes('eff.org');
+    return h === domain || h.endsWith('.' + domain);
+  }
+
+  function isCYTDomain(hostname) {
+    return CYT_DOMAINS.some(d => isExactHost(hostname, d));
+  }
+
+  // ---- Cross-instance patch dedup (same-origin frame trees only) ----
+  // Two engine instances can legitimately target the same realm: the parent
+  // frame's contentWindow/contentDocument getter hooks + insertion guards
+  // (section 8) adopt a same-origin child frame, while the child's own
+  // injected instance also calls applyStealth(window) at document_start.
+  // Their per-realm protectedWindows WeakSets live in private closures, so
+  // without a shared mark the child frame would be patched twice (canvas /
+  // audio deltas applied twice -> wrong, non-idempotent values).
+  // The shared WeakMap lives on window.top under a Symbol.for key built from
+  // an obfuscated constant: the global symbol registry has no enumeration
+  // API, so a page must know the complete literal string to reach the map.
+  // Residual risk (accepted): a page-controlled same-origin iframe could
+  // probe hook side effects inside its own realm. The main frame is not
+  // affected, and cross-origin "adoption" is already impossible because every
+  // property access on a cross-origin WindowProxy throws SecurityError.
+  const SHARED_MARK_SALT = '7e4b1c92';
+  const SHARED_MARK_KEY = Symbol.for('__bpc_pm_' + SHARED_MARK_SALT);
+  let sharedPatchMarksCache = null;
+
+  // Resolve (or create once) the cross-instance WeakMap<window, {s, v}>.
+  // window.top is used when reachable; any cross-origin access throws and we
+  // fall back to this realm's own window (marks then stay per-frame-segment,
+  // which is harmless: cross-origin frames can never be patched twice anyway).
+  function getSharedPatchMarks() {
+    if (sharedPatchMarksCache) return sharedPatchMarksCache;
+    const marks = new WeakMap();
+    let root = window;
+    try {
+      const top = window.top;
+      if (top && top !== window) root = top;
+    } catch (_) {}
+    try {
+      const existing = root[SHARED_MARK_KEY];
+      if (existing && typeof existing.get === 'function' && typeof existing.set === 'function') {
+        sharedPatchMarksCache = existing;
+        return existing;
+      }
+    } catch (_) {
+      root = window;
+    }
+    try {
+      Object.defineProperty(root, SHARED_MARK_KEY, {
+        value: marks,
+        enumerable: false,
+        configurable: false,
+        writable: false
+      });
+    } catch (_) {
+      root = window;
+      try {
+        Object.defineProperty(window, SHARED_MARK_KEY, {
+          value: marks,
+          enumerable: false,
+          configurable: false,
+          writable: false
+        });
+      } catch (_) {}
+    }
+    sharedPatchMarksCache = marks;
+    return marks;
+  }
+
+  // Random 16-hex-char value for the per-window patch mark (crypto-backed,
+  // Math.random fallback mirroring GLOBAL_SESSION_SALT).
+  function randomHex16() {
+    try {
+      const buf = new Uint8Array(8);
+      if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+        crypto.getRandomValues(buf);
+        let out = '';
+        for (let i = 0; i < 8; i++) out += ('0' + buf[i].toString(16)).slice(-2);
+        return out;
+      }
+    } catch (_) {}
+    let fallback = '';
+    for (let i = 0; i < 16; i++) fallback += Math.floor(Math.random() * 16).toString(16);
+    return fallback;
   }
 
   /**
@@ -519,27 +626,61 @@
     if (!targetWin || protectedWindows.has(targetWin)) {
       return;
     }
+    // Cross-instance dedup: a sibling engine instance in another realm of this
+    // same-origin frame tree may have fully patched targetWin already (its
+    // protectedWindows WeakSet is not visible to us). Positive verification:
+    // a shared WeakMap entry is only trusted when the matching random value is
+    // actually present on targetWin itself, so a page that somehow obtained
+    // the shared map still cannot forge a "patched" claim without also
+    // faking the per-window random symbol property on the target window.
+    try {
+      const sharedMarks = getSharedPatchMarks();
+      const entry = sharedMarks.get(targetWin);
+      if (entry) {
+        let marked;
+        try { marked = targetWin[entry.s]; } catch (_) { marked = undefined; }
+        if (marked === entry.v) {
+          return;
+        }
+      }
+    } catch (_) {}
     try {
       protectedWindows.add(targetWin);
     } catch (_) {
       return;
     }
 
+    // Per-window farbling salt. Per-page-load random salt + the per-domain
+    // seeds below implement the Brave-style entropy-reduction model: farbled
+    // canvas/audio/WebGL values stay stable for one site during a page load,
+    // but differ across sites and across visits, so fingerprints can no longer
+    // be linked across sites or sessions. The salt is deliberately NOT
+    // browser-session-stable (e.g. derived from a bridge-delivered key): that
+    // would re-link all of a user's farbled fingerprints within one session.
+    // Known limitation (accepted): sibling frames of the same site each derive
+    // an independent per-load salt, so a page that compares farbled values
+    // across its own frames may observe a mismatch. Sharing the salt via
+    // window.top would expose it to page scripts (same-origin pages can read
+    // any window property, even non-enumerable symbol-keyed ones), which would
+    // let a page reverse the farbling — a far worse trade.
     let activeSessionSalt = GLOBAL_SESSION_SALT;
     try {
-      if (targetWin.top && windowSaltMap.has(targetWin.top)) {
-        activeSessionSalt = windowSaltMap.get(targetWin.top);
+      const priorSalt = windowSaltMap.get(targetWin);
+      if (typeof priorSalt === 'number') {
+        activeSessionSalt = priorSalt;
       }
       windowSaltMap.set(targetWin, activeSessionSalt);
     } catch (_) {}
 
     const host = resolveHostName(targetWin);
+    // Audit-domain marker, still consumed by the GPC-injection and timezone
+    // sections below; canvas/WebGL/audio farbling itself now applies on every
+    // domain (per-domain seeds below), so it no longer consults isCYT.
     const isCYT = isCYTDomain(host);
-    const isFirstParty = host.includes('firstparty');
     const seeds = getDomainSeeds(host, activeSessionSalt);
-    const canvasDelta = isFirstParty ? ((seeds.canvas % 12) * 2 + 2) : ((seeds.canvas % 12) * 2 + 1);
-    const webglDelta = isFirstParty ? ((seeds.webgl % 12) * 2 + 2) : ((seeds.webgl % 12) * 2 + 1);
-    const audioDelta = isFirstParty ? (((seeds.audio % 50) * 2 + 2) * 1e-7) : (((seeds.audio % 50) * 2 + 1) * 1e-7);
+    const canvasDelta = (seeds.canvas % 12) * 2 + 1;
+    const webglDelta = (seeds.webgl % 12) * 2 + 1;
+    const audioDelta = ((seeds.audio % 50) * 2 + 1) * 1e-7;
 
     const isShieldActive = (feature) => isProtectionActive(feature, targetWin);
 
@@ -552,19 +693,11 @@
         const canvasProto = targetWin.HTMLCanvasElement.prototype;
         let inInternalCanvas = false;
 
-        // Track context creation & ensure preserveDrawingBuffer for WebGL
+        // Track context creation. The page's own context attributes are passed
+        // through untouched so getContextAttributes() matches the request
+        // (forcing preserveDrawingBuffer here was a detectable deviation).
         const origGetContext = canvasProto.getContext;
         const hookedGetContext = createNativeFunction(function getContext(type, ...args) {
-          if (typeof type === 'string') {
-            const t = type.toLowerCase();
-            if (t === 'webgl' || t === 'experimental-webgl' || t === 'webgl2') {
-              let attrs = args[0] || {};
-              if (typeof attrs === 'object') {
-                attrs = Object.assign({}, attrs, { preserveDrawingBuffer: true });
-                args[0] = attrs;
-              }
-            }
-          }
           const ctx = origGetContext.apply(this, [type, ...args]);
           if (ctx && typeof type === 'string') {
             const t = type.toLowerCase();
@@ -588,7 +721,7 @@
 
           const hookedGetImageData = createNativeFunction(function getImageData(sx, sy, sw, sh) {
             const result = origGetImageData.apply(this, arguments);
-            if (isShieldActive('canvasProtection') && isCYT && !inInternalCanvas && result && result.data && result.data.length >= 4) {
+            if (isShieldActive('canvasProtection') && !inInternalCanvas && result && result.data && result.data.length >= 4) {
               const origR = result.data[0];
               result.data[0] = perturbPixel(origR, canvasDelta);
               if (result.data[3] === 0) {
@@ -601,24 +734,40 @@
           return origGetImageData;
         };
 
-        if (targetWin.CanvasRenderingContext2D && targetWin.CanvasRenderingContext2D.prototype) {
-          const ctxProto = targetWin.CanvasRenderingContext2D.prototype;
-          const origPutImageData = ctxProto.putImageData;
-          const origGetImageData = hookContext2DPrototype(ctxProto);
+        // Shared font filter: measureText and the font getter must expose the
+        // exact same sanitized font spec so both stay mutually consistent.
+        // (Section scope so the OffscreenCanvas 2D prototype hooks below can
+        // reuse the identical filtering.)
+        const filterFontValue = (rawFont) => {
+          if (typeof rawFont === 'string' && isChineseOrNonStandardFont(rawFont)) {
+            return sanitizeFontSpec(rawFont);
+          }
+          return rawFont;
+        };
 
-          // measureText hook to mask Chinese fonts & simulate standard Windows fonts
+        // Shared measureText + font getter hooks: mask Chinese fonts &
+        // simulate standard Windows fonts. The getter applies the same
+        // filtering as measureText so reading ctx.font never leaks the masked
+        // font spec. Mock environments may define font as an instance
+        // property (no prototype descriptor), so both hooks guard and skip
+        // independently.
+        const hookMeasureTextAndFont = (ctxProto) => {
           const origMeasureText = ctxProto.measureText;
+          const fontDesc = Object.getOwnPropertyDescriptor(ctxProto, 'font');
+          const origFontGet = fontDesc && fontDesc.get ? fontDesc.get : null;
           if (origMeasureText) {
             const hookedMeasureText = createNativeFunction(function measureText(text) {
               if (isShieldActive('fontProtection')) {
-                const curFont = this.font;
-                if (typeof curFont === 'string') {
-                  if (isChineseOrNonStandardFont(curFont)) {
-                    const sanitized = sanitizeFontSpec(curFont);
-                    this.font = sanitized;
-                    const res = origMeasureText.apply(this, arguments);
+                // Read the raw (unfiltered) font so the swap decision is not
+                // influenced by the sanitized value returned by the getter.
+                const curFont = origFontGet ? origFontGet.call(this) : this.font;
+                const filtered = filterFontValue(curFont);
+                if (filtered !== curFont) {
+                  this.font = filtered;
+                  try {
+                    return origMeasureText.apply(this, arguments);
+                  } finally {
                     this.font = curFont;
-                    return res;
                   }
                 }
               }
@@ -626,10 +775,126 @@
             }, 'measureText', 1, ctxProto);
             ctxProto.measureText = hookedMeasureText;
           }
+          if (origFontGet) {
+            Object.defineProperty(ctxProto, 'font', {
+              get: createNativeGetter(function font() {
+                return filterFontValue(origFontGet.call(this));
+              }, 'font', ctxProto),
+              set: fontDesc.set,
+              configurable: true,
+              enumerable: fontDesc.enumerable
+            });
+          }
+        };
+
+        // Shared export-farbling factory: perturb one pixel of a 2D canvas
+        // right before an export while remembering the true pixel. The
+        // restore map keeps the true pixel of each canvas while async
+        // exports are pending (pending count + restore-first), so
+        // overlapping exports can never stack perturbations onto
+        // already-perturbed pixels. Only context resolution differs per
+        // call site: the visible-canvas hooks have already validated the
+        // context type, while the OffscreenCanvas resolveCtx re-checks it.
+        const makeExportFarbler = ({ resolveCtx, origGetImageData, origPutImageData, delta }) => {
+          const restoreMap = new WeakMap(); // canvas -> { pending, r, g, b, a, tx, ty }
+          const putTruePixel = (ctx, rec) => {
+            try {
+              const rest = origGetImageData.call(ctx, rec.tx, rec.ty, 1, 1);
+              rest.data[0] = rec.r;
+              rest.data[1] = rec.g;
+              rest.data[2] = rec.b;
+              rest.data[3] = rec.a;
+              origPutImageData.call(ctx, rest, rec.tx, rec.ty);
+            } catch (_) {}
+          };
+          const farbleForExport = (canvasLike) => {
+            const ctx = resolveCtx(canvasLike);
+            if (!ctx) return null;
+            let rec = restoreMap.get(canvasLike);
+            if (rec) {
+              // Earlier async export still pending: put the true pixel back
+              // before reading so this export perturbs the true value once.
+              putTruePixel(ctx, rec);
+            }
+            let tx = 0, ty = 0;
+            if (canvasLike.width > 125 && canvasLike.height > 1) {
+              tx = 125;
+              ty = 1;
+            }
+            const imgData = origGetImageData.call(ctx, tx, ty, 1, 1);
+            if (!rec) {
+              rec = { pending: 0, r: 0, g: 0, b: 0, a: 0, tx: tx, ty: ty };
+              restoreMap.set(canvasLike, rec);
+            }
+            rec.pending++;
+            rec.r = imgData.data[0];
+            rec.g = imgData.data[1];
+            rec.b = imgData.data[2];
+            rec.a = imgData.data[3];
+            rec.tx = tx;
+            rec.ty = ty;
+            if (imgData.data[3] > 10) {
+              imgData.data[0] = perturbPixel(rec.r, delta);
+            } else {
+              imgData.data[0] = delta;
+              imgData.data[3] = 255; // Full alpha prevents premultiplied alpha collapse
+            }
+            origPutImageData.call(ctx, imgData, tx, ty);
+            return ctx;
+          };
+          const restoreAfterExport = (canvasLike, ctx) => {
+            const rec = restoreMap.get(canvasLike);
+            if (!rec) return;
+            putTruePixel(ctx, rec);
+            rec.pending--;
+            if (rec.pending <= 0) {
+              restoreMap.delete(canvasLike);
+            }
+          };
+          return { farbleForExport, restoreAfterExport };
+        };
+
+        if (targetWin.CanvasRenderingContext2D && targetWin.CanvasRenderingContext2D.prototype) {
+          const ctxProto = targetWin.CanvasRenderingContext2D.prototype;
+          const origPutImageData = ctxProto.putImageData;
+          const origGetImageData = hookContext2DPrototype(ctxProto);
+
+          hookMeasureTextAndFont(ctxProto);
+
+          // Shared export farbling helpers (used by both toDataURL & toBlob).
+          // The ctxType checks live at the call sites (toDataURL/toBlob have
+          // already validated them before farbling), so resolveCtx only has
+          // to obtain the 2D context.
+          const { farbleForExport: farbleCanvasForExport, restoreAfterExport: restoreCanvasAfterExport } = makeExportFarbler({
+            resolveCtx: (canvas) => origGetContext.call(canvas, '2d'),
+            origGetImageData,
+            origPutImageData,
+            delta: canvasDelta
+          });
+          // WebGL export farbling: render the canvas into a throwaway 2D
+          // canvas and perturb one pixel there (the source canvas is never
+          // modified, so no restore/race handling is needed).
+          const farbleWebGLForExport = (canvas) => {
+            const offscreen = targetWin.document.createElement('canvas');
+            offscreen.width = canvas.width;
+            offscreen.height = canvas.height;
+            const oCtx = origGetContext.call(offscreen, '2d');
+            if (!oCtx) return null;
+            oCtx.drawImage(canvas, 0, 0);
+            const imgData = origGetImageData.call(oCtx, 0, 0, 1, 1);
+            if (imgData.data[3] > 10) {
+              imgData.data[0] = perturbPixel(imgData.data[0], webglDelta);
+            } else {
+              imgData.data[0] = webglDelta;
+              imgData.data[3] = 255;
+            }
+            origPutImageData.call(oCtx, imgData, 0, 0);
+            return offscreen;
+          };
 
           // toDataURL with native PNG encoding preservation (passes PngToy CRC check)
           const hookedToDataURL = createNativeFunction(function toDataURL(type, quality) {
-            if (!isShieldActive('canvasProtection') || !isCYT || inInternalCanvas) {
+            if (!isShieldActive('canvasProtection') || inInternalCanvas) {
               return origToDataURL.apply(this, arguments);
             }
 
@@ -643,36 +908,13 @@
             if (ctxType === '2d' && this.width > 0 && this.height > 0) {
               try {
                 inInternalCanvas = true;
-                const ctx = origGetContext.call(this, '2d');
+                const ctx = farbleCanvasForExport(this);
                 if (ctx) {
-                  let tx = 0, ty = 0;
-                  if (this.width > 125 && this.height > 1) {
-                    tx = 125;
-                    ty = 1;
+                  try {
+                    return origToDataURL.apply(this, arguments);
+                  } finally {
+                    restoreCanvasAfterExport(this, ctx);
                   }
-                  const imgData = origGetImageData.call(ctx, tx, ty, 1, 1);
-                  const origR = imgData.data[0];
-                  const origG = imgData.data[1];
-                  const origB = imgData.data[2];
-                  const origA = imgData.data[3];
-
-                  if (origA > 10) {
-                    imgData.data[0] = perturbPixel(origR, canvasDelta);
-                  } else {
-                    imgData.data[0] = canvasDelta;
-                    imgData.data[3] = 255; // Full alpha prevents premultiplied alpha collapse
-                  }
-                  origPutImageData.call(ctx, imgData, tx, ty);
-
-                  const res = origToDataURL.apply(this, arguments);
-
-                  imgData.data[0] = origR;
-                  imgData.data[1] = origG;
-                  imgData.data[2] = origB;
-                  imgData.data[3] = origA;
-                  origPutImageData.call(ctx, imgData, tx, ty);
-
-                  return res;
                 }
               } catch (_) {
                 // Fallback
@@ -682,26 +924,8 @@
             } else if (ctxType === 'webgl' && this.width > 0 && this.height > 0) {
               try {
                 inInternalCanvas = true;
-                const offscreen = targetWin.document.createElement('canvas');
-                offscreen.width = this.width;
-                offscreen.height = this.height;
-                const oCtx = origGetContext.call(offscreen, '2d');
-                if (oCtx) {
-                  oCtx.drawImage(this, 0, 0);
-                  const imgData = origGetImageData.call(oCtx, 0, 0, 1, 1);
-                  const origR = imgData.data[0];
-                  const origG = imgData.data[1];
-                  const origB = imgData.data[2];
-                  const origA = imgData.data[3];
-
-                  if (origA > 10) {
-                    imgData.data[0] = perturbPixel(origR, webglDelta);
-                  } else {
-                    imgData.data[0] = webglDelta;
-                    imgData.data[3] = 255;
-                  }
-                  origPutImageData.call(oCtx, imgData, 0, 0);
-
+                const offscreen = farbleWebGLForExport(this);
+                if (offscreen) {
                   return origToDataURL.apply(offscreen, arguments);
                 }
               } catch (_) {
@@ -718,7 +942,7 @@
           // toBlob hook
           if (origToBlob) {
             const hookedToBlob = createNativeFunction(function toBlob(callback, type, quality) {
-              if (!isShieldActive('canvasProtection') || !isCYT || inInternalCanvas || typeof callback !== 'function') {
+              if (!isShieldActive('canvasProtection') || inInternalCanvas || typeof callback !== 'function') {
                 return origToBlob.apply(this, arguments);
               }
 
@@ -732,39 +956,24 @@
               if (ctxType === '2d' && this.width > 0 && this.height > 0) {
                 try {
                   inInternalCanvas = true;
-                  const ctx = origGetContext.call(this, '2d');
+                  const ctx = farbleCanvasForExport(this);
                   if (ctx) {
-                    let tx = 0, ty = 0;
-                    if (this.width > 125 && this.height > 1) {
-                      tx = 125;
-                      ty = 1;
-                    }
-                    const imgData = origGetImageData.call(ctx, tx, ty, 1, 1);
-                    const origR = imgData.data[0];
-                    const origG = imgData.data[1];
-                    const origB = imgData.data[2];
-                    const origA = imgData.data[3];
-
-                    if (origA > 10) {
-                      imgData.data[0] = perturbPixel(origR, canvasDelta);
-                    } else {
-                      imgData.data[0] = canvasDelta;
-                      imgData.data[3] = 255;
-                    }
-                    origPutImageData.call(ctx, imgData, tx, ty);
-
+                    const self = this;
                     const wrappedCallback = createNativeFunction(function(blob) {
                       try {
-                        imgData.data[0] = origR;
-                        imgData.data[1] = origG;
-                        imgData.data[2] = origB;
-                        imgData.data[3] = origA;
-                        origPutImageData.call(ctx, imgData, tx, ty);
+                        restoreCanvasAfterExport(self, ctx);
                       } catch (_) {}
                       callback(blob);
                     }, callback.name || 'toBlobCallback', 1);
 
-                    return origToBlob.call(this, wrappedCallback, type, quality);
+                    try {
+                      return origToBlob.call(this, wrappedCallback, type, quality);
+                    } catch (err) {
+                      // Synchronous failure: no callback will fire, so undo
+                      // the pending perturbation right away.
+                      restoreCanvasAfterExport(self, ctx);
+                      throw err;
+                    }
                   }
                 } catch (_) {
                   // Fallback
@@ -774,26 +983,8 @@
               } else if (ctxType === 'webgl' && this.width > 0 && this.height > 0) {
                 try {
                   inInternalCanvas = true;
-                  const offscreen = targetWin.document.createElement('canvas');
-                  offscreen.width = this.width;
-                  offscreen.height = this.height;
-                  const oCtx = origGetContext.call(offscreen, '2d');
-                  if (oCtx) {
-                    oCtx.drawImage(this, 0, 0);
-                    const imgData = origGetImageData.call(oCtx, 0, 0, 1, 1);
-                    const origR = imgData.data[0];
-                    const origG = imgData.data[1];
-                    const origB = imgData.data[2];
-                    const origA = imgData.data[3];
-
-                    if (origA > 10) {
-                      imgData.data[0] = perturbPixel(origR, webglDelta);
-                    } else {
-                      imgData.data[0] = webglDelta;
-                      imgData.data[3] = 255;
-                    }
-                    origPutImageData.call(oCtx, imgData, 0, 0);
-
+                  const offscreen = farbleWebGLForExport(this);
+                  if (offscreen) {
                     return origToBlob.call(offscreen, callback, type, quality);
                   }
                 } catch (_) {
@@ -808,6 +999,114 @@
             canvasProto.toBlob = hookedToBlob;
           }
         }
+
+        // OffscreenCanvas (main thread): same protections as HTMLCanvasElement so
+        // offscreen 2D contexts cannot bypass canvas/font farbling (coverage gap:
+        // convertToBlob/transferToImageBitmap/OffscreenCanvasRenderingContext2D
+        // previously ran completely unhooked). Kept inside the HTMLCanvasElement
+        // block to share inInternalCanvas, hookContext2DPrototype,
+        // hookMeasureTextAndFont, makeExportFarbler and canvasContextTypeMap
+        // bookkeeping.
+        if (targetWin.OffscreenCanvas && targetWin.OffscreenCanvas.prototype) {
+          const ocProto = targetWin.OffscreenCanvas.prototype;
+          const origOCGetContext = ocProto.getContext;
+
+          // Track context types (same bookkeeping as HTMLCanvasElement above):
+          // export hooks then never need to probe with getContext, which would
+          // have side effects (calling getContext('2d') on a webgl offscreen
+          // canvas returns null and would break a later getContext('webgl')).
+          const hookedOCGetContext = createNativeFunction(function getContext(type, ...args) {
+            const ctx = origOCGetContext.apply(this, [type, ...args]);
+            if (ctx && typeof type === 'string') {
+              const t = type.toLowerCase();
+              if (t === '2d') {
+                canvasContextTypeMap.set(this, '2d');
+              } else if (t === 'webgl' || t === 'webgl2' || t === 'experimental-webgl') {
+                canvasContextTypeMap.set(this, 'webgl');
+              }
+            }
+            return ctx;
+          }, 'getContext', 1, ocProto);
+          ocProto.getContext = hookedOCGetContext;
+
+          if (targetWin.OffscreenCanvasRenderingContext2D && targetWin.OffscreenCanvasRenderingContext2D.prototype) {
+            const ocCtxProto = targetWin.OffscreenCanvasRenderingContext2D.prototype;
+            const origOCPutImageData = ocCtxProto.putImageData;
+            const origOCGetImageData = hookContext2DPrototype(ocCtxProto);
+
+            // Export farbling helpers: same true-pixel bookkeeping as the
+            // visible-canvas exports above (overlapping convertToBlob calls
+            // stay safe). Unlike there, the context-type and size checks live
+            // in resolveCtx because the offscreen export hooks pass every
+            // canvas through and let the farbler decide.
+            const { farbleForExport: ocFarbleForExport, restoreAfterExport: ocRestoreAfterExport } = makeExportFarbler({
+              resolveCtx: (oc) => {
+                if (canvasContextTypeMap.get(oc) !== '2d' || oc.width <= 0 || oc.height <= 0) return null;
+                return origOCGetContext.call(oc, '2d');
+              },
+              origGetImageData: origOCGetImageData,
+              origPutImageData: origOCPutImageData,
+              delta: canvasDelta
+            });
+
+            // measureText + font getter: identical filtering to the visible
+            // CanvasRenderingContext2D hooks above.
+            hookMeasureTextAndFont(ocCtxProto);
+
+            // convertToBlob: async export -> farble, restore when settled.
+            const origConvertToBlob = ocProto.convertToBlob;
+            if (origConvertToBlob) {
+              const hookedConvertToBlob = createNativeFunction(function convertToBlob(options) {
+                if (!isShieldActive('canvasProtection') || inInternalCanvas) {
+                  return origConvertToBlob.apply(this, arguments);
+                }
+                const oc = this;
+                const ctx = ocFarbleForExport(oc);
+                if (!ctx) {
+                  return origConvertToBlob.apply(this, arguments);
+                }
+                let p;
+                try {
+                  p = origConvertToBlob.apply(this, arguments);
+                } catch (err) {
+                  ocRestoreAfterExport(oc, ctx);
+                  throw err;
+                }
+                if (p && typeof p.then === 'function') {
+                  return p.then(
+                    function(blob) {
+                      ocRestoreAfterExport(oc, ctx);
+                      return blob;
+                    },
+                    function(err) {
+                      ocRestoreAfterExport(oc, ctx);
+                      throw err;
+                    }
+                  );
+                }
+                ocRestoreAfterExport(oc, ctx);
+                return p;
+              }, 'convertToBlob', 0, ocProto);
+              ocProto.convertToBlob = hookedConvertToBlob;
+            }
+
+            // transferToImageBitmap: sync export. No restore afterwards: the
+            // native transfer resets the source canvas to a blank state, so the
+            // restored-true-pixel writeback must NOT happen here (it would leave
+            // the canvas non-blank, a detectable deviation from native).
+            const origTransferToImageBitmap = ocProto.transferToImageBitmap;
+            if (origTransferToImageBitmap) {
+              const hookedTransferToImageBitmap = createNativeFunction(function transferToImageBitmap() {
+                if (!isShieldActive('canvasProtection') || inInternalCanvas) {
+                  return origTransferToImageBitmap.apply(this, arguments);
+                }
+                ocFarbleForExport(this);
+                return origTransferToImageBitmap.apply(this, arguments);
+              }, 'transferToImageBitmap', 0, ocProto);
+              ocProto.transferToImageBitmap = hookedTransferToImageBitmap;
+            }
+          }
+        }
       }
     } catch (_) {}
 
@@ -816,16 +1115,18 @@
       const UNMASKED_VENDOR_WEBGL = 37445;
       const UNMASKED_RENDERER_WEBGL = 37446;
 
+      // Uniform Linux Chrome (Intel UHD / Mesa) GPU persona — applied unconditionally
+      // while hardwareProtection is active so real-GPU tracking vectors are not passed through.
       function getSpoofedInfo(win) {
         return {
-          vendor: 'Google Inc. (NVIDIA)',
-          renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060/PCIe/SSE2, OpenGL 4.5.0 NVIDIA 535.183.01)'
+          vendor: 'Google Inc. (Intel)',
+          renderer: 'Mesa Intel(R) UHD Graphics (CML GT2)'
         };
       }
 
       const spoofed = getSpoofedInfo(targetWin);
 
-      function hookWebGLProto(proto) {
+      function hookWebGLProto(proto, isWebGL2) {
         if (!proto) return;
 
         // getParameter
@@ -835,13 +1136,9 @@
             return origGetParam.apply(this, arguments);
           }
           if (param === UNMASKED_VENDOR_WEBGL) {
-            const raw = origGetParam.call(this, param);
-            if (raw && !raw.includes('SwiftShader') && !raw.includes('llvmpipe') && !raw.includes('Mesa')) return raw;
             return spoofed.vendor;
           }
           if (param === UNMASKED_RENDERER_WEBGL) {
-            const raw = origGetParam.call(this, param);
-            if (raw && !raw.includes('SwiftShader') && !raw.includes('llvmpipe') && !raw.includes('Mesa')) return raw;
             return spoofed.renderer;
           }
           if (param === 0x1F00 /* VENDOR */) {
@@ -850,12 +1147,25 @@
           if (param === 0x1F01 /* RENDERER */) {
             return 'WebKit WebGL';
           }
-          if (param === 0x8B8C /* SHADING_LANGUAGE_VERSION */) {
-            return 'WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)';
+          if (param === 0x1F02 /* VERSION */) {
+            return isWebGL2 ? 'WebGL 2.0 (OpenGL ES 3.0 Chromium)' : 'WebGL 1.0 (OpenGL ES 2.0 Chromium)';
           }
-          // Farble MAX_COMBINED_TEXTURE_IMAGE_UNITS (0x8B4D = 35661) for CYT getWebglFp()
-          if (isCYT && (param === 0x8B4D || param === 35661)) {
-            return isFirstParty ? 32 : 16;
+          if (param === 0x8B8C /* SHADING_LANGUAGE_VERSION */) {
+            return isWebGL2
+              ? 'WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.00 Chromium)'
+              : 'WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)';
+          }
+          // MAX_TEXTURE_SIZE (0x0D33 = 3379): Intel UHD (CML GT2) on Mesa
+          // reports 16384, while the host GPU may expose 32768 — passing the
+          // real value through would contradict the spoofed renderer persona.
+          if (param === 0x0D33) {
+            return 16384;
+          }
+          // Farble MAX_COMBINED_TEXTURE_IMAGE_UNITS (0x8B4D = 35661) on every
+          // domain: normalize to the crowd-common Chromium value instead of
+          // passing through the raw driver value.
+          if (param === 0x8B4D || param === 35661) {
+            return 16;
           }
           return origGetParam.apply(this, arguments);
         }, 'getParameter', 1, proto);
@@ -898,7 +1208,7 @@
         const origReadPixels = proto.readPixels;
         const hookedReadPixels = createNativeFunction(function readPixels(x, y, width, height, format, type, pixels) {
           origReadPixels.apply(this, arguments);
-          if (isShieldActive('hardwareProtection') && isCYT && pixels && pixels.length > 0) {
+          if (isShieldActive('hardwareProtection') && pixels && pixels.length > 0) {
             const idx = seeds.webgl % Math.min(pixels.length, 4);
             pixels[idx] = perturbPixel(pixels[idx], webglDelta);
           }
@@ -907,33 +1217,23 @@
       }
 
       if (targetWin.WebGLRenderingContext) {
-        hookWebGLProto(targetWin.WebGLRenderingContext.prototype);
+        hookWebGLProto(targetWin.WebGLRenderingContext.prototype, false);
       }
       if (targetWin.WebGL2RenderingContext) {
-        hookWebGLProto(targetWin.WebGL2RenderingContext.prototype);
+        hookWebGLProto(targetWin.WebGL2RenderingContext.prototype, true);
       }
 
-      // WebGL capability firewall normalization for CreepJS
-      if (targetWin.Array && targetWin.Array.prototype && targetWin.Array.prototype.includes) {
-        const origIncludes = targetWin.Array.prototype.includes;
-        const hookedIncludes = createNativeFunction(function includes(val, fromIndex) {
-          if (isShieldActive('hardwareProtection') && this && ((this.length === 287 && this[0] === '00b72507') || (this.length === 237 && this[0] === -1056897629))) {
-            return true;
-          }
-          return origIncludes.apply(this, arguments);
-        }, 'includes', 1, targetWin.Array.prototype);
-        targetWin.Array.prototype.includes = hookedIncludes;
-      }
-
-      // WebGPU Adapter Normalization to align with Linux Vulkan
+      // WebGPU Adapter Normalization to align with the Linux Intel (Mesa) persona
       function hookWebGPU(gpuObj) {
         if (!gpuObj || !gpuObj.requestAdapter) return;
         const origReqAdapter = gpuObj.requestAdapter;
+        // Real Linux Chrome WebGPU values for an Intel iGPU: short vendor token,
+        // Chrome's own architecture spelling (lowercase, hyphenated), empty device/description.
         const spoofedGpuInfo = {
-          vendor: 'nvidia',
-          architecture: 'vulkan',
-          device: 'NVIDIA GeForce RTX 3060',
-          description: 'NVIDIA GeForce RTX 3060'
+          vendor: 'intel',
+          architecture: 'gen-12lp',
+          device: '',
+          description: ''
         };
         gpuObj.requestAdapter = createNativeFunction(function requestAdapter(...args) {
           if (!isShieldActive('hardwareProtection')) {
@@ -942,17 +1242,31 @@
           return origReqAdapter.apply(this, args).then(adapter => {
             if (!adapter) return adapter;
             try {
+              const baseInfo = adapter.info ? adapter.info : {};
+              const infoProto = (targetWin.GPUAdapterInfo && targetWin.GPUAdapterInfo.prototype) || Object.prototype;
+              // Stable info record (same reference on every read) shaped like GPUAdapterInfo
+              const spoofedAdapterInfo = Object.assign(Object.create(infoProto), baseInfo, spoofedGpuInfo);
               if (adapter.info) {
+                // Native `info` is a non-enumerable prototype accessor; expose ours as a
+                // non-enumerable getter on the adapter instead of an own enumerable value.
+                const adapterCtor = (Object.getPrototypeOf(adapter) || {}).constructor;
                 Object.defineProperty(adapter, 'info', {
-                  value: Object.assign({}, adapter.info, spoofedGpuInfo),
+                  get: createNativeGetter(function info() {
+                    return spoofedAdapterInfo;
+                  }, 'info', typeof adapterCtor === 'function' ? adapterCtor : undefined),
                   configurable: true,
-                  enumerable: true
+                  enumerable: false
                 });
               }
               if (typeof adapter.requestAdapterInfo === 'function') {
-                adapter.requestAdapterInfo = createNativeFunction(function requestAdapterInfo() {
-                  return Promise.resolve(spoofedGpuInfo);
-                }, 'requestAdapterInfo', 0);
+                Object.defineProperty(adapter, 'requestAdapterInfo', {
+                  value: createNativeFunction(function requestAdapterInfo() {
+                    return Promise.resolve(spoofedAdapterInfo);
+                  }, 'requestAdapterInfo', 0),
+                  writable: true,
+                  configurable: true,
+                  enumerable: false
+                });
               }
             } catch (_) {}
             return adapter;
@@ -968,77 +1282,52 @@
       }
     } catch (_) {}
 
-    // 4. AudioBuffer Farbling (EFF Cover Your Tracks Protection & Blink Calibration)
+    // 4. AudioBuffer Farbling (all-domain, per-session randomization)
     try {
       if (targetWin.AudioBuffer && targetWin.AudioBuffer.prototype) {
         const audioProto = targetWin.AudioBuffer.prototype;
-        const audioCalibratedSet = new WeakSet();
 
-        function calibrateAudioBuffer(data) {
-          if (!data || data.length < 5000) return;
-          const target = 124.04347527516074;
-          let sum = 0;
-          for (let i = 4500; i < 5000; i++) sum += Math.abs(data[i]);
-          let diff = sum - target;
-          if (Math.abs(diff) < 1e-12) return;
-
-          // Step 1: coarse adjustment on data[4999]
-          const lastVal = data[4999];
-          data[4999] = lastVal > 0 ? lastVal - diff : lastVal + diff;
-
-          // Recalculate sum
-          sum = 0;
-          for (let i = 4500; i < 5000; i++) sum += Math.abs(data[i]);
-          diff = sum - target;
-          if (diff === 0) return;
-
-          // Step 2: fine adjustment on elements 4650..4990
-          let bestIdx = -1;
-          let bestVal = 0;
-          let bestDiff = Math.abs(diff);
-
-          for (let i = 4650; i < 4990; i++) {
-            const orig = data[i];
-            const cand = orig > 0 ? orig - diff : orig + diff;
-            data[i] = cand;
-            const testSum = sum - Math.abs(orig) + Math.abs(data[i]);
-            const testDiff = Math.abs(testSum - target);
-            if (testDiff < bestDiff) {
-              bestDiff = testDiff;
-              bestIdx = i;
-              bestVal = data[i];
-              if (testDiff === 0) break;
-            }
-            data[i] = orig;
-          }
-          if (bestIdx !== -1) {
-            data[bestIdx] = bestVal;
-          }
-        }
+        // NOTE: the old browserleaks-specific calibration (pinning the
+        // 4500..5000 absolute sum of 4000..6000-length buffers to the
+        // hardcoded Blink constant 124.0434...) was deliberately removed:
+        // OfflineAudioContext render values are determined by the browser
+        // (Blink) version, not by the underlying hardware, so normal sites
+        // already observe crowd-common values; a hardcoded constant would
+        // drift with Chrome releases and itself become a stable fingerprint.
+        // Coverage is handled by the dynamic per-domain farbling below, which
+        // now applies on every domain.
 
         const origGetChannelData = audioProto.getChannelData;
+
+        // One-time deterministic mutation of a channel's underlying data.
+        // Shared by getChannelData and copyFromChannel so both entry points
+        // observe identical values no matter which is called first or how
+        // often (idempotent per (buffer, channel) via audioFarbledMap).
+        // Applies on every domain (see the calibration-removal note above).
+        const applyAudioFarbling = (buffer, channel, data) => {
+          if (!data || data.length <= 0) return;
+          // Per-load-salt farbling on every domain: stable for one site
+          // during a page load, different across sites and visits, so audio
+          // fingerprints cannot be linked across sites or sessions.
+          let farbledChannels = audioFarbledMap.get(buffer);
+          if (!farbledChannels) {
+            farbledChannels = new Set();
+            audioFarbledMap.set(buffer, farbledChannels);
+          }
+          if (!farbledChannels.has(channel)) {
+            farbledChannels.add(channel);
+            const delta = audioDelta;
+            const step = Math.max(1, Math.floor(data.length / 100));
+            for (let i = 0; i < data.length; i += step) {
+              data[i] += delta;
+            }
+          }
+        };
+
         const hookedGetChannelData = createNativeFunction(function getChannelData(channel) {
           const data = origGetChannelData.apply(this, arguments);
-          if (!isShieldActive('audioProtection')) {
-            return data;
-          }
-          if (isCYT && data && data.length > 0) {
-            let farbledChannels = audioFarbledMap.get(this);
-            if (!farbledChannels) {
-              farbledChannels = new Set();
-              audioFarbledMap.set(this, farbledChannels);
-            }
-            if (!farbledChannels.has(channel)) {
-              farbledChannels.add(channel);
-              const delta = audioDelta;
-              const step = Math.max(1, Math.floor(data.length / 100));
-              for (let i = 0; i < data.length; i += step) {
-                data[i] += delta;
-              }
-            }
-          } else if (!isCYT && data && data.length === 5000 && !audioCalibratedSet.has(this)) {
-            calibrateAudioBuffer(data);
-            audioCalibratedSet.add(this);
+          if (isShieldActive('audioProtection')) {
+            applyAudioFarbling(this, channel, data);
           }
           return data;
         }, 'getChannelData', 1, audioProto);
@@ -1047,24 +1336,17 @@
         const origCopyFromChannel = audioProto.copyFromChannel;
         if (origCopyFromChannel) {
           const hookedCopyFromChannel = createNativeFunction(function copyFromChannel(destination, channelNumber, bufferOffset) {
-            origCopyFromChannel.apply(this, arguments);
-            if (!isShieldActive('audioProtection')) {
-              return;
+            if (isShieldActive('audioProtection')) {
+              // Mutate the underlying channel data once (exactly like the
+              // getChannelData path above), then pass through the native
+              // copy so both entry points stay mutually consistent and
+              // repeated reads never accumulate deltas.
+              try {
+                const data = origGetChannelData.call(this, channelNumber);
+                applyAudioFarbling(this, channelNumber, data);
+              } catch (_) {}
             }
-            if (isCYT) {
-              const farbledChannels = audioFarbledMap.get(this);
-              if (!farbledChannels || !farbledChannels.has(channelNumber)) {
-                if (destination && destination.length > 0) {
-                  const delta = audioDelta;
-                  const step = Math.max(1, Math.floor(destination.length / 100));
-                  for (let i = 0; i < destination.length; i += step) {
-                    destination[i] += delta;
-                  }
-                }
-              }
-            } else if (!isCYT && destination && destination.length === 5000) {
-              calibrateAudioBuffer(destination);
-            }
+            return origCopyFromChannel.apply(this, arguments);
           }, 'copyFromChannel', 2, audioProto);
           audioProto.copyFromChannel = hookedCopyFromChannel;
         }
@@ -1075,33 +1357,114 @@
     try {
       if (targetWin.RTCPeerConnection && targetWin.RTCPeerConnection.prototype) {
         const rtcProto = targetWin.RTCPeerConnection.prototype;
-        const privateIPRegex = /(?:10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}/g;
-        const privateIPv6Regex = /(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}|fe80::[0-9a-fA-F:]*/g;
+        // Exact IP parsing helpers (no substring/regex heuristics on raw SDP text,
+        // which previously corrupted DTLS fingerprints and mDNS candidates).
+        function parseIPv4Groups(addr) {
+          if (typeof addr !== 'string') return null;
+          const parts = addr.split('.');
+          if (parts.length !== 4) return null;
+          const groups = [];
+          for (let i = 0; i < 4; i++) {
+            if (!/^\d{1,3}$/.test(parts[i])) return null;
+            if (parts[i].length > 1 && parts[i][0] === '0') return null;
+            const n = parseInt(parts[i], 10);
+            if (n > 255) return null;
+            groups.push(n);
+          }
+          return groups;
+        }
 
-        function sanitizeSDP(sdp) {
-          if (typeof sdp !== 'string') return sdp;
-          return sdp
-            .split('\r\n')
-            .filter(line => {
-              if (line.startsWith('a=candidate:') && line.includes(' typ host ')) {
-                return false;
+        function parseIPv6Groups(addr) {
+          if (typeof addr !== 'string') return null;
+          let s = addr;
+          const zoneIdx = s.indexOf('%');
+          if (zoneIdx !== -1) s = s.slice(0, zoneIdx);
+          if (!s.includes(':')) return null;
+          const dblParts = s.split('::');
+          if (dblParts.length > 3) return null;
+          const hasEllipsis = dblParts.length === 2;
+          const head = hasEllipsis ? dblParts[0] : s;
+          const tail = hasEllipsis ? dblParts[1] : null;
+          const parseGroups = (part) => {
+            if (part === '') return [];
+            const segs = part.split(':');
+            const out = [];
+            for (let i = 0; i < segs.length; i++) {
+              const seg = segs[i];
+              if (i === segs.length - 1 && seg.includes('.')) {
+                const v4 = parseIPv4Groups(seg);
+                if (!v4) return null;
+                out.push((v4[0] << 8) | v4[1], (v4[2] << 8) | v4[3]);
+              } else {
+                if (!/^[0-9a-fA-F]{1,4}$/.test(seg)) return null;
+                out.push(parseInt(seg, 16));
               }
-              return true;
-            })
-            .map(line => {
-              return line
-                .replace(privateIPRegex, '0.0.0.0')
-                .replace(privateIPv6Regex, '::');
-            })
-            .join('\r\n');
+            }
+            return out;
+          };
+          const headGroups = parseGroups(head);
+          if (headGroups === null) return null;
+          let tailGroups = [];
+          if (tail !== null) {
+            tailGroups = parseGroups(tail);
+            if (tailGroups === null) return null;
+          }
+          if (hasEllipsis) {
+            const fill = 8 - headGroups.length - tailGroups.length;
+            if (fill < 1) return null;
+            return headGroups.concat(new Array(fill).fill(0), tailGroups);
+          }
+          return headGroups.length === 8 ? headGroups : null;
+        }
+
+        function isPrivateIPv4Groups(g) {
+          return g[0] === 10 || (g[0] === 172 && g[1] >= 16 && g[1] <= 31) || (g[0] === 192 && g[1] === 168);
+        }
+
+        function isPrivateIPAddress(addr) {
+          if (typeof addr !== 'string') return false;
+          if (addr.includes(':')) {
+            const g = parseIPv6Groups(addr);
+            if (!g) return false;
+            if ((g[0] & 0xfe00) === 0xfc00) return true; // fc00::/7 unique local
+            if ((g[0] & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
+            // IPv4-mapped private addresses (::ffff:10.0.0.1 etc.)
+            if (g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0xffff) {
+              return isPrivateIPv4Groups([(g[6] >> 8) & 0xff, g[6] & 0xff, (g[7] >> 8) & 0xff, g[7] & 0xff]);
+            }
+            return false;
+          }
+          const v4 = parseIPv4Groups(addr);
+          return !!v4 && isPrivateIPv4Groups(v4);
         }
 
         function isPrivateCandidate(candStr) {
           if (typeof candStr !== 'string') return false;
-          if (candStr.includes(' typ host ')) {
-            return true;
+          let s = candStr;
+          if (s.startsWith('a=')) s = s.slice(2); // tolerate both SDP lines and event.candidate.candidate
+          if (!s.startsWith('candidate:')) return false;
+          const fields = s.split(' ');
+          return fields.length > 4 && isPrivateIPAddress(fields[4]);
+        }
+
+        function sanitizeCandidateLine(line) {
+          if (typeof line !== 'string' || !line.startsWith('a=candidate:')) return line;
+          const fields = line.split(' ');
+          // candidate: <foundation> <component> <transport> <priority> <address> <port> <typ> ...
+          if (fields.length > 4 && isPrivateIPAddress(fields[4])) {
+            fields[4] = fields[4].includes(':') ? '::' : '0.0.0.0';
+            return fields.join(' ');
           }
-          return privateIPRegex.test(candStr) || privateIPv6Regex.test(candStr);
+          // mDNS (.local) and public candidates are left untouched; host
+          // candidates are no longer dropped (browser-level IP handling policy
+          // already prevents local IP leakage).
+          return line;
+        }
+
+        function sanitizeSDP(sdp) {
+          if (typeof sdp !== 'string') return sdp;
+          const sep = sdp.includes('\r\n') ? '\r\n' : '\n';
+          return sdp.split(sep).map(sanitizeCandidateLine).join(sep);
         }
 
         const rawOfferMap = new WeakMap();
@@ -1160,20 +1523,42 @@
         // setLocalDescription hook
         const origSetLocalDesc = rtcProto.setLocalDescription;
         if (origSetLocalDesc) {
+          // Errors are passed through; we only retry once with the original
+          // (pre-sanitized) description when the failure looks like it was
+          // caused by our SDP rewriting, and re-reject with the original error.
+          const isSanitizeRelatedError = (err) => {
+            if (!err || typeof err !== 'object') return false;
+            const name = err.name || '';
+            if (name !== 'InvalidAccessError' && name !== 'OperationError') return false;
+            return /description|sdp/i.test(String(err.message || ''));
+          };
           const hookedSetLocalDesc = createNativeFunction(function setLocalDescription(...args) {
             if (!isShieldActive('webrtcProtection')) {
               return origSetLocalDesc.apply(this, args);
             }
-            const actualArg = args.length > 0 ? ((args[0] && rawOfferMap.get(args[0])) || args[0]) : undefined;
+            const rawDesc = (args.length > 0 && args[0] && rawOfferMap.get(args[0])) || undefined;
+            const actualArg = args.length > 0 ? (rawDesc || args[0]) : undefined;
             const callArgs = args.length > 0 ? [actualArg] : [];
             try {
               const p = origSetLocalDesc.apply(this, callArgs);
-              if (p && typeof p.catch === 'function') {
-                return p.catch(() => Promise.resolve());
+              if (p && typeof p.then === 'function' && typeof p.catch === 'function') {
+                return p.catch(err => {
+                  if (rawDesc && isSanitizeRelatedError(err)) {
+                    return origSetLocalDesc.apply(this, [rawDesc]).catch(() => { throw err; });
+                  }
+                  throw err;
+                });
               }
               return p;
-            } catch (_) {
-              return Promise.resolve();
+            } catch (err) {
+              if (rawDesc && isSanitizeRelatedError(err)) {
+                try {
+                  return origSetLocalDesc.apply(this, [rawDesc]);
+                } catch (_) {
+                  throw err;
+                }
+              }
+              throw err;
             }
           }, 'setLocalDescription', 0);
           rtcProto.setLocalDescription = hookedSetLocalDesc;
@@ -1293,29 +1678,99 @@
           : null;
       if (mdTarget) {
         const mdProto = targetWin.MediaDevices && targetWin.MediaDevices.prototype ? targetWin.MediaDevices.prototype : null;
+        // Native MediaDeviceInfo exposes deviceId/groupId/label/kind as prototype
+        // accessors (no own members). Preferred fix: keep the real instances and mask
+        // the values through hooked prototype getters, so the returned objects keep the
+        // exact native shape. Fallback: native-shaped fakes (prototype getters, no own
+        // enumerable members) only when the prototype accessors are not available.
+        let infoGettersHooked = false;
+        let infoStore = null;
+        let fakeInfoProto = null;
+        if (targetWin.MediaDeviceInfo && targetWin.MediaDeviceInfo.prototype) {
+          const infoProto = targetWin.MediaDeviceInfo.prototype;
+          const maskedFields = ['deviceId', 'groupId', 'label'];
+          const origGetters = {};
+          let allAvailable = true;
+          maskedFields.forEach(prop => {
+            const desc = Object.getOwnPropertyDescriptor(infoProto, prop);
+            if (desc && desc.get) origGetters[prop] = desc.get;
+            else allAvailable = false;
+          });
+          const kindDesc = Object.getOwnPropertyDescriptor(infoProto, 'kind');
+          if (allAvailable && kindDesc && kindDesc.get) {
+            infoGettersHooked = true;
+            const origKindGet = kindDesc.get;
+            maskedFields.forEach(prop => {
+              const origGet = origGetters[prop];
+              Object.defineProperty(infoProto, prop, {
+                get: createNativeGetter(function() {
+                  if (!isShieldActive('webrtcProtection')) return origGet.call(this);
+                  return '';
+                }, prop, infoProto),
+                set: undefined,
+                enumerable: true,
+                configurable: true
+              });
+            });
+            // Native toJSON serializes internal slots directly (not via JS getters),
+            // so re-point it at the masked values to keep JSON.stringify from leaking.
+            const origToJson = infoProto.toJSON;
+            if (typeof origToJson === 'function') {
+              Object.defineProperty(infoProto, 'toJSON', {
+                value: createNativeFunction(function toJSON() {
+                  if (!isShieldActive('webrtcProtection')) return origToJson.apply(this, arguments);
+                  return {
+                    deviceId: '',
+                    groupId: '',
+                    kind: origKindGet.call(this),
+                    label: ''
+                  };
+                }, 'toJSON', 0),
+                writable: true,
+                configurable: true,
+                enumerable: true
+              });
+            }
+          }
+        }
         const origEnumerate = mdTarget.enumerateDevices;
         const hookedEnumerate = createNativeFunction(function enumerateDevices() {
           if (!isShieldActive('webrtcProtection')) {
             return origEnumerate.apply(this, arguments);
           }
           return origEnumerate.apply(this, arguments).then(devices => {
-            if (!Array.isArray(devices)) return devices;
-            const proto = (targetWin.MediaDeviceInfo && targetWin.MediaDeviceInfo.prototype)
-              ? targetWin.MediaDeviceInfo.prototype
-              : Object.prototype;
-            return devices.map(d => {
-              return Object.create(proto, {
-                deviceId: { value: '', enumerable: true },
-                groupId: { value: '', enumerable: true },
-                kind: { value: d.kind, enumerable: true },
-                label: { value: '', enumerable: true },
-                toJSON: {
-                  value: createNativeFunction(function toJSON() {
-                    return { deviceId: '', groupId: '', kind: d.kind, label: '' };
-                  }, 'toJSON', 0),
-                  enumerable: true
-                }
+            // With prototype getters hooked the native instances are returned untouched.
+            if (!Array.isArray(devices) || infoGettersHooked) return devices;
+            if (!fakeInfoProto) {
+              const proto = (targetWin.MediaDeviceInfo && targetWin.MediaDeviceInfo.prototype)
+                ? targetWin.MediaDeviceInfo.prototype
+                : Object.prototype;
+              infoStore = new WeakMap();
+              fakeInfoProto = Object.create(proto);
+              ['deviceId', 'groupId', 'label', 'kind'].forEach(prop => {
+                Object.defineProperty(fakeInfoProto, prop, {
+                  get: createNativeGetter(function() {
+                    const s = infoStore.get(this);
+                    return s ? s[prop] : '';
+                  }, prop, proto),
+                  enumerable: true,
+                  configurable: true
+                });
               });
+              Object.defineProperty(fakeInfoProto, 'toJSON', {
+                value: createNativeFunction(function toJSON() {
+                  const s = infoStore.get(this) || {};
+                  return { deviceId: s.deviceId || '', groupId: s.groupId || '', kind: s.kind, label: s.label || '' };
+                }, 'toJSON', 0),
+                writable: true,
+                configurable: true,
+                enumerable: true
+              });
+            }
+            return devices.map(d => {
+              const obj = Object.create(fakeInfoProto);
+              infoStore.set(obj, { deviceId: '', groupId: '', kind: (d && d.kind) || '', label: '' });
+              return obj;
             });
           });
         }, 'enumerateDevices', 0, mdProto);
@@ -1336,8 +1791,69 @@
         if (ffDesc && ffDesc.get) origCSSFontFamilyGet = ffDesc.get;
       }
 
+      // Fast inline-declaration precheck for layout-read font masking (M1).
+      // Font probing pages must first write an inline font declaration on the
+      // element they measure, so when no inline declaration (style property
+      // or SVG presentation attribute) matches a hidden-font signature the
+      // layout read passes straight through to the native call: no
+      // getComputedStyle, no style rewrite, no extra forced reflow and no
+      // visibility to MutationObserver. Verdicts are memoized per element,
+      // keyed by the inline strings plus the font config state (the bridge
+      // replaces the custom font arrays wholesale, so array identity plus the
+      // scalar fields detect every config update).
+      const inlineFontMaskCache = new WeakMap();
+      function needsFontMasking(elem) {
+        if (!elem || elem.nodeType !== 1) return false;
+        let inlineFF = '';
+        let inlineFont = '';
+        try {
+          const st = elem.style;
+          if (st) {
+            if (typeof st.fontFamily === 'string') inlineFF = st.fontFamily;
+            if (typeof st.font === 'string') inlineFont = st.font;
+          }
+        } catch (_) {}
+        if (!inlineFF && !inlineFont) {
+          // Presentation attributes (SVG font-family / font) only matter when
+          // no inline style property overrides them.
+          try {
+            if (typeof elem.getAttribute === 'function') {
+              inlineFF = elem.getAttribute('font-family') || '';
+              if (!inlineFF) inlineFont = elem.getAttribute('font') || '';
+            }
+          } catch (_) {}
+        }
+        if (!inlineFF && !inlineFont) return false;
+        const cached = inlineFontMaskCache.get(elem);
+        if (cached &&
+            cached.ff === inlineFF &&
+            cached.font === inlineFont &&
+            cached.hiddenList === fontConfig.customHiddenFonts &&
+            cached.allowList === fontConfig.customAllowedFonts &&
+            cached.mode === fontConfig.fontMode &&
+            cached.blockBuiltin === fontConfig.blockBuiltinChineseFonts &&
+            cached.blockOther === fontConfig.blockOtherScripts) {
+          return cached.needs;
+        }
+        let needs = false;
+        if (inlineFF && isChineseOrNonStandardFont(inlineFF)) needs = true;
+        if (!needs && inlineFont && isChineseOrNonStandardFont(inlineFont)) needs = true;
+        inlineFontMaskCache.set(elem, {
+          ff: inlineFF,
+          font: inlineFont,
+          hiddenList: fontConfig.customHiddenFonts,
+          allowList: fontConfig.customAllowedFonts,
+          mode: fontConfig.fontMode,
+          blockBuiltin: fontConfig.blockBuiltinChineseFonts,
+          blockOther: fontConfig.blockOtherScripts,
+          needs: needs
+        });
+        return needs;
+      }
+
       function withMaskedElementFont(elem, fn) {
         if (!isShieldActive('fontProtection')) return fn();
+        if (!needsFontMasking(elem)) return fn();
         let fontModified = false;
         let origFF = '';
         let origFont = '';
@@ -1411,42 +1927,30 @@
       }
 
       if (targetWin.HTMLElement && targetWin.HTMLElement.prototype) {
-        const origOffsetWidth = Object.getOwnPropertyDescriptor(targetWin.HTMLElement.prototype, 'offsetWidth');
-        if (origOffsetWidth && origOffsetWidth.get) {
-          const origGet = origOffsetWidth.get;
-          const hookedGet = createNativeGetter(function offsetWidth() {
+        // offsetWidth/offsetHeight getters share one masking strategy: bypass
+        // when font protection is off, otherwise measure under the masked
+        // font and round to a whole pixel. Only the property name differs.
+        const hookLayoutDimension = (prop) => {
+          const desc = Object.getOwnPropertyDescriptor(targetWin.HTMLElement.prototype, prop);
+          if (!(desc && desc.get)) return;
+          const origGet = desc.get;
+          const hookedGet = createNativeGetter(function layoutGetter() {
             if (!isShieldActive('fontProtection')) {
               return origGet.call(this);
             }
             return withMaskedElementFont(this, () => {
               return Math.round(origGet.call(this));
             });
-          }, 'offsetWidth', targetWin.HTMLElement.prototype);
-          Object.defineProperty(targetWin.HTMLElement.prototype, 'offsetWidth', {
+          }, prop, targetWin.HTMLElement.prototype);
+          Object.defineProperty(targetWin.HTMLElement.prototype, prop, {
             get: hookedGet,
-            set: origOffsetWidth.set,
+            set: desc.set,
             enumerable: true,
             configurable: true
           });
-        }
-        const origOffsetHeight = Object.getOwnPropertyDescriptor(targetWin.HTMLElement.prototype, 'offsetHeight');
-        if (origOffsetHeight && origOffsetHeight.get) {
-          const origGet = origOffsetHeight.get;
-          const hookedGet = createNativeGetter(function offsetHeight() {
-            if (!isShieldActive('fontProtection')) {
-              return origGet.call(this);
-            }
-            return withMaskedElementFont(this, () => {
-              return Math.round(origGet.call(this));
-            });
-          }, 'offsetHeight', targetWin.HTMLElement.prototype);
-          Object.defineProperty(targetWin.HTMLElement.prototype, 'offsetHeight', {
-            get: hookedGet,
-            set: origOffsetHeight.set,
-            enumerable: true,
-            configurable: true
-          });
-        }
+        };
+        hookLayoutDimension('offsetWidth');
+        hookLayoutDimension('offsetHeight');
       }
 
       // Range Prototype Font Masking (TraceScope domRange detection)
@@ -1455,7 +1959,10 @@
         const origRangeGetBoundingClientRect = rangeProto.getBoundingClientRect;
         const origRangeGetClientRects = rangeProto.getClientRects;
 
-        function getElementsFromRange(range) {
+        // Cheap phase of range element collection: only container lookups,
+        // no querySelectorAll. Used by the precheck below to decide whether
+        // the expensive subtree scan and masking chain are needed at all.
+        function getRangeBaseElements(range) {
           const elems = [];
           if (!range) return elems;
           try {
@@ -1483,19 +1990,38 @@
                 endNode = endNode.parentElement;
               }
             }
-            if (elems.length > 0 && elems[0].querySelectorAll) {
-              const sub = elems[0].querySelectorAll('*');
-              for (let i = 0; i < sub.length && i < 10; i++) {
-                if (!elems.includes(sub[i])) elems.push(sub[i]);
-              }
-            }
           } catch (_) {}
           return elems;
         }
 
         function withMaskedRangeFont(range, fn) {
           if (!range || !isShieldActive('fontProtection')) return fn();
-          const elems = getElementsFromRange(range);
+          // Fast precheck (M1): scan only the cheap base elements (and their
+          // direct parents, which cover a font declared on the wrapper of the
+          // range container). Clean ranges skip the subtree querySelectorAll
+          // and the whole masking chain - zero extra cost for normal reads.
+          const base = getRangeBaseElements(range);
+          let needs = false;
+          for (let i = 0; i < base.length && !needs; i++) {
+            needs = needsFontMasking(base[i]);
+            if (!needs && base[i].parentElement) {
+              needs = needsFontMasking(base[i].parentElement);
+            }
+          }
+          if (!needs) return fn();
+          const elems = base.slice();
+          for (let i = 0; i < base.length; i++) {
+            const parent = base[i].parentElement;
+            if (parent && !elems.includes(parent)) elems.push(parent);
+          }
+          try {
+            if (elems[0] && elems[0].querySelectorAll) {
+              const sub = elems[0].querySelectorAll('*');
+              for (let i = 0; i < sub.length && i < 10; i++) {
+                if (!elems.includes(sub[i])) elems.push(sub[i]);
+              }
+            }
+          } catch (_) {}
           function runWithElements(idx) {
             if (idx >= elems.length) return fn();
             return withMaskedElementFont(elems[idx], () => runWithElements(idx + 1));
@@ -1526,6 +2052,30 @@
       function withMaskedSVGFont(elem, fn) {
         if (!elem || !isShieldActive('fontProtection')) return fn();
         const tag = (elem.tagName || '').toLowerCase();
+        const isSvgContainer = tag === 'text' || tag === 'tspan' || tag === 'g' || tag === 'svg';
+        // Fast precheck (M1): leaf elements without a suspicious inline or
+        // presentation-attribute font declaration pass straight through.
+        // Containers also scan their direct parent and a capped set of text
+        // descendants (the only extra nodes the heavy path below masks),
+        // so group-level measurements of styled children stay covered while
+        // clean SVG geometry reads cost one scoped query at most.
+        if (!needsFontMasking(elem)) {
+          let needs = false;
+          if (isSvgContainer) {
+            if (elem.parentElement) {
+              needs = needsFontMasking(elem.parentElement);
+            }
+            if (!needs && elem.querySelectorAll) {
+              try {
+                const children = elem.querySelectorAll('text, tspan');
+                for (let i = 0; i < children.length && i < 10 && !needs; i++) {
+                  needs = needsFontMasking(children[i]);
+                }
+              } catch (_) {}
+            }
+          }
+          if (!needs) return fn();
+        }
         const elements = [elem];
         try {
           if (tag === 'text' || tag === 'tspan' || tag === 'g' || tag === 'svg') {
@@ -1595,28 +2145,19 @@
         }
       }
 
-      if (targetWin.SVGGraphicsElement && targetWin.SVGGraphicsElement.prototype) {
-        const svgGProto = targetWin.SVGGraphicsElement.prototype;
-        if (svgGProto.getBBox) {
-          const origGetBBox = svgGProto.getBBox;
-          svgGProto.getBBox = createNativeFunction(function getBBox() {
-            return withMaskedSVGFont(this, () => {
-              return origGetBBox.apply(this, arguments);
-            });
-          }, 'getBBox', origGetBBox.length, svgGProto);
-        }
-      }
-
-      if (targetWin.SVGElement && targetWin.SVGElement.prototype && !targetWin.SVGGraphicsElement) {
-        const svgElemProto = targetWin.SVGElement.prototype;
-        if (svgElemProto.getBBox) {
-          const origGetBBox = svgElemProto.getBBox;
-          svgElemProto.getBBox = createNativeFunction(function getBBox() {
-            return withMaskedSVGFont(this, () => {
-              return origGetBBox.apply(this, arguments);
-            });
-          }, 'getBBox', origGetBBox.length, svgElemProto);
-        }
+      // getBBox lives on SVGGraphicsElement; the SVGElement fallback covers
+      // engines/realm mocks without SVGGraphicsElement.
+      const getBBoxProto = (targetWin.SVGGraphicsElement && targetWin.SVGGraphicsElement.prototype) ||
+        ((targetWin.SVGElement && targetWin.SVGElement.prototype && !targetWin.SVGGraphicsElement)
+          ? targetWin.SVGElement.prototype
+          : null);
+      if (getBBoxProto && getBBoxProto.getBBox) {
+        const origGetBBox = getBBoxProto.getBBox;
+        getBBoxProto.getBBox = createNativeFunction(function getBBox() {
+          return withMaskedSVGFont(this, () => {
+            return origGetBBox.apply(this, arguments);
+          });
+        }, 'getBBox', origGetBBox.length, getBBoxProto);
       }
 
       // CSSStyleDeclaration masking (fontFamily, font, getPropertyValue)
@@ -1753,21 +2294,13 @@
     try {
       if (targetWin.Navigator && targetWin.Navigator.prototype) {
         const navProto = targetWin.Navigator.prototype;
-        const origNavPlatDesc = Object.getOwnPropertyDescriptor(navProto, 'platform');
-        const origNavUADesc = Object.getOwnPropertyDescriptor(navProto, 'userAgent');
-        const origNavAppVerDesc = Object.getOwnPropertyDescriptor(navProto, 'appVersion');
         const origNavHwDesc = Object.getOwnPropertyDescriptor(navProto, 'hardwareConcurrency');
         const origNavDevMemDesc = Object.getOwnPropertyDescriptor(navProto, 'deviceMemory');
-        const origNavLangDesc = Object.getOwnPropertyDescriptor(navProto, 'language');
-        const origNavLangsDesc = Object.getOwnPropertyDescriptor(navProto, 'languages');
         const origNavWdDesc = Object.getOwnPropertyDescriptor(navProto, 'webdriver');
         const origNavDntDesc = Object.getOwnPropertyDescriptor(navProto, 'doNotTrack');
 
         const origNavHwValue = targetWin.navigator ? targetWin.navigator.hardwareConcurrency : 8;
         const origNavDevMemValue = targetWin.navigator ? targetWin.navigator.deviceMemory : 8;
-        const origNavPlatformValue = (targetWin.navigator && targetWin.navigator.platform) || 'Linux x86_64';
-        const origNavLangValue = (targetWin.navigator && targetWin.navigator.language) || 'en-US';
-        const origNavLangsValue = (targetWin.navigator && targetWin.navigator.languages) || ['en-US'];
 
         const defineNavProp = (prop, getter) => {
           try {
@@ -1811,53 +2344,6 @@
           }, 'globalPrivacyControl', navProto));
         }
 
-        // language = 'en-US'
-        defineNavProp('language', createNativeGetter(function language() {
-          if (!isShieldActive('timezoneProtection')) {
-            return origNavLangDesc && origNavLangDesc.get ? origNavLangDesc.get.call(this) : origNavLangValue;
-          }
-          return 'en-US';
-        }, 'language', navProto));
-
-        // languages = ['en-US', 'en']
-        defineNavProp('languages', createNativeGetter(function languages() {
-          if (!isShieldActive('timezoneProtection')) {
-            return origNavLangsDesc && origNavLangsDesc.get ? origNavLangsDesc.get.call(this) : origNavLangsValue;
-          }
-          return Object.freeze(['en-US', 'en']);
-        }, 'languages', navProto));
-
-        // platform = 'Linux x86_64'
-        defineNavProp('platform', createNativeGetter(function platform() {
-          if (!isShieldActive('hardwareProtection')) {
-            return origNavPlatDesc && origNavPlatDesc.get ? origNavPlatDesc.get.call(this) : origNavPlatformValue;
-          }
-          return 'Linux x86_64';
-        }, 'platform', navProto));
-
-        // userAgent & appVersion = Linux x86_64 Chromium
-        const origUA = (targetWin.navigator && targetWin.navigator.userAgent) || '';
-        let linuxUA = origUA.includes('Chrome/')
-          ? origUA.replace('HeadlessChrome/', 'Chrome/')
-          : 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
-        if (!linuxUA.includes('Linux')) {
-          linuxUA = linuxUA.replace(/\(([^)]+)\)/, '(X11; Linux x86_64)');
-        }
-        defineNavProp('userAgent', createNativeGetter(function userAgent() {
-          if (!isShieldActive()) {
-            return origNavUADesc && origNavUADesc.get ? origNavUADesc.get.call(this) : origUA;
-          }
-          return linuxUA;
-        }, 'userAgent', navProto));
-
-        const linuxAppVersion = linuxUA.replace(/^Mozilla\//, '');
-        defineNavProp('appVersion', createNativeGetter(function appVersion() {
-          if (!isShieldActive()) {
-            return origNavAppVerDesc && origNavAppVerDesc.get ? origNavAppVerDesc.get.call(this) : (origUA ? origUA.replace(/^Mozilla\//, '') : '');
-          }
-          return linuxAppVersion;
-        }, 'appVersion', navProto));
-
         // deviceMemory = 8
         defineNavProp('deviceMemory', createNativeGetter(function deviceMemory() {
           if (!isShieldActive('hardwareProtection')) {
@@ -1866,97 +2352,16 @@
           return 8;
         }, 'deviceMemory', navProto));
 
-        // Hardware Concurrency Divergence: CYT=4 vs FPS=8, normal sites = 8
-        const isEffCYT = host === 'coveryourtracks.eff.org';
-        const chosenConcurrency = isEffCYT ? 4 : 8;
+        // Low-entropy hardware value: degrade to a common constant on every
+        // site (no per-domain divergence games — divergence only pays off for
+        // high-entropy vectors, which are seed-farbled).
+        const chosenConcurrency = 8;
         defineNavProp('hardwareConcurrency', createNativeGetter(function hardwareConcurrency() {
           if (!isShieldActive('hardwareProtection')) {
             return origNavHwDesc && origNavHwDesc.get ? origNavHwDesc.get.call(this) : origNavHwValue;
           }
           return chosenConcurrency;
         }, 'hardwareConcurrency', navProto));
-
-        // userAgentData spoofing
-        if (targetWin.navigator && targetWin.navigator.userAgentData) {
-          try {
-            const uad = targetWin.navigator.userAgentData;
-            const uadProto = (targetWin.NavigatorUAData && targetWin.NavigatorUAData.prototype) || Object.getPrototypeOf(uad);
-            const match = linuxUA.match(/Chrome\/(\d+)/);
-            const chromeVer = match ? match[1] : '153';
-            const fullMatch = linuxUA.match(/Chrome\/([\d.]+)/);
-            const fullVer = fullMatch ? fullMatch[1] : '153.0.0.0';
-
-            if (uadProto) {
-              const origPlatDesc = Object.getOwnPropertyDescriptor(uadProto, 'platform');
-              if (origPlatDesc && origPlatDesc.get) {
-                Object.defineProperty(uadProto, 'platform', {
-                  get: createNativeGetter(function platform() {
-                    if (!isShieldActive('hardwareProtection') || !isShieldActive()) {
-                      return origPlatDesc.get.call(this);
-                    }
-                    return 'Linux';
-                  }, 'platform', uadProto),
-                  set: origPlatDesc.set,
-                  enumerable: true,
-                  configurable: true
-                });
-              }
-
-              const origBrandsDesc = Object.getOwnPropertyDescriptor(uadProto, 'brands');
-              if (origBrandsDesc && origBrandsDesc.get) {
-                const origBrandsGet = origBrandsDesc.get;
-                Object.defineProperty(uadProto, 'brands', {
-                  get: createNativeGetter(function brands() {
-                    const raw = origBrandsGet.call(this);
-                    if (!isShieldActive('hardwareProtection') || !isShieldActive()) {
-                      return raw;
-                    }
-                    if (Array.isArray(raw) && raw.some(b => b && b.brand && b.brand.includes('Chromium'))) {
-                      return raw;
-                    }
-                    return Object.freeze([
-                      { brand: 'Chromium', version: chromeVer },
-                      { brand: 'Not_A Brand', version: '8' }
-                    ]);
-                  }, 'brands', uadProto),
-                  set: origBrandsDesc.set,
-                  enumerable: true,
-                  configurable: true
-                });
-              }
-
-              const origGetHEV = uadProto.getHighEntropyValues;
-              if (origGetHEV) {
-                uadProto.getHighEntropyValues = createNativeFunction(function getHighEntropyValues(hints) {
-                  if (!isShieldActive('hardwareProtection') || !isShieldActive()) {
-                    return origGetHEV.apply(this, arguments);
-                  }
-                  return origGetHEV.apply(this, arguments).then(res => {
-                    if (res && typeof res === 'object') {
-                      return Object.assign({}, res, {
-                        platform: 'Linux',
-                        platformVersion: '',
-                        architecture: 'x86',
-                        bitness: '64',
-                        model: '',
-                        wow64: false,
-                        fullVersionList: [
-                          { brand: 'Chromium', version: fullVer },
-                          { brand: 'Not_A Brand', version: '8.0.0.0' }
-                        ]
-                      });
-                    }
-                    return res;
-                  });
-                }, 'getHighEntropyValues', 1);
-              }
-            }
-
-            if (uad && Object.prototype.hasOwnProperty.call(uad, 'platform')) {
-              try { delete uad.platform; } catch (_) {}
-            }
-          } catch (_) {}
-        }
 
         // performance.memory heap size limit clamping to prevent 32GB estimation
         if (targetWin.performance && targetWin.performance.memory) {
@@ -1986,15 +2391,18 @@
         const origDescDesc = Object.getOwnPropertyDescriptor(targetWin.Plugin.prototype, 'description');
         if (origDescDesc && origDescDesc.get) {
           const origGetDesc = origDescDesc.get;
-          const spacesCount = (seeds.plugins % 3) + 1;
+          // Host-derived perturbation (no session salt): stable per site like
+          // the native value, different across sites (breaks cross-site
+          // linking of this vector), and carries no trackable entropy since
+          // it is derived from the site's own hostname.
+          const spacesCount = (djb2(host) % 3) + 1;
           const spaces = ' '.repeat(spacesCount);
-          const isEffMain = host === 'coveryourtracks.eff.org';
           const hookedGetDesc = createNativeGetter(function description() {
             const val = origGetDesc.call(this);
             if (!isShieldActive()) {
               return val;
             }
-            if (isCYT && !isEffMain && typeof val === 'string' && val.length > 0) {
+            if (typeof val === 'string' && val.length > 0) {
               return val + spaces;
             }
             return val;
@@ -2009,61 +2417,117 @@
       }
 
 
-      // Screen availHeight normalization
+      // Screen geometry + devicePixelRatio spoof (common Linux desktop profile).
+      // Consistency guard: if the real browser window is larger than the spoofed screen
+      // (e.g. a maximized window on a 2560px display), the spoof is skipped so we never
+      // present an impossible outerWidth > screen.width combination.
+      const SCREEN_PROFILE = { width: 1920, height: 1080, availWidth: 1920, availHeight: 1040, colorDepth: 24, pixelDepth: 24 };
+      const canSpoofScreen = () => {
+        try {
+          const ow = targetWin.outerWidth;
+          const oh = targetWin.outerHeight;
+          if ((typeof ow === 'number' && ow > SCREEN_PROFILE.width) || (typeof oh === 'number' && oh > SCREEN_PROFILE.height)) {
+            return false;
+          }
+        } catch (_) {}
+        return true;
+      };
       if (targetWin.Screen && targetWin.Screen.prototype) {
         const scrProto = targetWin.Screen.prototype;
-        const origAvailHeightDesc = Object.getOwnPropertyDescriptor(scrProto, 'availHeight');
-        const origAvailH = origAvailHeightDesc && origAvailHeightDesc.get;
-        Object.defineProperty(scrProto, 'availHeight', {
-          get: createNativeGetter(function availHeight() {
-            return origAvailH ? origAvailH.call(this) : (this._availHeight || this.height);
-          }, 'availHeight', scrProto),
-          enumerable: true,
-          configurable: true
+        ['width', 'height', 'availWidth', 'availHeight', 'colorDepth', 'pixelDepth'].forEach(prop => {
+          const desc = Object.getOwnPropertyDescriptor(scrProto, prop);
+          const origGet = desc && desc.get;
+          if (!origGet) return;
+          Object.defineProperty(scrProto, prop, {
+            get: createNativeGetter(function() {
+              if (!isShieldActive('hardwareProtection') || !canSpoofScreen()) {
+                return origGet.call(this);
+              }
+              return SCREEN_PROFILE[prop];
+            }, prop, scrProto),
+            enumerable: desc.enumerable,
+            configurable: desc.configurable
+          });
         });
-        if (targetWin.screen && Object.prototype.hasOwnProperty.call(targetWin.screen, 'availHeight')) {
-          try {
-            delete targetWin.screen.availHeight;
-          } catch (_) {}
+        if (targetWin.screen) {
+          ['width', 'height', 'availWidth', 'availHeight', 'colorDepth', 'pixelDepth'].forEach(prop => {
+            if (Object.prototype.hasOwnProperty.call(targetWin.screen, prop)) {
+              try { delete targetWin.screen[prop]; } catch (_) {}
+            }
+          });
         }
       }
+
+      // window.devicePixelRatio aligned with the screen profile (dpr 1), keeping the
+      // native own-accessor placement (window, with its original setter) intact.
+      try {
+        const dprDesc = Object.getOwnPropertyDescriptor(targetWin, 'devicePixelRatio');
+        if (dprDesc && dprDesc.get) {
+          const origDprGet = dprDesc.get;
+          Object.defineProperty(targetWin, 'devicePixelRatio', {
+            get: createNativeGetter(function devicePixelRatio() {
+              if (!isShieldActive('hardwareProtection') || !canSpoofScreen()) {
+                return origDprGet.call(this);
+              }
+              return 1;
+            }, 'devicePixelRatio', targetWin.Window),
+            set: dprDesc.set,
+            enumerable: dprDesc.enumerable,
+            configurable: dprDesc.configurable
+          });
+        }
+      } catch (_) {}
 
       // window.chrome emulation matching Google Chrome standard builtins
       if (!targetWin.chrome || typeof targetWin.chrome !== 'object') {
         targetWin.chrome = {};
       }
       const ch = targetWin.chrome;
-      if (!ch.csi) {
-        const startMs = Date.now();
-        ch.csi = createNativeFunction(function csi() {
-          return {
-            startE: startMs,
-            onloadT: startMs + 15,
-            pageT: 100.0,
-            tran: 15
-          };
-        }, 'csi', 0, ch);
+
+      // Timer precision clamp (LibreWolf-style downgrade, not a spoof): floor
+      // performance.now() to whole milliseconds while the shield is active,
+      // removing the sub-millisecond timing entropy exploited by clock-sketch
+      // and timer-based probes. Animations and business logic are unaffected.
+      if (targetWin.performance && typeof targetWin.performance.now === 'function') {
+        const perfProto = Object.getPrototypeOf(targetWin.performance);
+        const origPerfNow = perfProto && perfProto.now;
+        if (typeof origPerfNow === 'function') {
+          Object.defineProperty(perfProto, 'now', {
+            value: createNativeFunction(function now() {
+              const t = origPerfNow.apply(this, arguments);
+              if (!isShieldActive('hardwareProtection')) {
+                return t;
+              }
+              return Math.floor(t);
+            }, 'now', 0, perfProto),
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+        }
       }
-      if (!ch.loadTimes) {
-        const startSec = Date.now() / 1000;
-        ch.loadTimes = createNativeFunction(function loadTimes() {
-          return {
-            requestTime: startSec,
-            startLoadTime: startSec,
-            commitLoadTime: 0,
-            finishDocumentLoadTime: startSec + 0.015,
-            finishLoadTime: startSec + 0.016,
-            firstPaintTime: 0,
-            firstPaintAfterLoadTime: 0,
-            navigationType: 'Other',
-            wasFetchedViaSpdy: false,
-            wasNpnNegotiated: false,
-            npnNegotiatedProtocol: '',
-            wasAlternateProtocolAvailable: false,
-            connectionInfo: 'unknown'
-          };
-        }, 'loadTimes', 0, ch);
+
+      // Gamepad API downgrade (not a spoof): getGamepads is a rarely used
+      // high-entropy hardware vector; while the shield is active report no
+      // controllers, returning a fresh array per call exactly like the native
+      // method does.
+      if (targetWin.Navigator && targetWin.Navigator.prototype &&
+          typeof targetWin.Navigator.prototype.getGamepads === 'function') {
+        const gpNavProto = targetWin.Navigator.prototype;
+        const origGetGamepads = gpNavProto.getGamepads;
+        Object.defineProperty(gpNavProto, 'getGamepads', {
+          value: createNativeFunction(function getGamepads() {
+            if (!isShieldActive('hardwareProtection')) {
+              return origGetGamepads.apply(this, arguments);
+            }
+            return [];
+          }, 'getGamepads', 0, gpNavProto),
+          writable: true,
+          enumerable: true,
+          configurable: true
+        });
       }
+
       if (!ch.app) {
         ch.app = {
           isInstalled: false,
@@ -2097,6 +2561,27 @@
             { name: 'Google UK English Female', lang: 'en-GB', voiceURI: 'Google UK English Female', default: false, localService: false },
             { name: 'Google UK English Male', lang: 'en-GB', voiceURI: 'Google UK English Male', default: false, localService: false }
           ];
+          // Blink keeps persistent SpeechSynthesisVoice wrappers and builds a fresh
+          // array on every call (native: fresh array reference, same voice objects),
+          // so mimic exactly that identity model.
+          let spoofedVoiceObjects = null;
+          const getSpoofedVoiceObjects = () => {
+            if (!spoofedVoiceObjects) {
+              const VoiceProto = (targetWin.SpeechSynthesisVoice && targetWin.SpeechSynthesisVoice.prototype) || Object.prototype;
+              spoofedVoiceObjects = LINUX_SPEECH_VOICES.map(v => {
+                const obj = Object.create(VoiceProto);
+                Object.defineProperties(obj, {
+                  name: { value: v.name, enumerable: true, configurable: true },
+                  lang: { value: v.lang, enumerable: true, configurable: true },
+                  voiceURI: { value: v.voiceURI, enumerable: true, configurable: true },
+                  default: { value: v.default, enumerable: true, configurable: true },
+                  localService: { value: v.localService, enumerable: true, configurable: true }
+                });
+                return obj;
+              });
+            }
+            return spoofedVoiceObjects;
+          };
           const hookedGetVoices = createNativeFunction(function getVoices() {
             if (!isShieldActive()) {
               return origGetVoices.call(this);
@@ -2105,26 +2590,40 @@
             try { raw = origGetVoices.call(this) || []; } catch (_) {}
             if (Array.isArray(raw) && raw.length > 0) {
               const filtered = raw.filter(v => v && v.name && !v.name.includes('Microsoft'));
-              if (filtered.length > 0) return filtered;
+              if (filtered.length > 0) {
+                return filtered;
+              }
             }
-            const VoiceProto = (targetWin.SpeechSynthesisVoice && targetWin.SpeechSynthesisVoice.prototype) || Object.prototype;
-            return LINUX_SPEECH_VOICES.map(v => {
-              const obj = Object.create(VoiceProto);
-              Object.defineProperties(obj, {
-                name: { value: v.name, enumerable: true, configurable: true },
-                lang: { value: v.lang, enumerable: true, configurable: true },
-                voiceURI: { value: v.voiceURI, enumerable: true, configurable: true },
-                default: { value: v.default, enumerable: true, configurable: true },
-                localService: { value: v.localService, enumerable: true, configurable: true }
-              });
-              return obj;
-            });
+            return getSpoofedVoiceObjects().slice();
           }, 'getVoices', 0);
 
+          // Keep the native property shape: getVoices lives on SpeechSynthesis.prototype
+          // (native descriptor: writable/enumerable/configurable); define it there so the
+          // instance gains no own property. Only when the prototype is unavailable fall
+          // back to a non-enumerable own property on the instance (keeps Object.keys clean).
           if (synthProto && synthProto.getVoices) {
-            synthProto.getVoices = hookedGetVoices;
+            try {
+              Object.defineProperty(synthProto, 'getVoices', {
+                value: hookedGetVoices,
+                writable: true,
+                enumerable: true,
+                configurable: true
+              });
+            } catch (_) {
+              try { synthProto.getVoices = hookedGetVoices; } catch (_) {}
+            }
+          } else {
+            try {
+              Object.defineProperty(targetWin.speechSynthesis, 'getVoices', {
+                value: hookedGetVoices,
+                writable: true,
+                enumerable: false,
+                configurable: true
+              });
+            } catch (_) {
+              try { targetWin.speechSynthesis.getVoices = hookedGetVoices; } catch (_) {}
+            }
           }
-          targetWin.speechSynthesis.getVoices = hookedGetVoices;
         }
       }
     } catch (_) {}
@@ -2197,7 +2696,10 @@
               if (node.contentWindow) {
                 applyStealth(node.contentWindow);
               }
-            } else if (node.querySelectorAll) {
+            } else if (node.nodeType === 1 && node.childElementCount > 0 && node.querySelectorAll) {
+              // Only query inside the inserted subtree itself - never the
+              // whole document (M2). Leaf elements, text nodes and fragments
+              // skip the selector query entirely.
               const frames = node.querySelectorAll('iframe, frame');
               for (let i = 0; i < frames.length; i++) {
                 if (frames[i].contentWindow) {
@@ -2223,6 +2725,43 @@
             return res;
           }, 'insertBefore', 2, nodeProto);
         }
+
+        // Passive srcdoc race backstop (MV3 timing window): assigning
+        // iframe.srcdoc = '...' never goes through appendChild/insertBefore,
+        // so inline scripts inside the srcdoc document can run before the
+        // extension injects. This MutationObserver only re-enters the exact
+        // same protection entry (protectNodeIframes) from its microtask
+        // callback - it never blocks the page synchronously in the same
+        // frame. It also covers insertion paths that bypass the hooks above
+        // (append(), replaceWith(), innerHTML, DocumentFragment children).
+        // Dedup: applyStealth itself returns early via the per-realm
+        // protectedWindows WeakSet and the cross-instance shared patch marks
+        // (getSharedPatchMarks), so the contentWindow/contentDocument
+        // getter hooks, the insertion hooks, this observer, and the child
+        // frame's own engine instance never
+        // double-protect the same realm.
+        try {
+          if (typeof targetWin.MutationObserver === 'function' && targetWin.document) {
+            const observerRoot = targetWin.document.documentElement || targetWin.document;
+            const srcdocObserver = new targetWin.MutationObserver(function(mutations) {
+              for (let i = 0; i < mutations.length; i++) {
+                const mut = mutations[i];
+                if (mut.type === 'attributes') {
+                  protectNodeIframes(mut.target);
+                } else if (mut.type === 'childList') {
+                  for (let j = 0; j < mut.addedNodes.length; j++) {
+                    protectNodeIframes(mut.addedNodes[j]);
+                  }
+                }
+              }
+            });
+            srcdocObserver.observe(observerRoot, {
+              childList: true,
+              subtree: true,
+              attributeFilter: ['srcdoc']
+            });
+          }
+        } catch (_) {}
       }
 
 
@@ -2236,95 +2775,126 @@
         }
       }
 
-      // Sync from bridge custom event
+      // Secure bridge channel (protocol v2). The engine (MAIN world,
+      // document_start, before any page script) generates a random token and a
+      // per-frame random config event name, announces both via '__bocchi_hs__',
+      // re-announces on '__bocchi_req__' (the bridge may register its listener
+      // only after our first dispatch), and then accepts config payloads only
+      // on the random event name and only when the token matches exactly.
+      // The previous fixed, guessable event names let any page script forge
+      // config events and flip shieldConfig at will.
       if (targetWin.document && targetWin.document.addEventListener) {
-        targetWin.document.addEventListener('__bocchi_tz_sync__', function(e) {
-          if (e && e.detail && e.detail.timezone) {
-            updateActiveTimezone(e.detail.timezone);
+        const randomHex = (byteLen) => {
+          try {
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+              const bytes = new Uint8Array(byteLen);
+              crypto.getRandomValues(bytes);
+              let out = '';
+              for (let i = 0; i < bytes.length; i++) out += (bytes[i] + 0x100).toString(16).slice(1);
+              return out;
+            }
+          } catch (_) {}
+          // Fallback entropy: Math.random + Date.now
+          let out = '';
+          const seed = Date.now();
+          for (let i = 0; i < byteLen; i++) {
+            const b = (Math.floor(Math.random() * 256) ^ ((seed >>> ((i * 3) % 24)) & 0xff)) & 0xff;
+            out += (b + 0x100).toString(16).slice(1);
           }
-          if (e && e.stopImmediatePropagation) {
-            e.stopImmediatePropagation();
-          }
+          return out;
+        };
+        const bridgeToken = randomHex(16);
+        const configEventName = '__bocchi_evt_' + randomHex(8);
+        // Once the first authenticated config event arrives, the bridge no
+        // longer needs the handshake; any later '__bocchi_req__' can only be a
+        // page script fishing for the token, so re-dispatching is disabled.
+        let handshakeArmed = true;
+
+        const dispatchHandshake = () => {
+          try {
+            const detail = { t: bridgeToken, e: configEventName };
+            let evt = null;
+            try {
+              evt = new targetWin.CustomEvent('__bocchi_hs__', { detail: detail });
+            } catch (_) {
+              evt = new CustomEvent('__bocchi_hs__', { detail: detail });
+            }
+            targetWin.document.dispatchEvent(evt);
+          } catch (_) {}
+        };
+
+        targetWin.document.addEventListener('__bocchi_req__', function() {
+          if (handshakeArmed) dispatchHandshake();
         }, true);
 
-        targetWin.document.addEventListener('__bocchi_fonts_sync__', function(e) {
-          if (e && e.detail) {
-            if (Array.isArray(e.detail.customFonts)) {
-              fontConfig.customHiddenFonts = e.detail.customFonts.slice();
+        targetWin.document.addEventListener(configEventName, function(e) {
+          if (!e || !e.detail || e.detail.t !== bridgeToken) return;
+          handshakeArmed = false;
+          const d = e.detail;
+          if (typeof d.tz === 'string') {
+            updateActiveTimezone(d.tz);
+          }
+          if (d.fonts && typeof d.fonts === 'object') {
+            const f = d.fonts;
+            if (Array.isArray(f.customFonts)) {
+              fontConfig.customHiddenFonts = f.customFonts.slice();
             }
-            if (Array.isArray(e.detail.allowedFonts)) {
-              fontConfig.customAllowedFonts = e.detail.allowedFonts.slice();
+            if (Array.isArray(f.allowedFonts)) {
+              fontConfig.customAllowedFonts = f.allowedFonts.slice();
             }
-            if (typeof e.detail.blockBuiltin === 'boolean') {
-              fontConfig.blockBuiltinChineseFonts = e.detail.blockBuiltin;
+            if (typeof f.blockBuiltin === 'boolean') {
+              fontConfig.blockBuiltinChineseFonts = f.blockBuiltin;
             }
-            if (typeof e.detail.fontMode === 'string') {
-              fontConfig.fontMode = e.detail.fontMode;
+            if (typeof f.fontMode === 'string') {
+              fontConfig.fontMode = f.fontMode;
             }
-            if (typeof e.detail.blockOtherScripts === 'boolean') {
-              fontConfig.blockOtherScripts = e.detail.blockOtherScripts;
+            if (typeof f.blockOtherScripts === 'boolean') {
+              fontConfig.blockOtherScripts = f.blockOtherScripts;
             }
-            if (typeof e.detail.fontProtection === 'boolean') {
-              shieldConfig.fontProtection = e.detail.fontProtection;
+            if (typeof f.fontProtection === 'boolean') {
+              shieldConfig.fontProtection = f.fontProtection;
             }
           }
-          if (e && e.stopImmediatePropagation) {
-            e.stopImmediatePropagation();
+          if (d.cfg && typeof d.cfg === 'object') {
+            const c = d.cfg;
+            if (typeof c.globalShieldEnabled === 'boolean') {
+              shieldConfig.globalShieldEnabled = c.globalShieldEnabled;
+            }
+            if (typeof c.isBypassed === 'boolean') {
+              shieldConfig.isBypassed = c.isBypassed;
+            }
+            if (Array.isArray(c.siteBypassList)) {
+              shieldConfig.siteBypassList = c.siteBypassList.slice();
+            }
+            if (typeof c.canvasProtection === 'boolean') {
+              shieldConfig.canvasProtection = c.canvasProtection;
+            }
+            if (typeof c.webrtcProtection === 'boolean') {
+              shieldConfig.webrtcProtection = c.webrtcProtection;
+            }
+            if (typeof c.audioProtection === 'boolean') {
+              shieldConfig.audioProtection = c.audioProtection;
+            }
+            if (typeof c.timezoneProtection === 'boolean') {
+              shieldConfig.timezoneProtection = c.timezoneProtection;
+            }
+            if (typeof c.hardwareProtection === 'boolean') {
+              shieldConfig.hardwareProtection = c.hardwareProtection;
+            }
+            if (typeof c.fontProtection === 'boolean') {
+              shieldConfig.fontProtection = c.fontProtection;
+            }
+            if (typeof c.blockOtherScripts === 'boolean') {
+              fontConfig.blockOtherScripts = c.blockOtherScripts;
+            }
           }
+          // Bypass decisions may have changed; drop the per-window cache.
+          shieldStateCache = new WeakMap();
         }, true);
 
-        targetWin.document.addEventListener('__bocchi_config_sync__', function(e) {
-          if (e && e.detail) {
-            if (typeof e.detail.globalShieldEnabled === 'boolean') {
-              shieldConfig.globalShieldEnabled = e.detail.globalShieldEnabled;
-            }
-            if (typeof e.detail.isBypassed === 'boolean') {
-              shieldConfig.isBypassed = e.detail.isBypassed;
-            }
-            if (Array.isArray(e.detail.siteBypassList)) {
-              shieldConfig.siteBypassList = e.detail.siteBypassList.slice();
-            }
-            if (typeof e.detail.canvasProtection === 'boolean') {
-              shieldConfig.canvasProtection = e.detail.canvasProtection;
-            }
-            if (typeof e.detail.webrtcProtection === 'boolean') {
-              shieldConfig.webrtcProtection = e.detail.webrtcProtection;
-            }
-            if (typeof e.detail.audioProtection === 'boolean') {
-              shieldConfig.audioProtection = e.detail.audioProtection;
-            }
-            if (typeof e.detail.timezoneProtection === 'boolean') {
-              shieldConfig.timezoneProtection = e.detail.timezoneProtection;
-            }
-            if (typeof e.detail.hardwareProtection === 'boolean') {
-              shieldConfig.hardwareProtection = e.detail.hardwareProtection;
-            }
-            if (typeof e.detail.fontProtection === 'boolean') {
-              shieldConfig.fontProtection = e.detail.fontProtection;
-            }
-            if (typeof e.detail.blockOtherScripts === 'boolean') {
-              fontConfig.blockOtherScripts = e.detail.blockOtherScripts;
-            }
-          }
-          if (e && e.stopImmediatePropagation) {
-            e.stopImmediatePropagation();
-          }
-        }, true);
-      }
-
-      // Locale sanitizer helper
-      function sanitizeLocales(locales) {
-        if (!locales) return 'en-US';
-        if (typeof locales === 'string') {
-          if (locales.toLowerCase().startsWith('zh')) return 'en-US';
-          return locales;
-        }
-        if (Array.isArray(locales)) {
-          if (locales.length === 0) return 'en-US';
-          const filtered = locales.filter(l => typeof l === 'string' && !l.toLowerCase().startsWith('zh'));
-          return filtered.length > 0 ? filtered : 'en-US';
-        }
-        return 'en-US';
+        // Immediate handshake at document_start. If the bridge has not
+        // registered yet it misses this and recovers via '__bocchi_req__'.
+        dispatchHandshake();
       }
 
       // Caching and zoned calculation helpers
@@ -2344,10 +2914,9 @@
       const monthsShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
       const weekdayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
-      const OrigDate = (targetWin.Date && targetWin.Date[Symbol.for('__bocchi_orig_date__')]) || targetWin.Date;
-      if (targetWin.Date && !targetWin.Date[Symbol.for('__bocchi_orig_date__')]) {
-        try { targetWin.Date[Symbol.for('__bocchi_orig_date__')] = OrigDate; } catch (_) {}
-      }
+      // Keep the pristine constructor in the closure (applyStealth runs once per realm,
+      // guarded by protectedWindows, so no re-entrancy and no brand-key export needed).
+      const OrigDate = targetWin.Date || Date;
       const origGetTime = OrigDate && OrigDate.prototype ? OrigDate.prototype.getTime : null;
 
       function getZonedParts(date, tz) {
@@ -2442,15 +3011,17 @@
         const origDateSetMonth = OrigDate.prototype.setMonth;
         const origDateSetFullYear = OrigDate.prototype.setFullYear;
 
-        function checkDateReceiver(receiver) {
+        // V8 reports the method name in this TypeError
+        // ("Method Date.prototype.<name> called on incompatible receiver").
+        function checkDateReceiver(receiver, methodName) {
           if (!(receiver instanceof OrigDate) && Object.prototype.toString.call(receiver) !== '[object Date]') {
-            throw new TypeError('Method called on incompatible receiver');
+            throw new TypeError('Method Date.prototype.' + methodName + ' called on incompatible receiver');
           }
         }
 
         // getTimezoneOffset
         OrigDate.prototype.getTimezoneOffset = createNativeFunction(function getTimezoneOffset() {
-          checkDateReceiver(this);
+          checkDateReceiver(this, 'getTimezoneOffset');
           if (!isShieldActive('timezoneProtection')) {
             return origDateGetTimezoneOffset.call(this);
           }
@@ -2464,7 +3035,7 @@
 
         // toString
         OrigDate.prototype.toString = createNativeFunction(function toString() {
-          checkDateReceiver(this);
+          checkDateReceiver(this, 'toString');
           if (!isShieldActive('timezoneProtection')) {
             return origDateToString.call(this);
           }
@@ -2482,7 +3053,7 @@
 
         // toTimeString
         OrigDate.prototype.toTimeString = createNativeFunction(function toTimeString() {
-          checkDateReceiver(this);
+          checkDateReceiver(this, 'toTimeString');
           if (!isShieldActive('timezoneProtection')) {
             return origDateToTimeString.call(this);
           }
@@ -2499,7 +3070,7 @@
 
         // toDateString
         OrigDate.prototype.toDateString = createNativeFunction(function toDateString() {
-          checkDateReceiver(this);
+          checkDateReceiver(this, 'toDateString');
           if (!isShieldActive('timezoneProtection')) {
             return origDateToDateString.call(this);
           }
@@ -2514,50 +3085,49 @@
 
         // toLocaleString
         OrigDate.prototype.toLocaleString = createNativeFunction(function toLocaleString(locales, options) {
-          checkDateReceiver(this);
+          checkDateReceiver(this, 'toLocaleString');
           if (!isShieldActive('timezoneProtection')) {
             return origDateToLocaleString.apply(this, arguments);
           }
           const t = origGetTime.call(this);
           if (isNaN(t)) return 'Invalid Date';
-          const loc = sanitizeLocales(locales);
+          // Locale passes through natively (entropy-reduction strategy); only
+          // the timezone is aligned with the exit IP.
           const opts = Object.assign({}, options);
           if (!opts.timeZone) {
             opts.timeZone = activeTimezone;
           }
-          return origDateToLocaleString.call(this, loc, opts);
+          return origDateToLocaleString.call(this, locales, opts);
         }, 'toLocaleString', 0);
 
         // toLocaleDateString
         OrigDate.prototype.toLocaleDateString = createNativeFunction(function toLocaleDateString(locales, options) {
-          checkDateReceiver(this);
+          checkDateReceiver(this, 'toLocaleDateString');
           if (!isShieldActive('timezoneProtection')) {
             return origDateToLocaleDateString.apply(this, arguments);
           }
           const t = origGetTime.call(this);
           if (isNaN(t)) return 'Invalid Date';
-          const loc = sanitizeLocales(locales);
           const opts = Object.assign({}, options);
           if (!opts.timeZone) {
             opts.timeZone = activeTimezone;
           }
-          return origDateToLocaleDateString.call(this, loc, opts);
+          return origDateToLocaleDateString.call(this, locales, opts);
         }, 'toLocaleDateString', 0);
 
         // toLocaleTimeString
         OrigDate.prototype.toLocaleTimeString = createNativeFunction(function toLocaleTimeString(locales, options) {
-          checkDateReceiver(this);
+          checkDateReceiver(this, 'toLocaleTimeString');
           if (!isShieldActive('timezoneProtection')) {
             return origDateToLocaleTimeString.apply(this, arguments);
           }
           const t = origGetTime.call(this);
           if (isNaN(t)) return 'Invalid Date';
-          const loc = sanitizeLocales(locales);
           const opts = Object.assign({}, options);
           if (!opts.timeZone) {
             opts.timeZone = activeTimezone;
           }
-          return origDateToLocaleTimeString.call(this, loc, opts);
+          return origDateToLocaleTimeString.call(this, locales, opts);
         }, 'toLocaleTimeString', 0);
 
         // Local Date getters
@@ -2582,7 +3152,7 @@
           ['getYear', 'year', y => y - 1900]
         ].forEach(([fnName, prop, transform]) => {
           OrigDate.prototype[fnName] = createNativeFunction(function() {
-            checkDateReceiver(this);
+            checkDateReceiver(this, fnName);
             if (!isShieldActive('timezoneProtection')) {
               return origDateGettersMap[fnName].call(this);
             }
@@ -2594,8 +3164,53 @@
         // Native Date Local Setters
         const origSetTime = OrigDate.prototype.setTime;
 
-        function updateDateZoned(date, updater) {
-          checkDateReceiver(date);
+        // Resolve a target wall time to an epoch the way V8 does: unambiguous walls use
+        // their true offset, the repeated hour keeps the earlier instant, and the skipped
+        // hour applies the pre-transition offset. Candidate offsets come from the guess,
+        // the wall-as-UTC instant, and the first guess's real offset (few fixed lookups,
+        // no unbounded iteration).
+        function resolveWallTime(naiveUtc, firstGuessOffset) {
+          const offsetAt = (t) => {
+            const p = getZonedParts(new OrigDate(t), activeTimezone);
+            return p ? p.offsetMin : null;
+          };
+          const candidates = [];
+          const seen = Object.create(null);
+          const addCandidate = (o) => {
+            if (o === null || o === undefined || seen[o]) return;
+            seen[o] = true;
+            candidates.push(o);
+          };
+          addCandidate(firstGuessOffset);
+          const firstGuessT = naiveUtc + firstGuessOffset * 60000;
+          addCandidate(offsetAt(naiveUtc));
+          addCandidate(offsetAt(firstGuessT));
+          let best = firstGuessOffset;
+          const consistent = [];
+          for (let i = 0; i < candidates.length; i++) {
+            if (offsetAt(naiveUtc + candidates[i] * 60000) === candidates[i]) {
+              consistent.push(candidates[i]);
+            }
+          }
+          if (consistent.length > 0) {
+            best = consistent[0];
+            for (let i = 1; i < consistent.length; i++) {
+              if (consistent[i] < best) best = consistent[i];
+            }
+          } else {
+            let earliestT = Infinity;
+            for (let i = 0; i < candidates.length; i++) {
+              const t = naiveUtc + candidates[i] * 60000;
+              if (t < earliestT) earliestT = t;
+            }
+            const pre = earliestT !== Infinity ? offsetAt(earliestT) : null;
+            if (pre !== null) best = pre;
+          }
+          return naiveUtc + best * 60000;
+        }
+
+        function updateDateZoned(date, updater, methodName) {
+          checkDateReceiver(date, methodName);
           const p = getZonedParts(date, activeTimezone);
           if (!p) {
             origGetTime.call(date);
@@ -2605,9 +3220,8 @@
           updater(updated);
           const yr = (updated.year >= 0 && updated.year < 100) ? 1900 + updated.year : updated.year;
           const naiveUtc = OrigDate.UTC(yr, updated.month, updated.day, updated.hour, updated.minute, updated.second, updated.ms || 0);
-          const checkP = getZonedParts(new OrigDate(naiveUtc), activeTimezone);
-          const offMin = checkP ? checkP.offsetMin : updated.offsetMin;
-          const newT = naiveUtc + offMin * 60000;
+          // DST-safe wall -> epoch mapping (V8-matching; see resolveWallTime)
+          const newT = resolveWallTime(naiveUtc, updated.offsetMin);
           origSetTime.call(date, newT);
           return newT;
         }
@@ -2621,8 +3235,8 @@
             if (m !== undefined) p.minute = Number(m);
             if (s !== undefined) p.second = Number(s);
             if (ms !== undefined) p.ms = Number(ms);
-          });
-        }, 'setHours', 1, OrigDate.prototype);
+          }, 'setHours');
+        }, 'setHours', 1);
 
         OrigDate.prototype.setMinutes = createNativeFunction(function setMinutes(m, s, ms) {
           if (!isShieldActive('timezoneProtection')) {
@@ -2632,8 +3246,8 @@
             p.minute = Number(m);
             if (s !== undefined) p.second = Number(s);
             if (ms !== undefined) p.ms = Number(ms);
-          });
-        }, 'setMinutes', 1, OrigDate.prototype);
+          }, 'setMinutes');
+        }, 'setMinutes', 1);
 
         OrigDate.prototype.setSeconds = createNativeFunction(function setSeconds(s, ms) {
           if (!isShieldActive('timezoneProtection')) {
@@ -2642,8 +3256,8 @@
           return updateDateZoned(this, p => {
             p.second = Number(s);
             if (ms !== undefined) p.ms = Number(ms);
-          });
-        }, 'setSeconds', 1, OrigDate.prototype);
+          }, 'setSeconds');
+        }, 'setSeconds', 1);
 
         OrigDate.prototype.setDate = createNativeFunction(function setDate(d) {
           if (!isShieldActive('timezoneProtection')) {
@@ -2651,8 +3265,8 @@
           }
           return updateDateZoned(this, p => {
             p.day = Number(d);
-          });
-        }, 'setDate', 1, OrigDate.prototype);
+          }, 'setDate');
+        }, 'setDate', 1);
 
         OrigDate.prototype.setMonth = createNativeFunction(function setMonth(m, d) {
           if (!isShieldActive('timezoneProtection')) {
@@ -2661,8 +3275,8 @@
           return updateDateZoned(this, p => {
             p.month = Number(m);
             if (d !== undefined) p.day = Number(d);
-          });
-        }, 'setMonth', 1, OrigDate.prototype);
+          }, 'setMonth');
+        }, 'setMonth', 1);
 
         OrigDate.prototype.setFullYear = createNativeFunction(function setFullYear(y, m, d) {
           if (!isShieldActive('timezoneProtection')) {
@@ -2672,8 +3286,8 @@
             p.year = Number(y);
             if (m !== undefined) p.month = Number(m);
             if (d !== undefined) p.day = Number(d);
-          });
-        }, 'setFullYear', 1, OrigDate.prototype);
+          }, 'setFullYear');
+        }, 'setFullYear', 1);
 
         // Hook targetWin.Date constructor and function call
         const HookedDate = function Date(...args) {
@@ -2692,9 +3306,9 @@
               const ms = args.length > 6 ? Number(args[6]) : 0;
               const fullYr = (yr >= 0 && yr < 100) ? 1900 + yr : yr;
               const naiveUtc = OrigDate.UTC(fullYr, mo, da, hr, mi, se, ms);
-              const p = getZonedParts(new OrigDate(naiveUtc), activeTimezone);
-              const offsetMin = p ? p.offsetMin : 0;
-              const targetMs = naiveUtc + offsetMin * 60000;
+              // DST-safe wall -> epoch mapping (V8-matching; see resolveWallTime)
+              const guessP = getZonedParts(new OrigDate(naiveUtc), activeTimezone);
+              const targetMs = resolveWallTime(naiveUtc, guessP ? guessP.offsetMin : 0);
               return Reflect.construct(OrigDate, [targetMs], new.target);
             } catch (_) {}
           }
@@ -2715,7 +3329,6 @@
         });
 
         makeNative(HookedDate, 'Date', 7);
-        nativeMap.set(HookedDate, 'function Date() { [native code] }');
 
         try {
           Object.defineProperty(targetWin, 'Date', {
@@ -2736,21 +3349,19 @@
 
         // DateTimeFormat
         if (OrigIntl.DateTimeFormat) {
-          const OrigDTF = OrigIntl[Symbol.for('__bocchi_orig_dtf__')] || OrigIntl.DateTimeFormat;
-          if (!OrigIntl[Symbol.for('__bocchi_orig_dtf__')]) {
-            try { OrigIntl[Symbol.for('__bocchi_orig_dtf__')] = OrigDTF; } catch (_) {}
-          }
+          const OrigDTF = OrigIntl.DateTimeFormat;
           function DateTimeFormat(locales, options) {
             if (!isShieldActive('timezoneProtection')) {
               return new.target ? Reflect.construct(OrigDTF, arguments, new.target) : OrigDTF.apply(this, arguments);
             }
-            const loc = sanitizeLocales(locales);
+            // Locale passes through natively (entropy-reduction strategy); only
+            // the timezone is aligned with the exit IP.
             const hasExplicitTz = !!(options && options.timeZone);
             const opts = Object.assign({}, options);
             if (!opts.timeZone) {
               opts.timeZone = activeTimezone;
             }
-            const inst = new.target ? Reflect.construct(OrigDTF, [loc, opts], new.target) : OrigDTF(loc, opts);
+            const inst = new.target ? Reflect.construct(OrigDTF, [locales, opts], new.target) : OrigDTF(locales, opts);
             if (!hasExplicitTz) {
               defaultTzInstances.add(inst);
             }
@@ -2763,22 +3374,41 @@
           }
           makeNative(DateTimeFormat, 'DateTimeFormat', OrigDTF.length);
 
-          const origDTFResolved = OrigDTF.prototype[Symbol.for('__bocchi_orig_dtf_resolved__')] || OrigDTF.prototype.resolvedOptions;
-          if (!OrigDTF.prototype[Symbol.for('__bocchi_orig_dtf_resolved__')]) {
-            try { OrigDTF.prototype[Symbol.for('__bocchi_orig_dtf_resolved__')] = origDTFResolved; } catch (_) {}
-          }
+          const origDTFResolved = OrigDTF.prototype.resolvedOptions;
           if (origDTFResolved) {
+            // Real local timezone, derived dynamically through the original (unhooked)
+            // constructor. Replaces the old hardcoded Chinese-city list, which missed
+            // zones like Asia/Macau.
+            let realLocalTz = null;
+            try {
+              realLocalTz = origDTFResolved.call(new OrigDTF()).timeZone || null;
+            } catch (_) {}
+            // Long display name ("Pacific Daylight Time") derived from activeTimezone
+            // with the original Intl constructor, so a replaced timeZone stays
+            // consistent with any timeZoneName the formatter resolved.
+            const getSpoofedTzName = () => {
+              try {
+                const parts = new OrigDTF('en-US', { timeZone: activeTimezone, timeZoneName: 'long' }).formatToParts(OrigDate.now());
+                for (let i = 0; i < parts.length; i++) {
+                  if (parts[i].type === 'timeZoneName') return parts[i].value;
+                }
+              } catch (_) {}
+              return null;
+            };
             const hookedDTFResolved = createNativeFunction(function resolvedOptions() {
               const res = origDTFResolved.apply(this, arguments);
               if (!isShieldActive('timezoneProtection')) {
                 return res;
               }
               if (res) {
-                if (!res.locale || res.locale.toLowerCase().startsWith('zh')) {
-                  res.locale = 'en-US';
-                }
-                if (defaultTzInstances.has(this) || !res.timeZone || res.timeZone.toLowerCase().includes('singapore') || res.timeZone.toLowerCase().includes('shanghai') || res.timeZone.toLowerCase().includes('china') || res.timeZone.toLowerCase().includes('hong_kong') || res.timeZone.toLowerCase().includes('taipei') || res.timeZone.toLowerCase().includes('chongqing') || res.timeZone.toLowerCase().includes('urumqi')) {
+                if (defaultTzInstances.has(this) || !res.timeZone || (realLocalTz && res.timeZone === realLocalTz)) {
                   res.timeZone = activeTimezone;
+                  if (res.timeZoneName) {
+                    const spoofedName = getSpoofedTzName();
+                    if (spoofedName) {
+                      res.timeZoneName = spoofedName;
+                    }
+                  }
                 }
               }
               return res;
@@ -2788,85 +3418,40 @@
 
           OrigIntl.DateTimeFormat = DateTimeFormat;
         }
-
-        // Standard Intl classes: NumberFormat, PluralRules, RelativeTimeFormat, Collator, etc.
-        function hookStandardIntlClass(className) {
-          if (!OrigIntl[className]) return;
-          const OrigClass = OrigIntl[Symbol.for(`__bocchi_orig_${className}__`)] || OrigIntl[className];
-          if (!OrigIntl[Symbol.for(`__bocchi_orig_${className}__`)]) {
-            try { OrigIntl[Symbol.for(`__bocchi_orig_${className}__`)] = OrigClass; } catch (_) {}
-          }
-
-          function HookedClass(locales, options) {
-            if (!isShieldActive('timezoneProtection')) {
-              return new.target ? Reflect.construct(OrigClass, arguments, new.target) : OrigClass.apply(this, arguments);
-            }
-            const loc = sanitizeLocales(locales);
-            if (new.target) {
-              return Reflect.construct(OrigClass, [loc, options], new.target);
-            }
-            return OrigClass(loc, options);
-          }
-
-          HookedClass.prototype = OrigClass.prototype;
-          if (OrigClass.supportedLocalesOf) {
-            HookedClass.supportedLocalesOf = OrigClass.supportedLocalesOf;
-          }
-          makeNative(HookedClass, className, OrigClass.length);
-
-          const origResolved = OrigClass.prototype[Symbol.for(`__bocchi_orig_${className}_resolved__`)] || OrigClass.prototype.resolvedOptions;
-          if (origResolved) {
-            if (!OrigClass.prototype[Symbol.for(`__bocchi_orig_${className}_resolved__`)]) {
-              try { OrigClass.prototype[Symbol.for(`__bocchi_orig_${className}_resolved__`)] = origResolved; } catch (_) {}
-            }
-            const hookedResolved = createNativeFunction(function resolvedOptions() {
-              const res = origResolved.apply(this, arguments);
-              if (!isShieldActive('timezoneProtection')) {
-                return res;
-              }
-              if (res && (!res.locale || res.locale.toLowerCase().startsWith('zh') || res.locale === 'en')) {
-                res.locale = 'en-US';
-              }
-              return res;
-            }, 'resolvedOptions', 0, OrigClass.prototype);
-            OrigClass.prototype.resolvedOptions = hookedResolved;
-          }
-
-          OrigIntl[className] = HookedClass;
-        }
-
-        ['NumberFormat', 'PluralRules', 'RelativeTimeFormat', 'Collator', 'ListFormat', 'DisplayNames', 'Segmenter'].forEach(hookStandardIntlClass);
       }
     } catch (_) {}
 
     // 10. Web Worker & SharedWorker Cross-Context Protection
     try {
-      const origNavUA = (targetWin.navigator && targetWin.navigator.userAgent) || '';
-      let linuxUA = origNavUA && origNavUA.includes('Chrome/')
-        ? origNavUA.replace('HeadlessChrome/', 'Chrome/')
-        : 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
-      if (!linuxUA.includes('Linux')) {
-        linuxUA = linuxUA.replace(/\(([^)]+)\)/, '(X11; Linux x86_64)');
-      }
-      const isCYTWorker = host === 'coveryourtracks.eff.org';
-      const workerConcurrency = isCYTWorker ? 4 : 8;
+      // Mirror the main-thread degradation (hardwareConcurrency is a fixed
+      // common value on both sides — no CYT special-casing).
+      const workerConcurrency = 8;
 
       function generateWorkerBootstrap() {
-        const chromeMajorMatch = linuxUA.match(/Chrome\/(\d+)/);
-        const chromeMajor = chromeMajorMatch ? chromeMajorMatch[1] : '153';
-        const chromeFullMatch = linuxUA.match(/Chrome\/([\d.]+)/);
-        const fullVer = chromeFullMatch ? chromeFullMatch[1] : '153.0.0.0';
-
         return `(function() {
   'use strict';
   try {
-    const spoofedUA = ${JSON.stringify(linuxUA)};
-    const spoofedPlatform = 'Linux x86_64';
     const chosenConcurrency = ${workerConcurrency};
     const targetTz = ${JSON.stringify(activeTimezone)};
-    const spoofedLangs = Object.freeze(['en-US', 'en']);
-    const chromeMajor = ${JSON.stringify(chromeMajor)};
-    const fullVer = ${JSON.stringify(fullVer)};
+
+    // Self-contained native-look patch: without this, String(hookFn) inside the
+    // worker reveals this bootstrap source. Keeps every hook function's
+    // Function.prototype.toString output looking native.
+    const origFnToString = Function.prototype.toString;
+    const nativeTextMap = new WeakMap();
+    const makeNative = function(fn, fnName) {
+      try {
+        nativeTextMap.set(fn, 'function ' + (fnName || (fn && fn.name) || '') + '() { [native code] }');
+      } catch (_) {}
+      return fn;
+    };
+    const patchedFnToString = function toString() {
+      if (this === patchedFnToString) return 'function toString() { [native code] }';
+      if (nativeTextMap.has(this)) return nativeTextMap.get(this);
+      return origFnToString.apply(this, arguments);
+    };
+    makeNative(patchedFnToString, 'toString');
+    Function.prototype.toString = patchedFnToString;
 
     const nav = self.navigator;
     const navProto = (self.WorkerNavigator && self.WorkerNavigator.prototype) ||
@@ -2874,17 +3459,18 @@
                      (nav ? Object.getPrototypeOf(nav) : null);
 
     const defineProp = (proto, obj, prop, getVal) => {
+      const getter = makeNative(function() { return getVal(); }, 'get ' + prop);
       try {
         if (proto) {
           Object.defineProperty(proto, prop, {
-            get: function() { return getVal(); },
+            get: getter,
             set: undefined,
             enumerable: true,
             configurable: true
           });
         } else if (obj) {
           Object.defineProperty(obj, prop, {
-            get: function() { return getVal(); },
+            get: getter,
             set: undefined,
             enumerable: true,
             configurable: true
@@ -2895,60 +3481,11 @@
       }
     };
 
-    defineProp(navProto, nav, 'userAgent', () => spoofedUA);
-    defineProp(navProto, nav, 'appVersion', () => spoofedUA.replace(/^Mozilla\\//, ''));
-    defineProp(navProto, nav, 'platform', () => spoofedPlatform);
+    // Only hardware values stay spoofed here, mirroring the main-thread
+    // navigator hooks (deviceMemory / hardwareConcurrency); UA-family persona
+    // values are native on both the main thread and workers now.
     defineProp(navProto, nav, 'hardwareConcurrency', () => chosenConcurrency);
     defineProp(navProto, nav, 'deviceMemory', () => 8);
-    defineProp(navProto, nav, 'languages', () => spoofedLangs);
-    defineProp(navProto, nav, 'language', () => 'en-US');
-
-    // WorkerNavigator userAgentData
-    if (nav && nav.userAgentData) {
-      try {
-        const uad = nav.userAgentData;
-        const uadProto = Object.getPrototypeOf(uad);
-        if (uadProto) {
-          Object.defineProperty(uadProto, 'platform', {
-            get: function() { return 'Linux'; },
-            enumerable: true,
-            configurable: true
-          });
-          Object.defineProperty(uadProto, 'brands', {
-            get: function() {
-              return [
-                { brand: 'Chromium', version: chromeMajor },
-                { brand: 'Not_A Brand', version: '8' }
-              ];
-            },
-            enumerable: true,
-            configurable: true
-          });
-          const origHEV = uadProto.getHighEntropyValues;
-          if (origHEV) {
-            uadProto.getHighEntropyValues = function(hints) {
-              return origHEV.apply(this, arguments).then(res => {
-                if (res && typeof res === 'object') {
-                  return Object.assign({}, res, {
-                    platform: 'Linux',
-                    platformVersion: '',
-                    architecture: 'x86',
-                    bitness: '64',
-                    model: '',
-                    wow64: false,
-                    fullVersionList: [
-                      { brand: 'Chromium', version: fullVer },
-                      { brand: 'Not_A Brand', version: '8.0.0.0' }
-                    ]
-                  });
-                }
-                return res;
-              });
-            };
-          }
-        }
-      } catch (_) {}
-    }
 
     // performance.memory in worker
     if (self.performance && self.performance.memory) {
@@ -2956,7 +3493,7 @@
         const pmProto = Object.getPrototypeOf(self.performance.memory);
         if (pmProto) {
           Object.defineProperty(pmProto, 'jsHeapSizeLimit', {
-            get: function() { return 2172649472; },
+            get: makeNative(function() { return 2172649472; }, 'get jsHeapSizeLimit'),
             enumerable: true,
             configurable: true
           });
@@ -2964,77 +3501,28 @@
       } catch (_) {}
     }
 
-    // Intl in worker
-    if (self.Intl) {
-      function sanitizeWorkerLocales(locales) {
-        if (!locales) return 'en-US';
-        if (typeof locales === 'string') {
-          if (locales.toLowerCase().startsWith('zh')) return 'en-US';
-          return locales;
-        }
-        if (Array.isArray(locales)) {
-          if (locales.length === 0) return 'en-US';
-          const filtered = locales.filter(l => typeof l === 'string' && !l.toLowerCase().startsWith('zh'));
-          return filtered.length > 0 ? filtered : 'en-US';
-        }
-        return 'en-US';
+    // Intl in worker: timezone consistency only — default any missing
+    // timeZone to targetTz and report it via resolvedOptions. Locale
+    // handling stays fully native.
+    if (self.Intl && self.Intl.DateTimeFormat) {
+      const origDTF = self.Intl.DateTimeFormat;
+      function HookedDTF(locales, options) {
+        const opts = Object.assign({}, options);
+        if (!opts.timeZone) opts.timeZone = targetTz;
+        return origDTF.call(this, locales, opts);
       }
-
-      if (self.Intl.DateTimeFormat) {
-        const origDTF = self.Intl.DateTimeFormat;
-        function HookedDTF(locales, options) {
-          const loc = sanitizeWorkerLocales(locales);
-          const opts = Object.assign({}, options);
-          if (!opts.timeZone) opts.timeZone = targetTz;
-          return origDTF.call(this, loc, opts);
+      HookedDTF.prototype = origDTF.prototype;
+      HookedDTF.supportedLocalesOf = origDTF.supportedLocalesOf;
+      makeNative(HookedDTF, 'DateTimeFormat');
+      self.Intl.DateTimeFormat = HookedDTF;
+      const origResolved = origDTF.prototype.resolvedOptions;
+      origDTF.prototype.resolvedOptions = makeNative(function() {
+        const res = origResolved.apply(this, arguments);
+        if (res) {
+          res.timeZone = targetTz;
         }
-        HookedDTF.prototype = origDTF.prototype;
-        HookedDTF.supportedLocalesOf = origDTF.supportedLocalesOf;
-        self.Intl.DateTimeFormat = HookedDTF;
-        const origResolved = origDTF.prototype.resolvedOptions;
-        origDTF.prototype.resolvedOptions = function() {
-          const res = origResolved.apply(this, arguments);
-          if (res) {
-            res.timeZone = targetTz;
-            res.locale = 'en-US';
-          }
-          return res;
-        };
-      }
-
-      ['NumberFormat', 'PluralRules', 'RelativeTimeFormat', 'Collator', 'ListFormat', 'DisplayNames', 'Segmenter'].forEach(function(className) {
-        if (!self.Intl[className]) return;
-        const OrigClass = self.Intl[className];
-        function HookedClass(locales, options) {
-          const loc = sanitizeWorkerLocales(locales);
-          if (new.target) {
-            return Reflect.construct(OrigClass, [loc, options], new.target);
-          }
-          return OrigClass(loc, options);
-        }
-        HookedClass.prototype = OrigClass.prototype;
-        if (OrigClass.supportedLocalesOf) {
-          HookedClass.supportedLocalesOf = OrigClass.supportedLocalesOf;
-        }
-        const origResolved = OrigClass.prototype.resolvedOptions;
-        if (origResolved) {
-          OrigClass.prototype.resolvedOptions = function() {
-            const res = origResolved.apply(this, arguments);
-            if (res && (!res.locale || res.locale.toLowerCase().startsWith('zh') || res.locale === 'en')) {
-              res.locale = 'en-US';
-            }
-            return res;
-          };
-        }
-        self.Intl[className] = HookedClass;
-      });
-    }
-
-    if (self.Number && self.Number.prototype) {
-      const origNumToLocale = self.Number.prototype.toLocaleString;
-      self.Number.prototype.toLocaleString = function(locales, options) {
-        return origNumToLocale.call(this, sanitizeWorkerLocales(locales), options);
-      };
+        return res;
+      }, 'resolvedOptions');
     }
 
     // Date timezone and string formatting in worker
@@ -3092,55 +3580,71 @@
         }
       }
 
-      self.Date.prototype.getTimezoneOffset = function() {
+      self.Date.prototype.getTimezoneOffset = makeNative(function() {
         const parts = getWorkerZonedParts(this);
         return parts ? parts.offsetMin : (origGetTimezoneOffset ? origGetTimezoneOffset.call(this) : 420);
-      };
+      }, 'getTimezoneOffset');
 
-      self.Date.prototype.toString = function() {
+      self.Date.prototype.toString = makeNative(function() {
         const parts = getWorkerZonedParts(this);
         if (!parts) return origToString ? origToString.call(this) : '';
         return parts.weekdayShort + ' ' + parts.monthShort + ' ' + parts.day + ' ' + parts.year + ' ' + parts.hour + ':' + parts.minute + ':' + parts.second + ' ' + parts.gmtStr + ' (' + parts.tzName + ')';
-      };
+      }, 'toString');
 
-      self.Date.prototype.toTimeString = function() {
+      self.Date.prototype.toTimeString = makeNative(function() {
         const parts = getWorkerZonedParts(this);
         if (!parts) return '';
         return parts.hour + ':' + parts.minute + ':' + parts.second + ' ' + parts.gmtStr + ' (' + parts.tzName + ')';
-      };
+      }, 'toTimeString');
     }
 
     // self.fonts in worker
     if (self.fonts && typeof self.fonts.check === 'function') {
       const origFontsCheck = self.fonts.check;
-      self.fonts.check = function(font, text) {
+      self.fonts.check = makeNative(function(font, text) {
         if (typeof font === 'string') {
           if (/(?:simsun|nsimsun|simhei|yahei|wenquanyi|pingfang|kaiti|fangsong)/i.test(font)) return false;
         }
         return origFontsCheck.apply(this, arguments);
-      };
+      }, 'check');
     }
 
     // OffscreenCanvas WebGL in worker
     if (typeof self.OffscreenCanvas !== 'undefined' && self.OffscreenCanvas.prototype && self.OffscreenCanvas.prototype.getContext) {
       const origOCGetContext = self.OffscreenCanvas.prototype.getContext;
-      self.OffscreenCanvas.prototype.getContext = function(type, attribs) {
+      self.OffscreenCanvas.prototype.getContext = makeNative(function(type, attribs) {
         const ctx = origOCGetContext.apply(this, arguments);
         if (ctx && (type === 'webgl' || type === 'experimental-webgl' || type === 'webgl2')) {
           const origGP = ctx.getParameter;
-          ctx.getParameter = function(pname) {
+          ctx.getParameter = makeNative(function(pname) {
             if (pname === 0x1F00) return 'WebKit';
             if (pname === 0x1F01) return 'WebKit WebGL';
-            if (pname === 37445) return 'Google Inc. (NVIDIA)';
-            if (pname === 37446) return 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060/PCIe/SSE2, OpenGL 4.5.0 NVIDIA 535.183.01)';
+            if (pname === 37445) return 'Google Inc. (Intel)';
+            if (pname === 37446) return 'Mesa Intel(R) UHD Graphics (CML GT2)';
+            // MAX_TEXTURE_SIZE: keep worker reads identical to the main-thread
+            // Intel UHD (CML GT2) persona.
+            if (pname === 0x0D33) return 16384;
             return origGP.apply(this, arguments);
-          };
+          }, 'getParameter');
         }
         return ctx;
-      };
+      }, 'getContext');
     }
   } catch (_) {}
 })();`;
+      }
+
+      // Blob URLs created for worker bootstrap wrapping; revoked once on
+      // pagehide. No per-worker immediate revoke: dynamically importScripts-ing
+      // workers would break if their blob URL disappeared mid-flight.
+      const workerBlobURLs = new Set();
+      if (typeof targetWin.addEventListener === 'function') {
+        targetWin.addEventListener('pagehide', function() {
+          for (const blobURL of workerBlobURLs) {
+            try { targetWin.URL.revokeObjectURL(blobURL); } catch (_) {}
+          }
+          workerBlobURLs.clear();
+        }, { once: true, passive: true });
       }
 
       function wrapWorkerScript(scriptURL, options) {
@@ -3163,218 +3667,11 @@
           try {
             const blob = new targetWin.Blob([fullSource], { type: 'application/javascript' });
             const blobURL = targetWin.URL.createObjectURL(blob);
+            try { workerBlobURLs.add(blobURL); } catch (_) {}
             return { wrappedURL: blobURL, isWrapped: true };
           } catch (_) {}
         }
         return { wrappedURL: scriptURL, isWrapped: false };
-      }
-
-      function sanitizeWorkerData(data) {
-        if (!isShieldActive()) return data;
-        if (!data || typeof data !== 'object') return data;
-        try {
-          let modified = false;
-          const res = Object.assign({}, data);
-          if (typeof res.userAgent === 'string' && res.userAgent !== linuxUA) {
-            res.userAgent = linuxUA;
-            modified = true;
-          }
-          if (typeof res.appVersion === 'string') {
-            res.appVersion = linuxUA.replace(/^Mozilla\//, '');
-            modified = true;
-          }
-          if (typeof res.platform === 'string' && res.platform !== 'Linux x86_64') {
-            res.platform = 'Linux x86_64';
-            modified = true;
-          }
-          if (typeof res.language === 'string' && res.language !== 'en-US') {
-            res.language = 'en-US';
-            modified = true;
-          }
-          if (Array.isArray(res.languages) && (res.languages.length !== 2 || res.languages[0] !== 'en-US')) {
-            res.languages = ['en-US', 'en'];
-            modified = true;
-          }
-          if (typeof res.languages === 'string' && res.languages !== 'en-US,en') {
-            res.languages = 'en-US,en';
-            modified = true;
-          }
-          if (typeof res.locale === 'string' && res.locale !== 'en-US') {
-            res.locale = 'en-US';
-            modified = true;
-          }
-          if (typeof res.timezoneLocation === 'string' && res.timezoneLocation !== activeTimezone) {
-            res.timezoneLocation = activeTimezone;
-            modified = true;
-          }
-          if (res.lied !== undefined && res.lied !== 0 && res.lied !== false) {
-            res.lied = 0;
-            modified = true;
-          }
-          if (res.lies && typeof res.lies === 'object') {
-            res.lies = { proto: false };
-            modified = true;
-          }
-          if (typeof res.uaDataPlatform === 'string' && res.uaDataPlatform !== 'Linux') {
-            res.uaDataPlatform = 'Linux';
-            modified = true;
-          }
-          if (typeof res.hardwareConcurrency === 'number' && res.hardwareConcurrency !== workerConcurrency) {
-            res.hardwareConcurrency = workerConcurrency;
-            modified = true;
-          }
-          if (typeof res.deviceMemory === 'number' && res.deviceMemory !== 8) {
-            res.deviceMemory = 8;
-            modified = true;
-          }
-          if (typeof res.webglVendor === 'string' && res.webglVendor !== 'NA') {
-            res.webglVendor = 'Google Inc. (NVIDIA)';
-            modified = true;
-          }
-          if (typeof res.webglRenderer === 'string' && res.webglRenderer !== 'NA') {
-            res.webglRenderer = 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060/PCIe/SSE2, OpenGL 4.5.0 NVIDIA 535.183.01)';
-            modified = true;
-          }
-          const chromeMatch = linuxUA.match(/Chrome\/(\d+)/);
-          const chromeMajor = chromeMatch ? chromeMatch[1] : '153';
-          const chromeFull = (linuxUA.match(/Chrome\/([\d.]+)/) || [])[1] || '153.0.0.0';
-
-          if (res.userAgentData && typeof res.userAgentData === 'object') {
-            res.userAgentData = Object.assign({}, res.userAgentData, {
-              architecture: 'x86',
-              bitness: '64',
-              brands: [
-                { brand: 'Chromium', version: chromeMajor },
-                { brand: 'Not_A Brand', version: '8' }
-              ],
-              mobile: false,
-              model: '',
-              platform: 'Linux',
-              platformVersion: '',
-              uaFullVersion: chromeFull
-            });
-            modified = true;
-          }
-          if (res.highEntropy && typeof res.highEntropy === 'object') {
-            const fvlDisplay = `Chromium ${chromeFull}, Not_A Brand 8.0.0.0`;
-            const fvlArray = [
-              { brand: 'Chromium', version: chromeFull },
-              { brand: 'Not_A Brand', version: '8.0.0.0' }
-            ];
-            res.highEntropy = Object.assign({}, res.highEntropy, {
-              architecture: 'x86',
-              bitness: '64',
-              platform: 'Linux',
-              platformVersion: '',
-              model: '',
-              wow64: false,
-              uaFullVersion: chromeFull,
-              fullVersionList: typeof res.highEntropy.fullVersionList === 'string' ? fvlDisplay : fvlArray
-            });
-            modified = true;
-          }
-          if (res.webgl && typeof res.webgl === 'object') {
-            res.webgl = Object.assign({}, res.webgl, {
-              vendor: 'WebKit',
-              renderer: 'WebKit WebGL',
-              debugVendor: 'Google Inc. (NVIDIA)',
-              debugRenderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060/PCIe/SSE2, OpenGL 4.5.0 NVIDIA 535.183.01)'
-            });
-            modified = true;
-          }
-          if (res.intl && typeof res.intl === 'object') {
-            const now = new targetWin.Date();
-            const jan = new targetWin.Date(targetWin.Date.UTC(2024, 0, 15, 12, 0, 0));
-            const jul = new targetWin.Date(targetWin.Date.UTC(2024, 6, 15, 12, 0, 0));
-            const fixedDate = new targetWin.Date(1600000000000);
-            res.intl = Object.assign({}, res.intl, {
-              timeZone: activeTimezone,
-              locale: 'en-US',
-              calendar: 'gregory',
-              numberingSystem: 'latn',
-              offsetNow: now.getTimezoneOffset(),
-              offsetJan: jan.getTimezoneOffset(),
-              offsetJul: jul.getTimezoneOffset(),
-              dateString: fixedDate.toString()
-            });
-            modified = true;
-          }
-          if (typeof res.fontsBits === 'string' && res.fontsBits !== 'NA') {
-            res.fontsBits = '1'.repeat(res.fontsBits.length);
-            modified = true;
-          }
-          if (res.data && typeof res.data === 'object') {
-            res.data = sanitizeWorkerData(res.data);
-            modified = true;
-          }
-          return modified ? res : data;
-        } catch (_) {
-          return data;
-        }
-      }
-
-      function attachMessageSanitizer(portOrWorker) {
-        if (!portOrWorker) return;
-        try {
-          const origAddEventListener = portOrWorker.addEventListener;
-          if (origAddEventListener) {
-            portOrWorker.addEventListener = function(type, listener, options) {
-              if (type === 'message' && typeof listener === 'function') {
-                const wrappedListener = function(ev) {
-                  if (ev && ev.data) {
-                    const sanitized = sanitizeWorkerData(ev.data);
-                    if (sanitized !== ev.data) {
-                      try {
-                        const syntheticEv = new MessageEvent('message', {
-                          data: sanitized,
-                          origin: ev.origin,
-                          lastEventId: ev.lastEventId,
-                          source: ev.source,
-                          ports: ev.ports
-                        });
-                        return listener.call(this, syntheticEv);
-                      } catch (_) {}
-                    }
-                  }
-                  return listener.call(this, ev);
-                };
-                return origAddEventListener.call(this, type, wrappedListener, options);
-              }
-              return origAddEventListener.apply(this, arguments);
-            };
-          }
-
-          let userOnMessage = null;
-          Object.defineProperty(portOrWorker, 'onmessage', {
-            get() { return userOnMessage; },
-            set(fn) { userOnMessage = (typeof fn === 'function') ? fn : null; },
-            configurable: true,
-            enumerable: true
-          });
-
-          if (origAddEventListener) {
-            origAddEventListener.call(portOrWorker, 'message', function(ev) {
-              if (typeof userOnMessage === 'function') {
-                let eventToSend = ev;
-                if (ev && ev.data) {
-                  const sanitized = sanitizeWorkerData(ev.data);
-                  if (sanitized !== ev.data) {
-                    try {
-                      eventToSend = new MessageEvent('message', {
-                        data: sanitized,
-                        origin: ev.origin,
-                        lastEventId: ev.lastEventId,
-                        source: ev.source,
-                        ports: ev.ports
-                      });
-                    } catch (_) {}
-                  }
-                }
-                userOnMessage.call(this, eventToSend);
-              }
-            });
-          }
-        } catch (_) {}
       }
 
       // Hook targetWin.Worker & SharedWorker
@@ -3390,8 +3687,20 @@
             let isWrapped = false;
             let wrappedURL = scriptURL;
 
-            // SharedWorker cannot use blob: URLs in Chromium (throws SecurityError).
-            // Dedicated Worker can try bootstrap wrapping if supported.
+            // SharedWorker wrapping is intentionally skipped (kept unwrapped):
+            // Chrome *does* construct and run SharedWorker from a blob: URL, but
+            // shared-worker identity is (origin, script URL, name), and every
+            // URL.createObjectURL() mints a unique URL. Each construction - and
+            // each document running this engine - would get its own private
+            // worker, so the worker "works" but is silently NOT shared across
+            // tabs (Vite and Parcel both shipped this bug and reverted it; Vite
+            // switched to data: URLs, which share but run on an opaque origin
+            // where importScripts() - required by our bootstrap - fails).
+            // Wrapping would break single-connection/single-state guarantees of
+            // real apps, so SharedWorker construction is left fully native and
+            // unwrapped. If worker-side hooks are ever needed for SharedWorker,
+            // inject config through the first port message from the page-side
+            // wrapper instead of a blob bootstrap.
             if (!isShared) {
               const res = wrapWorkerScript(scriptURL, options);
               wrappedURL = res.wrappedURL;
@@ -3411,13 +3720,6 @@
               }
             }
 
-            if (instance) {
-              if (isShared && instance.port) {
-                attachMessageSanitizer(instance.port);
-              } else {
-                attachMessageSanitizer(instance);
-              }
-            }
             return instance;
           }, name, OrigWorker.length, OrigWorker.prototype);
 
@@ -3433,10 +3735,26 @@
           }
         }
       });
+    } catch (_) {}
 
-      if (targetWin.navigator && targetWin.navigator.serviceWorker) {
-        attachMessageSanitizer(targetWin.navigator.serviceWorker);
-      }
+    // Cross-instance completion mark (see getSharedPatchMarks): a fresh
+    // non-registered Symbol plus a random value frozen onto targetWin, and the
+    // { s, v } pair stored in the shared WeakMap. Recorded only after every
+    // hook section above has run, so a mark always means "fully patched".
+    // Every step is best-effort: a cross-origin window (or a frozen object)
+    // makes defineProperty throw, which must never abort the patching that
+    // already happened above.
+    try {
+      const sharedMarks = getSharedPatchMarks();
+      const markSymbol = Symbol();
+      const markValue = randomHex16();
+      Object.defineProperty(targetWin, markSymbol, {
+        value: markValue,
+        enumerable: false,
+        configurable: false,
+        writable: false
+      });
+      sharedMarks.set(targetWin, { s: markSymbol, v: markValue });
     } catch (_) {}
   }
 

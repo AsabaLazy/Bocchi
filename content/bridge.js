@@ -5,18 +5,43 @@
  *
  * Runs in ISOLATED world at document_start.
  * Reads egress IP timezone and privacy shield configuration cached in chrome.storage.local
- * and synchronously synchronizes it to the MAIN world stealth engine via custom events.
+ * and synchronizes it to the MAIN world stealth engine over a handshake-secured
+ * channel (protocol v2):
+ *
+ *  1. The MAIN world engine generates a random token T and a random config event
+ *     name CE, then dispatches '__bocchi_hs__' with detail { t: T, e: CE }.
+ *  2. Because the engine runs before this script, we missed the initial broadcast;
+ *     we dispatch '__bocchi_req__' at once so the engine re-sends the handshake.
+ *     This exchange happens in the document_start window, before any page script
+ *     can observe it.
+ *  3. All config syncs afterwards go to CE with detail { t: T, tz?, fonts?, cfg? }.
+ *     The engine validates detail.t === T and ignores anything else, so page
+ *     scripts can neither spoof config events nor learn the channel name.
+ *  4. No fallback: if no handshake ever arrives (engine missing), payloads are
+ *     simply dropped — the engine no longer listens on any fixed event name,
+ *     so dispatching there would only broadcast into the void, and without an
+ *     engine there is no protection left to configure anyway.
  */
+
 (() => {
-  if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) {
-    return;
-  }
+  // Handshake state. The token/channel are only ever set from the first valid
+  // '__bocchi_hs__' handshake, which is exchanged in the document_start
+  // window before any page script can run or observe it.
+  let handshakeToken = null;   // T: 16-byte hex string from the engine
+  let configEventName = null;  // CE: random config event name from the engine
 
   const ALL_KEYS = [
     'timezone', 'targetTimezone',
     'customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'fontMode', 'blockOtherScripts',
     'globalShieldEnabled', 'siteBypassList',
     'canvasProtection', 'webrtcProtection', 'audioProtection', 'timezoneProtection', 'hardwareProtection', 'fontProtection'
+  ];
+
+  const SHIELD_KEYS = [
+    'globalShieldEnabled', 'siteBypassList',
+    'canvasProtection', 'webrtcProtection', 'audioProtection',
+    'timezoneProtection', 'hardwareProtection', 'fontProtection',
+    'blockOtherScripts'
   ];
 
   function normalizeDomain(d) {
@@ -39,112 +64,173 @@
     });
   }
 
-  function dispatchTimezone(tz) {
-    if (!tz || typeof tz !== 'string') return;
+  function safeDispatch(name, detail) {
     try {
-      const event = new CustomEvent('__bocchi_tz_sync__', {
-        detail: { timezone: tz }
-      });
-      document.dispatchEvent(event);
+      document.dispatchEvent(new CustomEvent(name, { detail: detail }));
     } catch (_) {}
   }
 
-  function dispatchFontConfig(customFonts, allowedFonts, blockBuiltin, fontMode, blockOther, fontProt) {
+  // ------------------------------------------------------------------
+  // Handshake handling (protocol v2)
+  // ------------------------------------------------------------------
+
+  function onHandshake(evt) {
     try {
-      const event = new CustomEvent('__bocchi_fonts_sync__', {
-        detail: {
-          customFonts: Array.isArray(customFonts) ? customFonts : [],
-          allowedFonts: Array.isArray(allowedFonts) ? allowedFonts : [],
-          blockBuiltin: typeof blockBuiltin === 'boolean' ? blockBuiltin : true,
-          fontMode: typeof fontMode === 'string' ? fontMode : 'blacklist',
-          blockOtherScripts: typeof blockOther === 'boolean' ? blockOther : false,
-          fontProtection: typeof fontProt === 'boolean' ? fontProt : true
-        }
-      });
-      document.dispatchEvent(event);
+      // First valid handshake wins. Later '__bocchi_hs__' events could be
+      // forged by page scripts (the handshake event name is public); the
+      // engine never legitimately changes {T, CE} mid-session, so ignoring
+      // anything after the first handshake prevents channel hijacking.
+      if (handshakeToken !== null) {
+        return;
+      }
+      const d = evt && evt.detail;
+      if (!d || typeof d.t !== 'string' || !d.t || typeof d.e !== 'string' || !d.e) {
+        return;
+      }
+      handshakeToken = d.t;
+      configEventName = d.e;
+      // Push a full config payload over the secured channel.
+      sendInitialConfig();
     } catch (_) {}
   }
 
-  function dispatchShieldConfig(res) {
-    try {
-      const bypassList = Array.isArray(res && res.siteBypassList) ? res.siteBypassList : [];
-      const isBypassed = calculateIsBypassed(bypassList);
+  // ------------------------------------------------------------------
+  // Payload builders. Field names/defaults mirror the engine-side handler
+  // of the secured config event (d.tz / d.fonts / d.cfg in section 9), so
+  // every payload parses directly into the engine registries.
+  // ------------------------------------------------------------------
 
-      const event = new CustomEvent('__bocchi_config_sync__', {
-        detail: {
-          globalShieldEnabled: res ? res.globalShieldEnabled !== false : true,
-          isBypassed: isBypassed,
-          siteBypassList: bypassList,
-          canvasProtection: res ? res.canvasProtection !== false : true,
-          webrtcProtection: res ? res.webrtcProtection !== false : true,
-          audioProtection: res ? res.audioProtection !== false : true,
-          timezoneProtection: res ? res.timezoneProtection !== false : true,
-          hardwareProtection: res ? res.hardwareProtection !== false : true,
-          fontProtection: res ? res.fontProtection !== false : true,
-          blockOtherScripts: res ? !!res.blockOtherScripts : false
-        }
-      });
-      document.dispatchEvent(event);
-    } catch (_) {}
+  function buildFontsDetail(res) {
+    return {
+      customFonts: Array.isArray(res && res.customHiddenFonts) ? res.customHiddenFonts : [],
+      allowedFonts: Array.isArray(res && res.customAllowedFonts) ? res.customAllowedFonts : [],
+      blockBuiltin: res && typeof res.blockBuiltinChineseFonts === 'boolean' ? res.blockBuiltinChineseFonts : true,
+      fontMode: res && typeof res.fontMode === 'string' ? res.fontMode : 'blacklist',
+      blockOtherScripts: res && typeof res.blockOtherScripts === 'boolean' ? res.blockOtherScripts : false,
+      fontProtection: res && typeof res.fontProtection === 'boolean' ? res.fontProtection : true
+    };
   }
 
-  // Initial read from chrome.storage.local
-  chrome.storage.local.get(ALL_KEYS, (res) => {
-    const tz = (res && (res.timezone || res.targetTimezone));
-    if (tz) {
-      dispatchTimezone(tz);
-    } else if (chrome.runtime && chrome.runtime.sendMessage) {
+  function buildCfgDetail(res) {
+    const bypassList = Array.isArray(res && res.siteBypassList) ? res.siteBypassList : [];
+    return {
+      globalShieldEnabled: res ? res.globalShieldEnabled !== false : true,
+      isBypassed: calculateIsBypassed(bypassList),
+      siteBypassList: bypassList,
+      canvasProtection: res ? res.canvasProtection !== false : true,
+      webrtcProtection: res ? res.webrtcProtection !== false : true,
+      audioProtection: res ? res.audioProtection !== false : true,
+      timezoneProtection: res ? res.timezoneProtection !== false : true,
+      hardwareProtection: res ? res.hardwareProtection !== false : true,
+      fontProtection: res ? res.fontProtection !== false : true,
+      blockOtherScripts: res ? !!res.blockOtherScripts : false
+    };
+  }
+
+  // Send a config payload. `payload` may contain any subset of
+  // { tz, fonts, cfg }.
+  // Route: CE (with token) after handshake; dropped otherwise.
+  function sendPayload(payload) {
+    if (typeof payload !== 'object' || !payload) return;
+
+    if (handshakeToken !== null && configEventName !== null) {
       try {
-        chrome.runtime.sendMessage({ type: 'GET_TIMEZONE' }, (response) => {
-          if (response && response.timezone) {
-            dispatchTimezone(response.timezone);
-          }
-        });
+        payload.t = handshakeToken;
       } catch (_) {}
+      safeDispatch(configEventName, payload);
+      return;
     }
 
-    dispatchFontConfig(
-      res && res.customHiddenFonts,
-      res && res.customAllowedFonts,
-      res && res.blockBuiltinChineseFonts,
-      res && res.fontMode,
-      res && res.blockOtherScripts,
-      res && res.fontProtection
-    );
+    // No handshake yet: drop the payload. The engine is the only possible
+    // listener, it has not announced a channel, and if it never loads there
+    // is no protection to configure. A later handshake triggers a full
+    // config push from the handshake handler, so nothing is lost.
+  }
 
-    dispatchShieldConfig(res || {});
-  });
+  // ------------------------------------------------------------------
+  // Initial sync: read all keys, fetch timezone via runtime message as a
+  // fallback, then send one full tz+fonts+cfg payload.
+  // ------------------------------------------------------------------
 
-  // Listen for real-time changes
-  if (chrome.storage.onChanged) {
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area === 'local') {
-        if (changes.timezone || changes.targetTimezone) {
-          const newTz = (changes.timezone && changes.timezone.newValue) ||
-                        (changes.targetTimezone && changes.targetTimezone.newValue);
-          if (newTz) {
-            dispatchTimezone(newTz);
-          }
+  function sendInitialConfig() {
+    try {
+      if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local || !chrome.storage.local.get) {
+        return;
+      }
+      chrome.storage.local.get(ALL_KEYS, (res) => {
+        let tz = (res && (res.timezone || res.targetTimezone));
+        if (!tz && typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+          try {
+            chrome.runtime.sendMessage({ type: 'GET_TIMEZONE' }, (response) => {
+              if (response && response.timezone) {
+                sendPayload({ tz: response.timezone });
+              }
+            });
+          } catch (_) {}
         }
-        if (changes.customHiddenFonts || changes.customAllowedFonts || changes.blockBuiltinChineseFonts || changes.fontMode || changes.blockOtherScripts || changes.fontProtection) {
-          chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'fontMode', 'blockOtherScripts', 'fontProtection'], (res) => {
-            dispatchFontConfig(
-              res && res.customHiddenFonts,
-              res && res.customAllowedFonts,
-              res && res.blockBuiltinChineseFonts,
-              res && res.fontMode,
-              res && res.blockOtherScripts,
-              res && res.fontProtection
-            );
-          });
-        }
-        const SHIELD_KEYS = ['globalShieldEnabled', 'siteBypassList', 'canvasProtection', 'webrtcProtection', 'audioProtection', 'timezoneProtection', 'hardwareProtection', 'fontProtection', 'blockOtherScripts'];
-        if (SHIELD_KEYS.some(k => k in changes)) {
-          chrome.storage.local.get(ALL_KEYS, (res) => {
-            dispatchShieldConfig(res || {});
-          });
+
+        const payload = {
+          tz: tz || undefined,
+          fonts: buildFontsDetail(res),
+          cfg: buildCfgDetail(res)
+        };
+        sendPayload(payload);
+      });
+    } catch (_) {}
+  }
+
+  // ------------------------------------------------------------------
+  // Real-time sync: incremental payloads on storage changes.
+  // ------------------------------------------------------------------
+
+  function onStorageChanged(changes, area) {
+    try {
+      if (area !== 'local' || !changes) {
+        return;
+      }
+
+      if (changes.timezone || changes.targetTimezone) {
+        const newTz = (changes.timezone && changes.timezone.newValue) ||
+                      (changes.targetTimezone && changes.targetTimezone.newValue);
+        if (newTz) {
+          sendPayload({ tz: newTz });
         }
       }
-    });
+      if (changes.customHiddenFonts || changes.customAllowedFonts || changes.blockBuiltinChineseFonts || changes.fontMode || changes.blockOtherScripts || changes.fontProtection) {
+        chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'fontMode', 'blockOtherScripts', 'fontProtection'], (res) => {
+          sendPayload({ fonts: buildFontsDetail(res) });
+        });
+      }
+      if (SHIELD_KEYS.some(k => k in changes)) {
+        chrome.storage.local.get(ALL_KEYS, (res) => {
+          sendPayload({ cfg: buildCfgDetail(res) });
+        });
+      }
+    } catch (_) {}
   }
+
+  // ------------------------------------------------------------------
+  // Bootstrap
+  // ------------------------------------------------------------------
+
+  try {
+    if (typeof document !== 'undefined' && document.addEventListener) {
+      // a. Register the handshake listener immediately.
+      document.addEventListener('__bocchi_hs__', onHandshake, true);
+
+      // b. Ask the engine to re-send the handshake we missed at document_start.
+      //    The engine answers synchronously, so onHandshake above already
+      //    pushes the full config over the secured channel. If the engine is
+      //    missing, no handshake ever arrives and every payload is dropped
+      //    (there is no protection to configure); no retry or legacy fallback
+      //    is needed.
+      safeDispatch('__bocchi_req__', null);
+    }
+  } catch (_) {}
+
+  try {
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged && chrome.storage.onChanged.addListener) {
+      chrome.storage.onChanged.addListener(onStorageChanged);
+    }
+  } catch (_) {}
 })();
