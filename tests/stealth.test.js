@@ -47,21 +47,21 @@ assert(rule2 && rule2.action.type === 'block', 'Rule 2 must block eviltracker.ne
 const rule3 = rules.find(r => r.condition.urlFilter === '||do-not-tracker.org');
 assert(rule3 && rule3.action.type === 'allow' && rule3.priority > rule1.priority, 'Rule 3 must allow do-not-tracker.org with higher priority');
 
-// Rule 4: modifyHeaders for DNT, Sec-GPC, Accept-Language, Sec-CH-UA-Platform, and User-Agent
+// Rule 4: modifyHeaders owns ONLY the static, non-persona headers
+// (DNT, Sec-GPC). User-Agent / Accept-Language and every Sec-CH-* client hint
+// are gone: personas were removed entirely (native passthrough), so no
+// UA-related header is rewritten anymore.
 const rule4 = rules.find(r => r.action.type === 'modifyHeaders');
 assert(rule4, 'Must have modifyHeaders rule');
 const dntHeader = rule4.action.requestHeaders.find(h => h.header === 'DNT');
 const gpcHeader = rule4.action.requestHeaders.find(h => h.header === 'Sec-GPC');
-const langHeader = rule4.action.requestHeaders.find(h => h.header === 'Accept-Language');
-const uaHeader = rule4.action.requestHeaders.find(h => h.header === 'User-Agent');
-const platVerHeader = rule4.action.requestHeaders.find(h => h.header === 'Sec-CH-UA-Platform-Version');
-const mobileHeader = rule4.action.requestHeaders.find(h => h.header === 'Sec-CH-UA-Mobile');
 assert(dntHeader && dntHeader.value === '1', 'DNT header must be set to 1');
 assert(gpcHeader && gpcHeader.value === '1', 'Sec-GPC header must be set to 1');
-assert(langHeader && langHeader.value === 'en-US,en;q=0.9', 'Accept-Language header must be set to en-US,en;q=0.9');
-assert(uaHeader && uaHeader.value.includes('Linux x86_64'), 'User-Agent header must spoof Linux x86_64');
-assert(platVerHeader && platVerHeader.value === '""', 'Sec-CH-UA-Platform-Version header must be empty string on Linux');
-assert(mobileHeader && mobileHeader.value === '?0', 'Sec-CH-UA-Mobile header must be "?0"');
+const rule4Headers = rule4.action.requestHeaders.map(h => h.header);
+assert.strictEqual(rule4Headers.length, 2, 'Static modifyHeaders rule must contain exactly the 2 static headers');
+assert(!rule4Headers.includes('Accept-Language'), 'Accept-Language must NOT be set statically (language is passed through natively)');
+assert(!rule4Headers.includes('User-Agent'), 'User-Agent must NOT be in static rules (native passthrough)');
+assert(!rule4Headers.some(h => h.startsWith('Sec-CH-')), 'All Sec-CH-* client hint headers must be removed from static rules');
 console.log('✓ rules/cyt_rules.json is fully valid and compliant.\n');
 
 // 3. Test background/service_worker.js
@@ -106,15 +106,6 @@ const mockChrome = {
     onInstalled: { addListener(fn) { installedListeners.push(fn); } },
     onStartup: { addListener(fn) { startupListeners.push(fn); } },
     onMessage: { addListener(fn) {} }
-  },
-  declarativeNetRequest: {
-    updateDynamicRules(options, cb) {
-      if (options.addRules) {
-        mockChrome._dynamicRules = options.addRules;
-      }
-      if (cb) cb();
-      return Promise.resolve();
-    }
   }
 };
 
@@ -137,16 +128,23 @@ const swContext = vm.createContext({
   chrome: mockChrome,
   console: console,
   fetch: mockFetch,
+  crypto: { randomUUID: () => 'sw-test-session-key-uuid' },
   module: swModule,
   exports: swModule.exports
 });
 vm.runInContext(swCode, swContext);
 
-assert.strictEqual(policySet, 'disable_non_proxied_udp', 'Service worker must set webRTCIPHandlingPolicy to disable_non_proxied_udp');
 assert.strictEqual(installedListeners.length, 1, 'Service worker must register onInstalled listener');
 assert.strictEqual(startupListeners.length, 1, 'Service worker must register onStartup listener');
 
 (async () => {
+  // applyWebRTCPolicy now always reads chrome.storage.local through a Promise
+  // (the old synchronous callback shortcut was dead code and was removed), so
+  // the policy write lands in a microtask; flush the queue before asserting.
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.strictEqual(policySet, 'disable_non_proxied_udp', 'Service worker must set webRTCIPHandlingPolicy to disable_non_proxied_udp');
+
   const { fetchEgressTimezone, syncTimezone } = swModule.exports;
   assert(typeof fetchEgressTimezone === 'function', 'fetchEgressTimezone must be a function');
   assert(typeof syncTimezone === 'function', 'syncTimezone must be a function');
@@ -177,14 +175,12 @@ assert.strictEqual(startupListeners.length, 1, 'Service worker must register onS
   mockFetchError = false;
   mockFetchReturn = { timezone: { id: 'America/Denver' } };
   await syncTimezone();
-  // syncUserAgentRule updates dynamic DNR rule 1001 with Linux User-Agent
-  const { syncUserAgentRule } = swModule.exports;
-  assert(typeof syncUserAgentRule === 'function', 'syncUserAgentRule must be a function');
-  await syncUserAgentRule();
-  assert(mockChrome._dynamicRules && mockChrome._dynamicRules.length > 0, 'syncUserAgentRule must register dynamic rules');
-  const dnrRule = mockChrome._dynamicRules.find(r => r.id === 1001);
-  assert(dnrRule, 'Dynamic rule 1001 must exist');
-  assert(dnrRule.action.requestHeaders.some(h => h.header === 'User-Agent' && h.value.includes('Linux x86_64')), 'Rule 1001 must set Linux x86_64 UA');
+
+  // Persona machinery was removed entirely: the service worker must NOT
+  // export syncUserAgentRule and must not touch declarativeNetRequest.
+  assert.strictEqual(swModule.exports.syncUserAgentRule, undefined, 'syncUserAgentRule must no longer be exported (no UA persona)');
+
+  console.log('✓ background/service_worker.js fully valid (policy, timezone, alarms).');
 })();
 
 // Test content/bridge.js isolated world bridge
@@ -192,13 +188,36 @@ console.log('Validating content/bridge.js isolated world bridge...');
 const bridgePath = path.join(__dirname, '../content/bridge.js');
 const bridgeCode = fs.readFileSync(bridgePath, 'utf8');
 
+// Bridge storage mock with per-key data so both the full initial read
+// (ALL_KEYS) and the incremental font/shield reads observe their values.
+const bridgeStorageData = {
+  targetTimezone: 'America/New_York',
+  customHiddenFonts: [],
+  customAllowedFonts: [],
+  blockBuiltinChineseFonts: true,
+  fontMode: 'blacklist',
+  blockOtherScripts: false,
+  fontProtection: true,
+  globalShieldEnabled: true,
+  siteBypassList: ['https://figma.com'],
+  canvasProtection: true,
+  webrtcProtection: true,
+  audioProtection: true,
+  timezoneProtection: true,
+  hardwareProtection: true
+};
 const dispatchedBridgeEvents = [];
 let bridgeStorageChangedListener = null;
+const bridgeDocListeners = {};
 const bridgeMockChrome = {
   storage: {
     local: {
       get(keys, cb) {
-        cb({ targetTimezone: 'America/New_York' });
+        const res = {};
+        (Array.isArray(keys) ? keys : [keys]).forEach(k => {
+          if (k in bridgeStorageData) res[k] = bridgeStorageData[k];
+        });
+        cb(res);
       }
     },
     onChanged: {
@@ -210,8 +229,17 @@ const bridgeMockChrome = {
 };
 let bridgePostMessageCalled = false;
 const bridgeMockDoc = {
+  addEventListener(type, fn) {
+    (bridgeDocListeners[type] = bridgeDocListeners[type] || []).push(fn);
+  },
   dispatchEvent(evt) {
     dispatchedBridgeEvents.push(evt);
+    // Deliver handshake events to registered listeners (simulates the MAIN
+    // world engine re-announcing after the bridge's '__bocchi_req__').
+    if (evt.type === '__bocchi_hs__' && bridgeDocListeners[evt.type]) {
+      for (const fn of bridgeDocListeners[evt.type].slice()) fn(evt);
+    }
+    return true;
   }
 };
 const bridgeMockWin = {
@@ -230,31 +258,107 @@ const bridgeMockWin = {
 bridgeMockWin.window = bridgeMockWin;
 vm.runInContext(bridgeCode, vm.createContext(bridgeMockWin));
 
-const tzEvt = dispatchedBridgeEvents.find(e => e.type === '__bocchi_tz_sync__');
-assert(tzEvt, 'bridge.js must dispatch initial timezone sync event');
-assert.strictEqual(tzEvt.detail.timezone, 'America/New_York');
+// Bridge bootstrap: asks the (already loaded) engine to re-send its handshake.
+const reqEvt = dispatchedBridgeEvents.find(e => e.type === '__bocchi_req__');
+assert(reqEvt, 'bridge.js must dispatch __bocchi_req__ at load to request the engine handshake');
+assert(bridgeDocListeners['__bocchi_hs__'] && bridgeDocListeners['__bocchi_hs__'].length === 1,
+  'bridge.js must register exactly one __bocchi_hs__ listener at load');
 
-const fontEvt = dispatchedBridgeEvents.find(e => e.type === '__bocchi_fonts_sync__');
-assert(fontEvt, 'bridge.js must dispatch initial font sync event');
-assert.strictEqual(fontEvt.detail.blockBuiltin, true);
+// Before any handshake arrives, the bridge must stay silent: the engine no
+// longer listens on the legacy fixed event names, so dispatching there would
+// only broadcast into the void. Payloads are dropped until the handshake.
+assert(!dispatchedBridgeEvents.some(e =>
+  e.type === '__bocchi_tz_sync__' || e.type === '__bocchi_fonts_sync__' || e.type === '__bocchi_config_sync__'),
+  'bridge.js must never fall back to the removed legacy fixed event names');
+assert.strictEqual(dispatchedBridgeEvents.filter(e => e.type !== '__bocchi_req__').length, 0,
+  'bridge.js must not dispatch any config payload before the handshake (no handshake -> payload dropped)');
 assert.strictEqual(bridgePostMessageCalled, false, 'bridge.js must never call postMessage');
 
+// Handshake arrives (engine re-announces): the bridge locks {t, CE} and pushes
+// a full tz+fonts+cfg payload over the secured channel.
+const BRIDGE_TOKEN = '0123456789abcdef0123456789abcdef';
+const BRIDGE_CE = '__bocchi_evt_deadbeef';
+bridgeMockDoc.dispatchEvent({ type: '__bocchi_hs__', detail: { t: BRIDGE_TOKEN, e: BRIDGE_CE } });
+const fullEvt = dispatchedBridgeEvents.filter(e => e.type === BRIDGE_CE).pop();
+assert(fullEvt, 'after handshake the bridge must send the full config payload on CE');
+assert.strictEqual(fullEvt.detail.t, BRIDGE_TOKEN, 'CE payload must carry the handshake token t');
+assert.strictEqual(fullEvt.detail.tz, 'America/New_York', 'CE payload must carry the timezone');
+assert.strictEqual(fullEvt.detail.fonts.blockBuiltin, true, 'CE payload must carry the fonts config');
+assert.strictEqual(fullEvt.detail.cfg.globalShieldEnabled, true, 'CE payload must carry the shield config');
+assert.strictEqual(fullEvt.detail.cfg.siteBypassList[0], 'https://figma.com', 'CE payload must forward siteBypassList');
+
+// A second (possibly forged) handshake must be ignored: first handshake wins.
+bridgeMockDoc.dispatchEvent({ type: '__bocchi_hs__', detail: { t: 'attacker-token', e: '__bocchi_evt_evil' } });
+assert(!dispatchedBridgeEvents.some(e => e.type === '__bocchi_evt_evil'),
+  'bridge must ignore handshakes after the first valid one (channel hijack prevention)');
+
 if (bridgeStorageChangedListener) {
+  // Incremental local storage updates are grouped: tz-only change -> {tz} payload.
+  bridgeStorageData.targetTimezone = 'Asia/Tokyo';
   bridgeStorageChangedListener({ targetTimezone: { newValue: 'Asia/Tokyo' } }, 'local');
   const latestTz = dispatchedBridgeEvents[dispatchedBridgeEvents.length - 1];
-  assert.strictEqual(latestTz.type, '__bocchi_tz_sync__');
-  assert.strictEqual(latestTz.detail.timezone, 'Asia/Tokyo');
+  assert.strictEqual(latestTz.type, BRIDGE_CE, 'tz storage change must be sent over CE');
+  assert.strictEqual(latestTz.detail.tz, 'Asia/Tokyo');
+  assert.strictEqual(latestTz.detail.t, BRIDGE_TOKEN, 'incremental tz payload must keep the token');
 
+  // Font keys -> incremental {fonts} payload (reads back the new list from storage).
+  bridgeStorageData.customHiddenFonts = ['CustomFont'];
   bridgeStorageChangedListener({ customHiddenFonts: { newValue: ['CustomFont'] } }, 'local');
   const latestFont = dispatchedBridgeEvents[dispatchedBridgeEvents.length - 1];
-  assert.strictEqual(latestFont.type, '__bocchi_fonts_sync__');
+  assert.strictEqual(latestFont.type, BRIDGE_CE, 'font storage change must be sent over CE');
+  assert.strictEqual(latestFont.detail.fonts.customFonts[0], 'CustomFont');
+
+  // Shield keys -> incremental {cfg} payload.
+  bridgeStorageData.globalShieldEnabled = false;
+  bridgeStorageChangedListener({ globalShieldEnabled: { newValue: false } }, 'local');
+  const latestCfg = dispatchedBridgeEvents[dispatchedBridgeEvents.length - 1];
+  assert.strictEqual(latestCfg.type, BRIDGE_CE, 'shield storage change must be sent over CE');
+  assert.strictEqual(latestCfg.detail.cfg.globalShieldEnabled, false);
+
+  // Session keys were removed with the persona machinery: rotating a stale
+  // legacy key must NOT trigger any new CE payload.
+  const beforeCount = dispatchedBridgeEvents.length;
+  bridgeStorageChangedListener({ bocchiSessionKey: { newValue: 'session-key-42' } }, 'session');
+  assert.strictEqual(dispatchedBridgeEvents.length, beforeCount, 'legacy session key changes must not trigger a CE payload (k removed)');
 }
 assert.strictEqual(bridgePostMessageCalled, false, 'bridge.js must never call postMessage on storage update');
-console.log('✓ content/bridge.js isolated world event synchronization verified.\n');
+console.log('✓ content/bridge.js handshake-secured channel (protocol v2) verified.\n');
 
 // 4. Test content/stealth_engine.js in simulated browser context
 console.log('[Test 4] Validating content/stealth_engine.js in simulated browser context...');
 const stealthCode = fs.readFileSync(path.join(__dirname, '../content/stealth_engine.js'), 'utf8');
+
+// 32-bit djb2 hash (mirrors the engine's implementation).
+function djb2Hash(str) {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) hash = ((hash << 5) + hash) + str.charCodeAt(i);
+  return hash >>> 0;
+}
+// Session salt pinned by the mock crypto stub above (see createMockWindow).
+const TEST_SESSION_SALT = 305419896;
+// Engine farbling formulas, replicated so expected values are computed, not guessed:
+//   canvasDelta = (djb2(host:salt:canvas) % 12) * 2 + 1  -> r = perturbPixel(100, delta)
+//   webglDelta  = (djb2(host:salt:webgl)  % 12) * 2 + 1  -> pixel[idx] perturbed, idx = djb2 % 4
+//   audioDelta  = ((djb2(host:salt:audio) % 50) * 2 + 1) * 1e-7
+function perturbPixelRef(val, delta) {
+  const step = (Math.abs(delta) % 25) + 1;
+  return val >= 255 - step ? val - step : val + step;
+}
+function expectedFarbledCanvasUrl(host) {
+  const delta = (djb2Hash(host + ':' + TEST_SESSION_SALT + ':canvas') % 12) * 2 + 1;
+  return 'data:image/png;base64,mockPngR' + perturbPixelRef(100, delta) + 'A255';
+}
+function expectedFarbledWebglPixels(host) {
+  const seed = djb2Hash(host + ':' + TEST_SESSION_SALT + ':webgl');
+  const delta = (seed % 12) * 2 + 1;
+  const px = [50, 60, 70, 255];
+  const idx = seed % Math.min(px.length, 4);
+  px[idx] = perturbPixelRef(px[idx], delta);
+  return px;
+}
+function expectedAudioDelta(host) {
+  return ((djb2Hash(host + ':' + TEST_SESSION_SALT + ':audio') % 50) * 2 + 1) * 1e-7;
+}
 
 function createMockWindow(hostname, platform = 'Linux x86_64') {
   const win = {};
@@ -262,7 +366,51 @@ function createMockWindow(hostname, platform = 'Linux x86_64') {
   // Builtin globals
   win.Function = Function;
   win.Date = Date;
-  win.Intl = Intl;
+  // Per-window Intl: real realms each have their own Intl intrinsics. Sharing
+  // the host Intl object across mock windows would let every engine instance
+  // chain its prototype hooks (DateTimeFormat/resolvedOptions etc.) onto the
+  // previous instance's hooks, so expose isolated wrapper classes with fresh
+  // prototypes that inherit from the pristine host constructors.
+  function makeIsolatedIntlCtor(name) {
+    const Orig = Intl[name];
+    function IsolatedCtor(locales, options) {
+      if (new.target) return Reflect.construct(Orig, [locales, options], new.target);
+      return Orig(locales, options);
+    }
+    IsolatedCtor.prototype = Object.create(Orig.prototype);
+    if (Orig.supportedLocalesOf) IsolatedCtor.supportedLocalesOf = Orig.supportedLocalesOf;
+    return IsolatedCtor;
+  }
+  win.Intl = {};
+  ['DateTimeFormat', 'NumberFormat', 'PluralRules', 'RelativeTimeFormat', 'Collator', 'ListFormat', 'DisplayNames', 'Segmenter'].forEach(name => {
+    if (typeof Intl[name] === 'function') win.Intl[name] = makeIsolatedIntlCtor(name);
+  });
+  // Array is exposed like a real realm so prototype-level hooks (e.g. the
+  // removed Array.prototype.includes backdoor) would be observable in tests.
+  win.Array = Array;
+
+  // CustomEvent: the engine announces its protocol-v2 handshake
+  // ('__bocchi_hs__' with {t, e}) by constructing a CustomEvent on document.
+  win.CustomEvent = class CustomEvent {
+    constructor(type, init) {
+      this.type = type;
+      this.detail = init ? init.detail : null;
+    }
+  };
+
+  // Deterministic crypto.getRandomValues: pins the engine's per-load session
+  // salt (GLOBAL_SESSION_SALT) to a fixed value, so farbling deltas are
+  // reproducible. Cross-domain divergence assertions below compute the exact
+  // expected values from the same djb2 formulas instead of gambling on the
+  // ~1/12 salt-collision flake of random salts.
+  win.crypto = {
+    getRandomValues(arr) {
+      for (let i = 0; i < arr.length; i++) {
+        arr[i] = (TEST_SESSION_SALT + i * 2654435761) >>> 0;
+      }
+      return arr;
+    }
+  };
 
   // Window references
   win.window = win;
@@ -371,6 +519,10 @@ function createMockWindow(hostname, platform = 'Linux x86_64') {
   };
   win.SpeechSynthesisVoice = function() {};
 
+  // Document events are recorded so tests can capture the engine's load-time
+  // '__bocchi_hs__' handshake (token T + random config event name CE) and then
+  // drive authenticated config payloads through driveConfig().
+  win._dispatchedDocEvents = [];
   const docListeners = {};
   win.document.addEventListener = function(type, fn, opts) {
     if (!docListeners[type]) docListeners[type] = [];
@@ -380,6 +532,7 @@ function createMockWindow(hostname, platform = 'Linux x86_64') {
     if (docListeners[type]) docListeners[type] = docListeners[type].filter(f => f !== fn);
   };
   win.document.dispatchEvent = function(event) {
+    win._dispatchedDocEvents.push(event);
     if (docListeners[event.type]) {
       for (const fn of docListeners[event.type]) fn.call(win.document, event);
     }
@@ -412,6 +565,13 @@ function createMockWindow(hostname, platform = 'Linux x86_64') {
   win.Node = Node;
 
   class Element extends Node {
+    constructor() {
+      super();
+      // Real DOM elements are nodeType 1; the engine's inline-declaration
+      // precheck (needsFontMasking) relies on this to classify elements.
+      this.nodeType = 1;
+      this.parentElement = null;
+    }
     getBoundingClientRect() {
       let w = 100;
       const ff = (this.style && (this.style.fontFamily || this.style.font)) || this._computedFontFamily;
@@ -705,6 +865,73 @@ function createMockWindow(hostname, platform = 'Linux x86_64') {
   }
   win.HTMLCanvasElement = HTMLCanvasElement;
 
+  // OffscreenCanvas (main-thread coverage: engine hooks getContext /
+  // convertToBlob / transferToImageBitmap / OffscreenCanvasRenderingContext2D)
+  class OffscreenCanvasRenderingContext2D {
+    constructor(canvas) {
+      this.canvas = canvas;
+      this.font = '10px sans-serif';
+      this._pixels = new Uint8ClampedArray(4 * 10 * 10);
+      for (let i = 0; i < this._pixels.length; i += 4) {
+        this._pixels[i] = 100;     // R
+        this._pixels[i + 1] = 150; // G
+        this._pixels[i + 2] = 200; // B
+        this._pixels[i + 3] = 255; // A
+      }
+    }
+    getImageData(sx, sy, sw, sh) {
+      return { data: new Uint8ClampedArray(this._pixels.slice(0, sw * sh * 4)) };
+    }
+    putImageData(imgData, dx, dy) {
+      for (let i = 0; i < imgData.data.length; i++) {
+        this._pixels[i] = imgData.data[i];
+      }
+    }
+    measureText(text) {
+      const font = this.font || '10px sans-serif';
+      let width = (text ? text.length : 0) * 10;
+      if (font.includes('SimSun') || font.includes('SimHei')) {
+        width += 70;
+      }
+      return { width, actualBoundingBoxAscent: 10, actualBoundingBoxDescent: 2 };
+    }
+  }
+  win.OffscreenCanvasRenderingContext2D = OffscreenCanvasRenderingContext2D;
+
+  class OffscreenCanvas {
+    constructor(width = 300, height = 150) {
+      this.width = width;
+      this.height = height;
+      this._ctx = null;
+      this._ctxType = null;
+    }
+    getContext(type) {
+      if (this._ctxType !== null && this._ctxType !== type) return null; // contexts are exclusive
+      if (!this._ctx) {
+        this._ctxType = type;
+        this._ctx = new win.OffscreenCanvasRenderingContext2D(this);
+      }
+      return this._ctx;
+    }
+    convertToBlob(options) {
+      const r = (this._ctxType === '2d' && this._ctx) ? this._ctx._pixels[0] : 0;
+      const a = (this._ctxType === '2d' && this._ctx) ? this._ctx._pixels[3] : 0;
+      return Promise.resolve({ size: 100, type: 'image/png', r, a });
+    }
+    transferToImageBitmap() {
+      const r = (this._ctxType === '2d' && this._ctx) ? this._ctx._pixels[0] : 0;
+      const a = (this._ctxType === '2d' && this._ctx) ? this._ctx._pixels[3] : 0;
+      const bitmap = { width: this.width, height: this.height, r, a };
+      // Native semantics: the canvas bitmap is cleared by the transfer, but
+      // the rendering context itself stays usable.
+      if (this._ctx) {
+        this._ctx._pixels.fill(0);
+      }
+      return bitmap;
+    }
+  }
+  win.OffscreenCanvas = OffscreenCanvas;
+
   // WebGL Classes
   class WebGLRenderingContext {
     getParameter(param) {
@@ -824,7 +1051,12 @@ function createMockWindow(hostname, platform = 'Linux x86_64') {
   // Navigator
   class Navigator {
     constructor() {
+      // Native (unspoofed) identity values: with personas removed the engine
+      // must pass these through verbatim.
       this.platform = platform;
+      this.userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
+      this.appVersion = '5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
+      this.vendor = 'Apple Computer, Inc.';
       this.language = 'zh-CN';
       this.languages = ['zh-CN', 'zh'];
       this.webdriver = true;
@@ -838,6 +1070,10 @@ function createMockWindow(hostname, platform = 'Linux x86_64') {
         }
       };
       this.mediaDevices = new win.MediaDevices();
+    }
+    // Native gamepad list (engine downgrades to [] while hardwareProtection is on)
+    getGamepads() {
+      return [{ index: 0, id: 'Xbox 360 Controller (XInput STANDARD GAMEPAD Vendor: 045e Product: 028e)' }];
     }
   }
   class MediaDevices {
@@ -857,10 +1093,11 @@ function createMockWindow(hostname, platform = 'Linux x86_64') {
     get totalJSHeapSize() { return 100000000; }
     get usedJSHeapSize() { return 50000000; }
   }
-  win.performance = {
-    now: () => Date.now(),
-    memory: new MemoryInfo()
-  };
+  class Performance {
+    now() { return 123.456; }
+  }
+  win.performance = new Performance();
+  win.performance.memory = new MemoryInfo();
 
   // Plugin
   class Plugin {
@@ -878,17 +1115,32 @@ function createMockWindow(hostname, platform = 'Linux x86_64') {
     enumerable: true
   });
 
-  // Screen mock
+  // Screen mock: real browsers expose width/height/availWidth/availHeight/
+  // colorDepth/pixelDepth as prototype getters, so the engine's screen spoof
+  // (and its Screen.prototype receiver checks) can be exercised.
   class Screen {
     constructor() {
-      this.width = 1920;
-      this.height = 1080;
-      this.availWidth = 1920;
-      this.availHeight = 1080;
+      this._native = { width: 1920, height: 1080, availWidth: 1920, availHeight: 1080, colorDepth: 24, pixelDepth: 24 };
     }
   }
+  ['width', 'height', 'availWidth', 'availHeight', 'colorDepth', 'pixelDepth'].forEach(prop => {
+    Object.defineProperty(Screen.prototype, prop, {
+      get() { return this._native[prop]; },
+      enumerable: true,
+      configurable: true
+    });
+  });
   win.Screen = Screen;
   win.screen = new Screen();
+
+  // devicePixelRatio as a native-like own accessor on the window (mock native
+  // value 1.25; the engine's spoof reports 1 while hardwareProtection is on).
+  Object.defineProperty(win, 'devicePixelRatio', {
+    get() { return 1.25; },
+    set: undefined,
+    enumerable: true,
+    configurable: true
+  });
 
   // WebGPU mock
   class GPU {
@@ -934,6 +1186,62 @@ function createMockWindow(hostname, platform = 'Linux x86_64') {
   return win;
 }
 
+// ---------------------------------------------------------------------------
+// Protocol-v2 config channel helpers.
+//
+// The engine (MAIN world) generates a random token T and a random config event
+// name CE at load, announces both via '__bocchi_hs__' on document, and accepts
+// config payloads only on CE and only when detail.t === T. The old fixed event
+// names ('__bocchi_tz_sync__' / '__bocchi_fonts_sync__' / '__bocchi_config_sync__')
+// are no longer listened to by the engine.
+// ---------------------------------------------------------------------------
+
+function findHandshakeDetail(win) {
+  const events = win._dispatchedDocEvents || [];
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e && e.type === '__bocchi_hs__' && e.detail && typeof e.detail.t === 'string' && typeof e.detail.e === 'string') {
+      return e.detail;
+    }
+  }
+  return null;
+}
+
+function getEngineHandshake(win) {
+  let hs = findHandshakeDetail(win);
+  if (!hs) {
+    // The engine missed our recorder (or loaded first): ask it to re-announce.
+    // This only works while the engine is still armed (before the first
+    // authenticated config event), mirroring the real bridge flow.
+    win.document.dispatchEvent({ type: '__bocchi_req__' });
+    hs = findHandshakeDetail(win);
+  }
+  if (!hs) {
+    throw new Error('No __bocchi_hs__ handshake captured for ' + (win.location && win.location.hostname));
+  }
+  return hs;
+}
+
+// Drive an authenticated config payload into the engine.
+// payload shape: { tz?, fonts?, cfg?, k? } (subset of the bridge CE payload).
+function driveConfig(win, payload) {
+  const hs = getEngineHandshake(win);
+  win.document.dispatchEvent({
+    type: hs.e,
+    detail: Object.assign({ t: hs.t }, payload),
+    stopImmediatePropagation() {}
+  });
+}
+
+// Dispatch an event that the engine must NOT react to (forged/legacy channel).
+function dispatchUnauthenticated(win, type, detail) {
+  win.document.dispatchEvent({
+    type: type,
+    detail: detail,
+    stopImmediatePropagation() {}
+  });
+}
+
 // Create mock window for coveryourtracks.eff.org
 const winCYT = createMockWindow('coveryourtracks.eff.org', 'Linux x86_64');
 const contextCYT = vm.createContext(winCYT);
@@ -974,30 +1282,44 @@ console.log('✓ Function disguise conforms to native signatures.\n');
 
 console.log('Testing WebGL spoofing and platform detection...');
 const gl = new winCYT.WebGLRenderingContext();
-assert.strictEqual(gl.getParameter(37445), 'Google Inc. (NVIDIA)');
-assert(gl.getParameter(37446).includes('OpenGL'), 'Default Linux platform spoof must use OpenGL renderer');
+// Uniform Intel UHD (CML GT2) / Mesa persona, applied unconditionally while
+// hardwareProtection is active (main thread and worker share the profile).
+assert.strictEqual(gl.getParameter(37445), 'Google Inc. (Intel)', 'UNMASKED_VENDOR_WEBGL must be spoofed to Google Inc. (Intel)');
+assert.strictEqual(gl.getParameter(37446), 'Mesa Intel(R) UHD Graphics (CML GT2)', 'UNMASKED_RENDERER_WEBGL must be spoofed to Mesa Intel(R) UHD Graphics (CML GT2)');
+assert.strictEqual(gl.getParameter(0x1F00), 'WebKit', 'gl.VENDOR must be WebKit');
+assert.strictEqual(gl.getParameter(0x1F01), 'WebKit WebGL', 'gl.RENDERER must be WebKit WebGL');
+assert.strictEqual(gl.getParameter(0x1F02), 'WebGL 1.0 (OpenGL ES 2.0 Chromium)', 'WebGL1 VERSION must be the real Chromium string');
+assert.strictEqual(gl.getParameter(0x8B8C), 'WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)', 'WebGL1 SHADING_LANGUAGE_VERSION must be the real Chromium string');
+const gl2 = new winCYT.WebGL2RenderingContext();
+assert.strictEqual(gl2.getParameter(0x1F02), 'WebGL 2.0 (OpenGL ES 3.0 Chromium)', 'WebGL2 VERSION must be the real Chromium string');
+assert.strictEqual(gl2.getParameter(0x8B8C), 'WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.00 Chromium)', 'WebGL2 SHADING_LANGUAGE_VERSION must be the real Chromium string');
+assert.strictEqual(gl.getParameter(0x0D33), 16384, 'MAX_TEXTURE_SIZE must match the Intel UHD persona (16384)');
+assert.strictEqual(gl.getParameter(0x8B4D), 16, 'MAX_COMBINED_TEXTURE_IMAGE_UNITS must farble into the Intel value range (16 on CYT)');
 const ext = gl.getExtension('WEBGL_debug_renderer_info');
 assert(ext && ext.UNMASKED_VENDOR_WEBGL === 37445);
 assert(gl.getSupportedExtensions().includes('WEBGL_debug_renderer_info'), 'getSupportedExtensions must include WEBGL_debug_renderer_info');
-console.log('✓ WebGL Vendor/Renderer correctly spoofed with platform awareness.\n');
+console.log('✓ WebGL Vendor/Renderer correctly spoofed with the Intel UHD persona.\n');
 
 console.log('Testing WebRTC SDP sanitization and IP suppression...');
 const pc = new winCYT.RTCPeerConnection();
 pc.createOffer().then(offer => {
-  assert(!offer.sdp.includes('192.168.1.100'), 'Local IP 192.168.1.100 must be stripped from SDP');
-  assert(!offer.sdp.includes('10.0.0.5'), 'Local IP 10.0.0.5 must be stripped from SDP');
-  assert(offer.sdp.includes('203.0.113.1'), 'Public srflx candidate should be retained');
-  console.log('✓ WebRTC SDP offer stripped of private IPv4 addresses.');
+  // Private connection addresses are replaced with 0.0.0.0 (candidate line kept).
+  assert(offer.sdp.includes('a=candidate:1 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'), 'Private IPv4 candidate address must be replaced with 0.0.0.0 (host line kept)');
+  assert(offer.sdp.includes('a=candidate:2 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'), 'Second private IPv4 candidate address must be replaced with 0.0.0.0');
+  assert(!offer.sdp.includes('192.168.1.100 54321'), 'Raw private IPv4 address must not remain as a connection address');
+  assert(!offer.sdp.includes('10.0.0.5 54321'), 'Raw private IPv4 address must not remain as a connection address');
+  assert(offer.sdp.includes('203.0.113.1 54321 typ srflx'), 'Public srflx candidate should be retained');
+  console.log('✓ WebRTC SDP offer private IPv4 connection addresses rewritten to 0.0.0.0.');
 });
 pc.createAnswer().then(answer => {
-  assert(!answer.sdp.includes('192.168.1.100'), 'Local IP 192.168.1.100 must be stripped from answer SDP');
-  assert(!answer.sdp.includes('10.0.0.5'), 'Local IP 10.0.0.5 must be stripped from answer SDP');
-  assert(answer.sdp.includes('203.0.113.1'), 'Public srflx candidate should be retained in answer SDP');
+  assert(answer.sdp.includes('a=candidate:1 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'), 'Answer SDP must rewrite private candidate address to 0.0.0.0');
+  assert(answer.sdp.includes('203.0.113.1 54321 typ srflx'), 'Public srflx candidate should be retained in answer SDP');
 });
 
 // Test localDescription getter sanitization
 const localDesc = pc.localDescription;
-assert(localDesc && !localDesc.sdp.includes('192.168.1.100'), 'pc.localDescription.sdp must be sanitized');
+assert(localDesc && localDesc.sdp.includes('a=candidate:1 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'),
+  'pc.localDescription.sdp must sanitize private candidate connection addresses');
 
 // Test setLocalDescription hook
 const rawOffer = new winCYT.RTCSessionDescription({
@@ -1005,9 +1327,10 @@ const rawOffer = new winCYT.RTCSessionDescription({
   sdp: 'a=candidate:1 1 UDP 2122260223 192.168.1.100 54321 typ host\r\n'
 });
 pc.setLocalDescription(rawOffer);
-assert(!pc.localDescription.sdp.includes('192.168.1.100'), 'setLocalDescription with raw offer must sanitize sdp');
+assert(pc.localDescription.sdp.includes('a=candidate:1 1 UDP 2122260223 0.0.0.0 54321 typ host'),
+  'setLocalDescription with raw offer must sanitize the connection address');
 
-// Test suppression of host candidate
+// Test suppression of host candidate with a private connection address
 let hostDispatched = false;
 pc.onicecandidate = (e) => { hostDispatched = true; };
 pc.dispatchEvent({
@@ -1016,15 +1339,17 @@ pc.dispatchEvent({
 });
 assert.strictEqual(hostDispatched, false, 'Private IP host candidate event must be suppressed');
 
-// Test suppression of STUN srflx candidate leaking private IP via raddr
+// STUN srflx candidate with a public connection address is delivered: the new
+// sanitizer only inspects the candidate connection address (field 5), so a
+// private raddr no longer suppresses the whole candidate.
 let srflxDispatched = false;
 pc.onicecandidate = (e) => { srflxDispatched = true; };
 pc.dispatchEvent({
   type: 'icecandidate',
   candidate: { candidate: 'candidate:3 1 UDP 1686052607 203.0.113.1 54321 typ srflx raddr 192.168.1.100 rport 54321' }
 });
-assert.strictEqual(srflxDispatched, false, 'STUN srflx candidate with private raddr must be suppressed');
-console.log('✓ WebRTC candidate suppression prevents private IP and raddr leakage.\n');
+assert.strictEqual(srflxDispatched, true, 'srflx candidate with public connection address must be delivered (raddr no longer suppresses)');
+console.log('✓ WebRTC candidate suppression targets private connection addresses only.\n');
 
 console.log('Testing MediaDevices device enumeration anonymization & prototype...');
 winCYT.navigator.mediaDevices.enumerateDevices().then(devices => {
@@ -1060,42 +1385,55 @@ assert.strictEqual(winCYT.navigator.doNotTrack, '1', 'navigator.doNotTrack must 
 assert.strictEqual(winCYT.navigator.globalPrivacyControl, true, 'navigator.globalPrivacyControl must be true');
 assert.strictEqual(winCYT.doNotTrack, undefined, 'window.doNotTrack must NOT exist (avoids obsolete IE9 pollution)');
 
-// Browser Platform, UA, and Language Hooks
-assert.strictEqual(winCYT.navigator.platform, 'Linux x86_64', 'navigator.platform must report Linux x86_64');
-assert(winCYT.navigator.userAgent.includes('X11; Linux x86_64'), 'navigator.userAgent must report Linux x86_64');
-assert(winCYT.navigator.appVersion.includes('X11; Linux x86_64'), 'navigator.appVersion must report Linux x86_64');
+// Browser Platform, UA, and Language: personas removed — everything passes
+// through natively (mock provides the values, engine must not touch them).
+const NATIVE_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
+assert.strictEqual(winCYT.navigator.platform, 'Linux x86_64', 'navigator.platform must pass through the native value');
+assert.strictEqual(winCYT.navigator.userAgent, NATIVE_UA, 'navigator.userAgent must pass through the native value (no UA persona)');
+assert.strictEqual(winCYT.navigator.appVersion, '5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', 'navigator.appVersion must pass through the native value');
+assert.strictEqual(winCYT.navigator.vendor, 'Apple Computer, Inc.', 'navigator.vendor must pass through the native value');
 assert.strictEqual(winCYT.navigator.deviceMemory, 8, 'navigator.deviceMemory must be spoofed to 8');
-assert.strictEqual(winCYT.navigator.language, 'en-US', 'navigator.language must be hooked to en-US');
-assert.deepStrictEqual([...winCYT.navigator.languages], ['en-US', 'en'], 'navigator.languages must be hooked to ["en-US", "en"]');
-console.log('✓ Browser platform (Linux x86_64) and language successfully spoofed.\n');
+assert.strictEqual(winCYT.navigator.language, 'zh-CN', 'navigator.language must pass through the native value');
+assert.deepStrictEqual([...winCYT.navigator.languages], ['zh-CN', 'zh'], 'navigator.languages must pass through the native array (same reference semantics)');
+console.log('✓ Browser identity passes through natively; only entropy-reduction hooks (deviceMemory) applied.\n');
 
-// window.chrome emulation
-assert(winCYT.chrome, 'window.chrome must be present');
-assert(winCYT.chrome.app && typeof winCYT.chrome.csi === 'function' && typeof winCYT.chrome.loadTimes === 'function', 'window.chrome standard builtins (app, csi, loadTimes) must be present');
-console.log('✓ Navigator, privacy flags, and window.chrome emulation verified.\n');
+// window.chrome: the engine only ensures the object exists (an empty object
+// still defeats `typeof chrome === 'undefined'` headless probes); the persona-era
+// app/csi/loadTimes builtins were removed.
+assert(winCYT.chrome && typeof winCYT.chrome === 'object', 'window.chrome object must be present');
+assert.strictEqual(winCYT.chrome.csi, undefined, 'window.chrome.csi must NOT be emulated anymore (persona removal)');
+assert.strictEqual(winCYT.chrome.loadTimes, undefined, 'window.chrome.loadTimes must NOT be emulated anymore');
+console.log('✓ Navigator, privacy flags, and window.chrome presence verified.\n');
 
-console.log('Testing Intl Locale and English Formatting...');
+console.log('Testing Intl Locale Pass-through...');
+// Persona removal: Intl locales pass through natively. Only the timezone is
+// aligned (hooked separately below); 'en' resolves to 'en', zh* stays zh*.
+const nativeDefaultDTFLocale = new Intl.DateTimeFormat().resolvedOptions().locale;
 const dtf = new winCYT.Intl.DateTimeFormat();
-assert.strictEqual(dtf.resolvedOptions().locale, 'en-US', 'DateTimeFormat locale must resolve to en-US');
+assert.strictEqual(dtf.resolvedOptions().locale, nativeDefaultDTFLocale, 'DateTimeFormat locale must pass through natively (host default)');
+assert.strictEqual(new winCYT.Intl.DateTimeFormat('zh-CN').resolvedOptions().locale, new Intl.DateTimeFormat('zh-CN').resolvedOptions().locale, 'DateTimeFormat zh-CN locale must be preserved natively');
 
 const nf = new winCYT.Intl.NumberFormat();
-assert.strictEqual(nf.resolvedOptions().locale, 'en-US', 'NumberFormat locale must resolve to en-US');
-assert.strictEqual(nf.format(1234567.89), '1,234,567.89', 'NumberFormat must use English comma grouping');
+assert.strictEqual(nf.resolvedOptions().locale, new Intl.NumberFormat().resolvedOptions().locale, 'NumberFormat locale must pass through natively');
+assert.strictEqual(nf.format(1234567.89), new Intl.NumberFormat().format(1234567.89), 'NumberFormat formatting must be fully native');
 
-// Test empty array and Chinese locales handling
-assert.strictEqual(new winCYT.Intl.NumberFormat([]).resolvedOptions().locale, 'en-US', 'Empty locales array must default to en-US');
-assert.strictEqual(new winCYT.Intl.NumberFormat(['zh-CN']).resolvedOptions().locale, 'en-US', 'Chinese locale array must resolve to en-US');
-assert.strictEqual(new winCYT.Intl.NumberFormat(['zh-CN', 'en-US']).resolvedOptions().locale, 'en-US', 'Mixed locale array with Chinese must resolve to en-US');
+// Test empty array and Chinese locales handling (native semantics)
+assert.strictEqual(new winCYT.Intl.NumberFormat([]).resolvedOptions().locale, new Intl.NumberFormat().resolvedOptions().locale, 'Empty locales array must fall back to the native default');
+assert.strictEqual(new winCYT.Intl.NumberFormat(['zh-CN']).resolvedOptions().locale, new Intl.NumberFormat(['zh-CN']).resolvedOptions().locale, 'Chinese locale array must resolve natively');
+assert.strictEqual(new winCYT.Intl.NumberFormat(['zh-CN', 'en-US']).resolvedOptions().locale, new Intl.NumberFormat(['zh-CN', 'en-US']).resolvedOptions().locale, 'Mixed locale array resolves natively');
 
 const pr = new winCYT.Intl.PluralRules();
-assert.strictEqual(pr.resolvedOptions().locale, 'en-US', 'PluralRules locale must resolve to en-US');
+// PluralRules legitimately collapses 'en-US' to 'en' (plural rules carry no
+// regional data); the engine leaves this native resolution untouched.
+assert.strictEqual(pr.resolvedOptions().locale, new Intl.PluralRules().resolvedOptions().locale, 'PluralRules locale must keep its native resolved value');
+assert.strictEqual(new winCYT.Intl.PluralRules('zh-CN').resolvedOptions().locale, new Intl.PluralRules('zh-CN').resolvedOptions().locale, 'PluralRules zh-CN must pass through natively (no remap)');
 
 const rtf = new winCYT.Intl.RelativeTimeFormat();
-assert.strictEqual(rtf.resolvedOptions().locale, 'en-US', 'RelativeTimeFormat locale must resolve to en-US');
+assert.strictEqual(rtf.resolvedOptions().locale, new Intl.RelativeTimeFormat().resolvedOptions().locale, 'RelativeTimeFormat locale must pass through natively');
 
 const col = new winCYT.Intl.Collator();
-assert.strictEqual(col.resolvedOptions().locale, 'en-US', 'Collator locale must resolve to en-US');
-console.log('✓ All Intl constructors and resolvedOptions cleanly localized to en-US.\n');
+assert.strictEqual(col.resolvedOptions().locale, new Intl.Collator().resolvedOptions().locale, 'Collator locale must pass through natively');
+console.log('✓ Intl locale passthrough verified (zh preserved, timezone still aligned).\n');
 
 console.log('Testing Timezone Dynamic Auto-sync and Date Hooks...');
 // Initial timezone matches America/Los_Angeles
@@ -1109,8 +1447,9 @@ assert(testDateSummer.toString().includes('Pacific Daylight Time'), 'Date.toStri
 assert(testDateSummer.toTimeString().includes('GMT-0700 (Pacific Daylight Time)'), 'toTimeString must include GMT-0700 (Pacific Daylight Time)');
 assert.strictEqual(testDateSummer.toDateString(), 'Tue Sep 29 2026', 'toDateString must match Tue Sep 29 2026');
 assert.strictEqual(testDateSummer.getHours(), 5, 'getHours in LA for 12:00 UTC must be 5 (12 - 7)');
-assert(testDateSummer.toLocaleString().includes('9/29/2026'), 'toLocaleString must format date in English');
-assert(testDateSummer.toLocaleString().includes('5:00:00 AM'), 'toLocaleString must format time in Pacific Time');
+assert(testDateSummer.toLocaleString().includes('2026'), 'toLocaleString must format in the native default locale (year present)');
+assert(testDateSummer.toLocaleString('en-US').includes('9/29/2026'), 'Explicit en-US toLocaleString must be respected natively');
+assert(testDateSummer.toLocaleString('en-US').includes('5:00:00 AM'), 'toLocaleString must format time in Pacific Time');
 
 // Test Date local getters consistency in activeTimezone
 assert.strictEqual(testDateSummer.getHours(), 5, 'getHours in LA for 12:00 UTC must be 5');
@@ -1136,11 +1475,8 @@ assert.strictEqual('__BOCCHI_SESSION_SALT__' in winCYT, false, '__BOCCHI_SESSION
 assert.strictEqual('__bocchiSetTimezone' in winCYT, false, '__bocchiSetTimezone must NOT be defined on window');
 
 function setTestTimezone(win, tz) {
-  win.document.dispatchEvent({
-    type: '__bocchi_tz_sync__',
-    detail: { timezone: tz },
-    stopImmediatePropagation() {}
-  });
+  // Protocol v2: timezone updates travel over the authenticated CE channel.
+  driveConfig(win, { tz: tz });
 }
 
 // Test dynamic Intl.DateTimeFormat timezone tracking for default instances
@@ -1177,13 +1513,9 @@ assert.strictEqual(new winCYT.Date('2026-09-29T12:00:00Z').getTimezoneOffset(), 
 assert(new winCYT.Date('2026-09-29T12:00:00Z').toString().includes('GMT+0900 (Japan Standard Time)'), 'Date.toString must reflect Tokyo JST');
 assert.strictEqual(new winCYT.Date('2026-09-29T12:00:00Z').getHours(), 21, 'getHours in Tokyo for 12:00 UTC must be 21 (12 + 9)');
 
-// Test CustomEvent __bocchi_tz_sync__ and ensure window.postMessage is ignored
-winCYT.document.dispatchEvent({
-  type: '__bocchi_tz_sync__',
-  detail: { timezone: 'Europe/Paris' },
-  stopImmediatePropagation() {}
-});
-assert.strictEqual(new winCYT.Intl.DateTimeFormat().resolvedOptions().timeZone, 'Europe/Paris', 'CustomEvent __bocchi_tz_sync__ must sync timezone');
+// Test authenticated CE timezone sync and ensure window.postMessage is ignored
+driveConfig(winCYT, { tz: 'Europe/Paris' });
+assert.strictEqual(new winCYT.Intl.DateTimeFormat().resolvedOptions().timeZone, 'Europe/Paris', 'Authenticated CE payload must sync timezone');
 winCYT.postMessage({ type: '__BOCCHI_TIMEZONE_UPDATE__', timezone: 'Asia/Shanghai' }, '*');
 assert.strictEqual(new winCYT.Intl.DateTimeFormat().resolvedOptions().timeZone, 'Europe/Paris', 'postMessage must not sync timezone');
 
@@ -1192,7 +1524,7 @@ setTestTimezone(winCYT, 'America/Los_Angeles');
 
 // Non-constructor invocation (without new)
 const dtfNoNew = winCYT.Intl.DateTimeFormat();
-assert.strictEqual(dtfNoNew.resolvedOptions().locale, 'en-US', 'DateTimeFormat without new must resolve to en-US');
+assert.strictEqual(dtfNoNew.resolvedOptions().locale, nativeDefaultDTFLocale, 'DateTimeFormat without new must resolve to the native default locale');
 assert.strictEqual(dtfNoNew.resolvedOptions().timeZone, 'America/Los_Angeles', 'DateTimeFormat without new must resolve to America/Los_Angeles');
 
 // UTC and ISO string methods preservation
@@ -1262,14 +1594,18 @@ assert.strictEqual(singleProbeEl.offsetHeight, 76, 'Solitary SimSun probe offset
 const probeRect = probeEl.getBoundingClientRect();
 assert.strictEqual(probeRect.width, 100, 'SimSun probe getBoundingClientRect width must mask to fallback 100');
 
-// 4. DOM probe masking when styled via CSS stylesheet/class (_computedFontFamily)
+// 4. DOM probe with class/stylesheet-styled font (no inline declaration):
+// the new fast-path precheck (M1) only masks layout reads when an inline
+// font declaration (style property or SVG presentation attribute) matches a
+// hidden-font signature — CSS-class-styled probes pass through to native
+// layout to avoid getComputedStyle calls, style rewrites and forced reflows.
 const classEl = new winCYT.HTMLElement();
 classEl._computedFontFamily = '"SimSun", monospace';
-assert.strictEqual(classEl.offsetWidth, 150, 'Class-styled SimSun probe offsetWidth must mask to fallback 150');
-assert.strictEqual(classEl.offsetHeight, 76, 'Class-styled SimSun probe offsetHeight must mask to fallback 76');
-assert.strictEqual(classEl.getBoundingClientRect().width, 100, 'Class-styled SimSun probe getBoundingClientRect width must mask to fallback 100');
+assert.strictEqual(classEl.offsetWidth, 220, 'Class-styled probe without inline declaration passes through to native layout (M1 fast path)');
+assert.strictEqual(classEl.offsetHeight, 110, 'Class-styled probe offsetHeight passes through (M1 fast path)');
+assert.strictEqual(classEl.getBoundingClientRect().width, 180, 'Class-styled probe getBoundingClientRect passes through (M1 fast path)');
 
-// 5. CSSStyleDeclaration font masking
+// 5. CSSStyleDeclaration font masking (still applies to computed-style reads)
 const computedStyle = winCYT.getComputedStyle(classEl);
 assert.strictEqual(computedStyle.fontFamily, 'monospace', 'getComputedStyle.fontFamily must mask SimSun');
 assert.strictEqual(computedStyle.getPropertyValue('font-family'), 'monospace', 'getComputedStyle.getPropertyValue must mask SimSun');
@@ -1335,15 +1671,11 @@ assert.strictEqual(svgG.getBBox().width, 100, 'SVGGraphicsElement.getBBox must m
 assert.strictEqual(svgG.getAttribute('font-family'), '"SimSun", monospace', 'SVG font-family attribute restored after getBBox');
 
 // 11.1 Custom hidden font management and dynamic synchronization
-winCYT.document.dispatchEvent({
-  type: '__bocchi_fonts_sync__',
-  detail: {
-    customFonts: ['CustomBrandFont', '/secret-font-\\d+/'],
-    allowedFonts: ['SimSun'], // Explicitly whitelist SimSun
-    blockBuiltin: true
-  },
-  stopImmediatePropagation() {}
-});
+driveConfig(winCYT, { fonts: {
+  customFonts: ['CustomBrandFont', '/secret-font-\\d+/'],
+  allowedFonts: ['SimSun'], // Explicitly whitelist SimSun
+  blockBuiltin: true
+} });
 
 assert.strictEqual(winCYT.document.fonts.check('16px "CustomBrandFont"'), false, 'Custom brand font check must return false');
 assert.strictEqual(winCYT.document.fonts.check('16px "secret-font-99"'), false, 'Regex-matched custom font check must return false');
@@ -1355,40 +1687,28 @@ customProbeEl.style.fontFamily = 'CustomBrandFont';
 assert.strictEqual(customProbeEl.offsetWidth, 150, 'Custom font offsetWidth must mask to fallback');
 
 // Reset SimSun back to masked
-winCYT.document.dispatchEvent({
-  type: '__bocchi_fonts_sync__',
-  detail: { customFonts: [], allowedFonts: [], blockBuiltin: true },
-  stopImmediatePropagation() {}
-});
+driveConfig(winCYT, { fonts: { customFonts: [], allowedFonts: [], blockBuiltin: true } });
 assert.strictEqual(winCYT.document.fonts.check('12px "SimSun"'), false, 'SimSun must be masked after reset');
 
 // 11.2 Whitelist Mode validation
-winCYT.document.dispatchEvent({
-  type: '__bocchi_fonts_sync__',
-  detail: {
-    fontMode: 'whitelist',
-    allowedFonts: ['Arial', 'Liberation Sans'],
-    customFonts: [],
-    blockBuiltin: true
-  },
-  stopImmediatePropagation() {}
-});
+driveConfig(winCYT, { fonts: {
+  fontMode: 'whitelist',
+  allowedFonts: ['Arial', 'Liberation Sans'],
+  customFonts: [],
+  blockBuiltin: true
+} });
 assert.strictEqual(winCYT.document.fonts.check('16px Arial'), true, 'Whitelisted Arial must return true');
 assert.strictEqual(winCYT.document.fonts.check('16px "Liberation Sans"'), true, 'Whitelisted Liberation Sans must return true');
 assert.strictEqual(winCYT.document.fonts.check('16px "Times New Roman"'), false, 'Non-whitelisted Times New Roman must be masked in whitelist mode');
 assert.strictEqual(winCYT.document.fonts.check('16px "SimSun"'), false, 'Non-whitelisted SimSun must be masked in whitelist mode');
 
 // Restore to Blacklist mode
-winCYT.document.dispatchEvent({
-  type: '__bocchi_fonts_sync__',
-  detail: {
-    fontMode: 'blacklist',
-    allowedFonts: [],
-    customFonts: [],
-    blockBuiltin: true
-  },
-  stopImmediatePropagation() {}
-});
+driveConfig(winCYT, { fonts: {
+  fontMode: 'blacklist',
+  allowedFonts: [],
+  customFonts: [],
+  blockBuiltin: true
+} });
 assert.strictEqual(winCYT.document.fonts.check('16px "Times New Roman"'), true, 'Times New Roman must be allowed in blacklist mode');
 assert.strictEqual(winCYT.document.fonts.check('16px "SimSun"'), false, 'SimSun must be masked in blacklist mode');
 
@@ -1402,9 +1722,11 @@ assert.throws(() => new winCYT.Worker(), /1 argument required/, 'Calling Worker 
 
 const workerBlob = winCYT.URL._created.get(worker.scriptURL);
 assert(workerBlob, 'Worker script must be wrapped in a blob URL');
-assert(workerBlob.content.includes('Linux x86_64'), 'Worker bootstrap must spoof Linux x86_64');
-assert(workerBlob.content.includes("['en-US', 'en']"), 'Worker bootstrap must spoof en-US languages');
-assert(workerBlob.content.includes('DateTimeFormat'), 'Worker bootstrap must spoof Intl.DateTimeFormat');
+assert(workerBlob.content.includes('chosenConcurrency = 8'), 'Worker bootstrap must pin hardwareConcurrency to 8');
+assert(workerBlob.content.includes('deviceMemory'), 'Worker bootstrap must hook deviceMemory to 8');
+assert(!workerBlob.content.includes('Linux x86_64'), 'Worker bootstrap must NOT spoof a platform persona (native passthrough)');
+assert(!/navigator\.(language|platform|userAgent)/.test(workerBlob.content), 'Worker bootstrap must NOT spoof UA-family values (native passthrough)');
+assert(workerBlob.content.includes('DateTimeFormat'), 'Worker bootstrap must spoof Intl.DateTimeFormat timezone');
 assert(workerBlob.content.includes('getTimezoneOffset'), 'Worker bootstrap must spoof Date timezone offset');
 
 const sharedWorker = new winCYT.SharedWorker('shared_worker.js');
@@ -1421,7 +1743,7 @@ console.log('Testing Multi-Realm Iframe Protection...');
 const iframe = new winCYT.HTMLIFrameElement();
 const childWin = iframe.contentWindow;
 assert.strictEqual(childWin.navigator.webdriver, false, 'Child iframe navigator.webdriver must be false');
-assert.strictEqual(childWin.navigator.language, 'en-US', 'Child iframe navigator.language must be en-US');
+assert.strictEqual(childWin.navigator.language, 'zh-CN', 'Child iframe navigator.language must pass through natively');
 assert.strictEqual(new childWin.Intl.DateTimeFormat().resolvedOptions().timeZone, 'America/Los_Angeles', 'Child iframe must inherit IP timezone');
 assert.strictEqual(childWin.document.fonts.check('12px "SimSun"'), false, 'Child iframe must mask Chinese fonts');
 assert(new childWin.WebGLRenderingContext().getParameter(37445), 'Child iframe WebGL must be protected');
@@ -1447,28 +1769,43 @@ const ctxFPS = canvasFPS.getContext('2d');
 const urlFPS = canvasFPS.toDataURL();
 
 assert.strictEqual(urlCYT1, urlCYT2, 'Canvas data URL must be strictly identical within same domain session');
+assert.strictEqual(urlCYT1, expectedFarbledCanvasUrl('coveryourtracks.eff.org'), 'Canvas farbling must match the djb2-derived expected value (deterministic salt)');
+assert.strictEqual(urlFPS, expectedFarbledCanvasUrl('firstpartysimulator.net'), 'Canvas farbling must match the djb2-derived expected value on the FPS domain');
 assert.notStrictEqual(urlCYT1, urlFPS, 'Canvas data URL must diverge across different domains');
 
-// Scheme A: Clean native rendering on normal sites (browserleaks.com) to blend in with crowd
+// Scheme B (global farbling): normal sites (browserleaks.com) are farbled too —
+// canvas/WebGL/audio/plugin perturbation is now shield-wide, gated only by
+// isShieldActive, with per-domain random salt (stable in-site, diverging cross-site).
 const winBL = createMockWindow('browserleaks.com', 'Linux x86_64');
 vm.runInContext(stealthCode, vm.createContext(winBL));
 const canvasBL = new winBL.HTMLCanvasElement();
 const ctxBL = canvasBL.getContext('2d');
 const urlBL = canvasBL.toDataURL();
-assert.strictEqual(urlBL, 'data:image/png;base64,mockPngR100A255', 'Canvas on browserleaks.com must return clean native rendering without perturbation');
+assert.strictEqual(urlBL, expectedFarbledCanvasUrl('browserleaks.com'), 'Canvas toDataURL on browserleaks.com must be farbled with the djb2-derived value');
+const imgBL = ctxBL.getImageData(0, 0, 1, 1);
+assert.notStrictEqual(imgBL.data[0], 100, 'Canvas pixel data on browserleaks.com must be perturbed');
 
 const glBL = new winBL.WebGLRenderingContext();
 const pixelsBL = new Uint8Array(4);
 glBL.readPixels(0, 0, 1, 1, 0, 0, pixelsBL);
-assert.strictEqual(pixelsBL[0], 50, 'WebGL readPixels on browserleaks.com must return clean unperturbed pixel (50)');
+assert.notDeepStrictEqual(Array.from(pixelsBL), [50, 60, 70, 255], 'WebGL readPixels on browserleaks.com must be perturbed (not the native pixels)');
 
+// Audio: stepped samples (every max(1, floor(len/100)) index) are shifted by a
+// tiny per-domain delta; non-stepped samples stay byte-identical to native.
 const audioBL = new winBL.AudioBuffer();
 const chBL = audioBL.getChannelData(0);
-assert.strictEqual(chBL[100], Math.fround(Math.sin(100 / 100)), 'Audio samples on browserleaks.com must return clean unperturbed audio');
+const audioBL2 = new winBL.AudioBuffer();
+const chBL2 = audioBL2.getChannelData(0);
+assert.notStrictEqual(chBL[100], Math.fround(Math.sin(100 / 100)), 'Stepped audio sample on browserleaks.com must be farbled (not the native value)');
+assert.strictEqual(chBL[100], chBL2[100], 'Farbled audio must be stable within the same domain visit');
+assert.strictEqual(chBL[101], Math.fround(Math.sin(101 / 100)), 'Non-stepped audio samples must remain byte-identical to native data');
 
+// Plugin description is perturbed on every domain: spaces appended =
+// djb2(host) % 3 + 1 (deterministic per-site, stable across sessions).
+const blSpaces = (djb2Hash('browserleaks.com') % 3) + 1;
 const pluginBL = new winBL.Plugin();
-assert.strictEqual(pluginBL.description, 'Portable Document Format', 'Plugin description on browserleaks.com must be clean without appended spaces');
-console.log('✓ Scheme A: Native hardware rendering on browserleaks.com (Canvas/WebGL/Audio/Plugins) blends into real hardware crowd.');
+assert.strictEqual(pluginBL.description, 'Portable Document Format' + ' '.repeat(blSpaces), 'Plugin description on browserleaks.com must append djb2(host)%3+1 spaces');
+console.log('✓ Scheme B: Canvas/WebGL/Audio/Plugins are farbled on browserleaks.com too.');
 
 // Metric 2: WebGL readPixels
 const glCYT = new winCYT.WebGLRenderingContext();
@@ -1483,8 +1820,10 @@ const pixelsFPS = new Uint8Array(4);
 glFPS.readPixels(0, 0, 1, 1, 0, 0, pixelsFPS);
 
 assert.deepStrictEqual(pixelsCYT1, pixelsCYT2, 'WebGL pixels must be strictly identical within same domain');
+assert.deepStrictEqual(Array.from(pixelsCYT1), expectedFarbledWebglPixels('coveryourtracks.eff.org'), 'WebGL farbling must match the djb2-derived expected pixels');
+assert.deepStrictEqual(Array.from(pixelsFPS), expectedFarbledWebglPixels('firstpartysimulator.net'), 'WebGL farbling must match the expected pixels on the FPS domain');
 assert.notDeepStrictEqual(pixelsCYT1, pixelsFPS, 'WebGL pixels must diverge across different domains');
-console.log('✓ WebGL readPixels: Stable within domain, randomized across domains.');
+console.log('✓ WebGL readPixels: Stable within domain, randomized across domains (deterministic salt).');
 
 // Metric 3: AudioBuffer
 const audioCYT1 = new winCYT.AudioBuffer();
@@ -1496,14 +1835,18 @@ const chCYT2 = audioCYT2.getChannelData(0);
 const chFPS = audioFPS.getChannelData(0);
 
 assert.strictEqual(chCYT1[100], chCYT2[100], 'Audio samples must be strictly identical within same domain');
+assert.strictEqual(chCYT1[100], Math.fround(Math.fround(Math.sin(100 / 100)) + expectedAudioDelta('coveryourtracks.eff.org')), 'Audio farbling must match the djb2-derived expected delta');
+assert.strictEqual(chFPS[100], Math.fround(Math.fround(Math.sin(100 / 100)) + expectedAudioDelta('firstpartysimulator.net')), 'Audio farbling must match the expected delta on the FPS domain');
 assert.notStrictEqual(chCYT1[100], chFPS[100], 'Audio samples must diverge across different domains');
-console.log('✓ Audio: Stable within domain, randomized across domains.');
+console.log('✓ Audio: Stable within domain, randomized across domains (deterministic salt).');
 
-// Metric 4: Hardware Concurrency
+// Metric 4: Hardware Concurrency — constant 8 on every domain (low-entropy
+// value: degrading beats diverging; divergence only pays for seed-farbled vectors).
 const concCYT = winCYT.navigator.hardwareConcurrency;
 const concFPS = winFPS.navigator.hardwareConcurrency;
-assert.notStrictEqual(concCYT, concFPS, 'Hardware concurrency must diverge across domains');
-console.log(`✓ Hardware Concurrency: CYT=${concCYT} vs FPS=${concFPS} (Diverged).`);
+assert.strictEqual(concCYT, 8, 'Hardware concurrency must be pinned to 8 on CYT');
+assert.strictEqual(concFPS, 8, 'Hardware concurrency must be pinned to 8 on normal sites too (no cross-domain divergence)');
+console.log(`✓ Hardware Concurrency: CYT=${concCYT}, FPS=${concFPS} (constant 8).`);
 
 // Metric 5: Plugins Description
 const pluginCYT = new winCYT.Plugin();
@@ -1522,7 +1865,7 @@ let legacyOfferReceived = null;
 pcLegacy.createOffer((offer) => {
   legacyOfferReceived = offer;
 }).then(() => {
-  assert(legacyOfferReceived && !legacyOfferReceived.sdp.includes('192.168.1.100'), 'Legacy createOffer callback must receive sanitized SDP');
+  assert(legacyOfferReceived && legacyOfferReceived.sdp.includes('a=candidate:1 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'), 'Legacy createOffer callback must receive sanitized SDP (private address -> 0.0.0.0)');
   console.log('✓ Legacy createOffer callback receives sanitized SDP.');
 });
 
@@ -1531,7 +1874,7 @@ let legacyAnswerReceived = null;
 pcLegacy.createAnswer((answer) => {
   legacyAnswerReceived = answer;
 }).then(() => {
-  assert(legacyAnswerReceived && !legacyAnswerReceived.sdp.includes('192.168.1.100'), 'Legacy createAnswer callback must receive sanitized SDP');
+  assert(legacyAnswerReceived && legacyAnswerReceived.sdp.includes('a=candidate:2 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'), 'Legacy createAnswer callback must receive sanitized SDP');
   console.log('✓ Legacy createAnswer callback receives sanitized SDP.');
 });
 
@@ -1544,12 +1887,12 @@ vm.runInContext(stealthCode, vm.createContext(winNonPromise));
 const pcNonPromise = new winNonPromise.RTCPeerConnection();
 assert.strictEqual(pcNonPromise.createOffer(), undefined, 'createOffer must safely handle non-promise / undefined returns');
 
-// WebGL renderer spoofing
+// WebGL renderer spoofing (uniform Intel UHD persona on every Linux realm)
 const winMac = createMockWindow('mac-test.com', 'Linux x86_64');
 vm.runInContext(stealthCode, vm.createContext(winMac));
 const glMac = new winMac.WebGLRenderingContext();
-assert(glMac.getParameter(37446).includes('OpenGL'), 'Linux platform must spoof OpenGL renderer');
-console.log('✓ WebGL correctly provides standard Linux OpenGL renderer strings.');
+assert.strictEqual(glMac.getParameter(37446), 'Mesa Intel(R) UHD Graphics (CML GT2)', 'Linux platform must spoof the Mesa Intel UHD renderer persona');
+console.log('✓ WebGL correctly provides the uniform Linux Intel renderer persona.');
 
 // Transparent Canvas toDataURL and toBlob non-clamping farbling
 const canvasZero = new winCYT.HTMLCanvasElement();
@@ -1576,16 +1919,19 @@ console.log('[Test 7] Validating BotDetector & APIVoid Anti-Fingerprinting Defen
 const winBot = createMockWindow('apivoid.com', 'Linux x86_64');
 vm.runInContext(stealthCode, vm.createContext(winBot));
 
-// 7.1 WebGPU Adapter Spoofing
+// 7.1 WebGPU Adapter Spoofing (real Linux Chrome values for an Intel iGPU:
+// short vendor token, Chrome's architecture spelling, empty device/description)
 winBot.navigator.gpu.requestAdapter().then(adapter => {
   assert(adapter && adapter.info, 'WebGPU adapter must have info');
-  assert.strictEqual(adapter.info.vendor, 'nvidia', 'WebGPU vendor must be spoofed to nvidia');
-  assert.strictEqual(adapter.info.architecture, 'vulkan', 'WebGPU architecture must be vulkan for Linux');
-  assert.strictEqual(adapter.info.description, 'NVIDIA GeForce RTX 3060', 'WebGPU description must match Linux RTX 3060 GPU');
+  assert.strictEqual(adapter.info.vendor, 'intel', 'WebGPU vendor must be spoofed to intel');
+  assert.strictEqual(adapter.info.architecture, 'gen-12lp', 'WebGPU architecture must be gen-12lp (Intel persona)');
+  assert.strictEqual(adapter.info.device, '', 'WebGPU device must be empty for the Intel persona');
+  assert.strictEqual(adapter.info.description, '', 'WebGPU description must be empty for the Intel persona');
 
   adapter.requestAdapterInfo().then(async info => {
-    assert.strictEqual(info.architecture, 'vulkan', 'WebGPU requestAdapterInfo must return vulkan');
-    console.log('✓ WebGPU adapter correctly spoofed with Linux Vulkan architecture.');
+    assert.strictEqual(info.vendor, 'intel', 'WebGPU requestAdapterInfo must return the Intel persona vendor');
+    assert.strictEqual(info.architecture, 'gen-12lp', 'WebGPU requestAdapterInfo must return gen-12lp');
+    console.log('✓ WebGPU adapter correctly spoofed with the Intel gen-12lp persona.');
 
     // 7.2 WebGL Standard Parameters
     const gl = new winBot.WebGLRenderingContext();
@@ -1594,43 +1940,42 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     assert.strictEqual(gl.getParameter(0x8B8C), 'WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)', 'gl.SHADING_LANGUAGE_VERSION must be standard Chrome');
     console.log('✓ WebGL standard parameters (VENDOR, RENDERER, SHADING_LANGUAGE_VERSION) verified.');
 
-    // 7.3 Screen availHeight Normalization
-    assert.strictEqual(winBot.screen.availHeight, 1080, 'availHeight must report full height on Linux');
-    console.log('✓ Screen availHeight verified on Linux.');
+    // 7.3 Screen profile spoof (1920x1080 / avail 1920x1040 / 24-bit / dpr 1)
+    assert.strictEqual(winBot.screen.width, 1920, 'screen.width must report the spoofed 1920 profile');
+    assert.strictEqual(winBot.screen.height, 1080, 'screen.height must report the spoofed 1080 profile');
+    assert.strictEqual(winBot.screen.availHeight, 1040, 'availHeight must report the spoofed 1040 (taskbar-adjusted) profile');
+    assert.strictEqual(winBot.screen.availWidth, 1920, 'availWidth must report the spoofed 1920 profile');
+    assert.strictEqual(winBot.screen.colorDepth, 24, 'colorDepth must report 24');
+    assert.strictEqual(winBot.screen.pixelDepth, 24, 'pixelDepth must report 24');
+    assert.strictEqual(winBot.devicePixelRatio, 1, 'devicePixelRatio must align with the spoofed screen profile (1)');
+    console.log('✓ Screen geometry + devicePixelRatio spoof verified.');
 
-    // 7.5 Worker & SharedWorker Message Event Sanitization
+    // 7.5 Worker & SharedWorker Message Pass-through
+    // The message rewriter (sanitizeWorkerData/attachMessageSanitizer) was
+    // removed with the persona machinery: worker messages now arrive exactly
+    // as sent (native passthrough) — no cross-realm rewriting at all.
     const worker = new winBot.Worker('dummy.js');
     let onmessageReceived = null;
     worker.onmessage = (ev) => {
       onmessageReceived = ev.data;
     };
-    worker._listeners['message'][0]({
-      data: {
-        userAgent: 'Linux Mozilla/5.0 ...',
-        platform: 'Linux x86_64',
-        hardwareConcurrency: 16,
-        language: 'zh-CN',
-        languages: ['zh-CN', 'zh'],
-        uaDataPlatform: 'Linux',
-        highEntropy: { architecture: 'arm', bitness: '32', platformVersion: '6.5.0' },
-        webglVendor: 'Mesa',
-        webglRenderer: 'Mesa DRI Intel(R) UHD Graphics',
-        fontsBits: '000000000000000'
-      }
-    });
+    const workerPayload = {
+      userAgent: 'Linux Mozilla/5.0 ...',
+      platform: 'Linux x86_64',
+      hardwareConcurrency: 16,
+      language: 'zh-CN',
+      languages: ['zh-CN', 'zh'],
+      uaDataPlatform: 'Linux',
+      highEntropy: { architecture: 'arm', bitness: '32', platformVersion: '6.5.0' },
+      webglVendor: 'Mesa',
+      webglRenderer: 'Mesa DRI Intel(R) UHD Graphics',
+      fontsBits: '000000000000000'
+    };
+    worker.dispatchEvent({ type: 'message', data: workerPayload });
     assert(onmessageReceived, 'Worker onmessage must be called');
-    assert(onmessageReceived.userAgent.includes('Linux x86_64'), 'Worker userAgent must be sanitized to Linux');
-    assert.strictEqual(onmessageReceived.platform, 'Linux x86_64', 'Worker platform must be sanitized to Linux x86_64');
-    assert.strictEqual(onmessageReceived.hardwareConcurrency, 8, 'Worker hardwareConcurrency must be sanitized to 8');
-    assert.strictEqual(onmessageReceived.language, 'en-US', 'Worker language must be sanitized to en-US');
-    assert.strictEqual(JSON.stringify(onmessageReceived.languages), JSON.stringify(['en-US', 'en']), 'Worker languages must be sanitized to en-US, en');
-    assert.strictEqual(onmessageReceived.uaDataPlatform, 'Linux', 'Worker uaDataPlatform must be sanitized to Linux');
-    assert.strictEqual(onmessageReceived.highEntropy.architecture, 'x86', 'Worker architecture must be x86');
-    assert.strictEqual(onmessageReceived.highEntropy.platformVersion, '', 'Worker platformVersion must be empty string on Linux');
-    assert.strictEqual(onmessageReceived.webglVendor, 'Google Inc. (NVIDIA)', 'Worker webglVendor must be Google Inc. (NVIDIA)');
-    assert(onmessageReceived.webglRenderer.includes('ANGLE'), 'Worker webglRenderer must be ANGLE');
-    assert.strictEqual(onmessageReceived.fontsBits, '111111111111111', 'Worker fontsBits must be 111111111111111');
-    console.log('✓ Worker & SharedWorker message sanitization prevents cross-realm fingerprint leaks.');
+    assert.deepStrictEqual(onmessageReceived, workerPayload, 'Worker messages must pass through unmodified (no message rewriter)');
+    assert.strictEqual(onmessageReceived.hardwareConcurrency, 16, 'Worker message payloads must NOT be rewritten (worker-side hooks live in the bootstrap only)');
+    console.log('✓ Worker messages pass through natively (message rewriter removed with personas).');
 
     // 7.6 Proactive DOM insertion hooks for iframes
     const frame = new winBot.HTMLIFrameElement();
@@ -1642,16 +1987,15 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     console.log('[Test 8] Validating CreepJS 0 Lies & Anti-Fingerprinting Defenses...');
 
     // 8.1 Navigator Prototype Getter Receiver & Descriptor Integrity
-    assert.throws(() => winBot.Navigator.prototype.platform, /Illegal invocation/, 'Navigator.prototype.platform must throw TypeError on prototype');
-    assert.throws(() => winBot.Navigator.prototype.userAgent, /Illegal invocation/, 'Navigator.prototype.userAgent must throw TypeError on prototype');
+    // Persona getters (platform/userAgent/language) are gone: the engine only
+    // installs prototype getters for the entropy-reduction hooks.
     assert.throws(() => winBot.Navigator.prototype.hardwareConcurrency, /Illegal invocation/, 'Navigator.prototype.hardwareConcurrency must throw TypeError on prototype');
     assert.throws(() => winBot.Navigator.prototype.deviceMemory, /Illegal invocation/, 'Navigator.prototype.deviceMemory must throw TypeError on prototype');
     assert.throws(() => winBot.Navigator.prototype.webdriver, /Illegal invocation/, 'Navigator.prototype.webdriver must throw TypeError on prototype');
-    assert.throws(() => winBot.Navigator.prototype.language, /Illegal invocation/, 'Navigator.prototype.language must throw TypeError on prototype');
-    assert.strictEqual(winBot.navigator.platform, 'Linux x86_64', 'navigator.platform instance access must succeed');
-    assert.strictEqual(Object.prototype.hasOwnProperty.call(winBot.navigator, 'platform'), false, 'navigator must not have own platform property (failed undefined properties defense)');
-    assert.strictEqual(Object.prototype.hasOwnProperty.call(winBot.navigator, 'userAgent'), false, 'navigator must not have own userAgent property');
-    assert.strictEqual(Object.prototype.hasOwnProperty.call(winBot.navigator, 'webdriver'), false, 'navigator must not have own webdriver property');
+    assert.strictEqual(winBot.navigator.platform, 'Linux x86_64', 'navigator.platform instance access must return the native value');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(winBot.navigator, 'platform'), true, 'native own platform property must be preserved (no persona getter)');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(winBot.navigator, 'userAgent'), true, 'native own userAgent property must be preserved (no persona getter)');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(winBot.navigator, 'webdriver'), false, 'navigator must not have own webdriver property (engine installs prototype getter)');
 
     // 8.2 Screen Prototype Getter Receiver & Descriptor Integrity
     assert.throws(() => winBot.Screen.prototype.availHeight, /Illegal invocation/, 'Screen.prototype.availHeight must throw TypeError on prototype');
@@ -1676,7 +2020,7 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     assert.strictEqual('prototype' in appendChild, false, 'Node.prototype.appendChild must have no .prototype');
 
     // 8.5 Function.prototype.toString Error Stack Cleanliness (Blink native emulation)
-    const platGetter = Object.getOwnPropertyDescriptor(winBot.Navigator.prototype, 'platform').get;
+    const platGetter = Object.getOwnPropertyDescriptor(winBot.Navigator.prototype, 'hardwareConcurrency').get;
     try {
       Object.create(platGetter).toString();
       assert.fail('Object.create(apiFunction).toString() should throw');
@@ -1704,45 +2048,40 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     assert.strictEqual(winBot.document.fonts.check('12px "SimSun"'), false, 'Chinese font SimSun must return false in check');
     assert.strictEqual(winBot.document.fonts.check('16px "Arial"'), true, 'Standard font Arial must return true in check');
 
-    // 8.7 CreepJS Worker Data Evasion
+    // 8.7 CreepJS Worker Data Pass-through (message rewriter removed)
+    const creepWorkerPayload = {
+      lied: 1,
+      lies: { proto: { platform: ['failed illegal error'] } },
+      platform: 'Linux x86_64',
+      userAgent: 'Mozilla/5.0 (X11; Linux x86_64)...',
+      locale: 'zh-CN',
+      languages: 'zh-CN,zh',
+      timezoneLocation: 'Asia/Shanghai',
+      userAgentData: {
+        platform: 'Linux',
+        platformVersion: '6.5.0',
+        uaFullVersion: '120.0.0.0'
+      }
+    };
     const worker2 = new winBot.Worker('creep.js');
     let creepWorkerMsg = null;
     worker2.onmessage = (ev) => {
       creepWorkerMsg = ev.data;
     };
-    worker2._listeners['message'][0]({
-      data: {
-        lied: 1,
-        lies: { proto: { platform: ['failed illegal error'] } },
-        platform: 'Linux x86_64',
-        userAgent: 'Mozilla/5.0 (X11; Linux x86_64)...',
-        locale: 'zh-CN',
-        languages: 'zh-CN,zh',
-        timezoneLocation: 'Asia/Shanghai',
-        userAgentData: {
-          platform: 'Linux',
-          platformVersion: '6.5.0',
-          uaFullVersion: '120.0.0.0'
-        }
-      }
-    });
-    assert.strictEqual(creepWorkerMsg.lied, 0, 'Worker lied flag must be sanitized to 0');
-    assert.strictEqual(creepWorkerMsg.lies.proto, false, 'Worker lies.proto must be false');
-    assert.strictEqual(creepWorkerMsg.platform, 'Linux x86_64', 'Worker platform must be Linux x86_64');
-    assert(creepWorkerMsg.userAgent.includes('Linux x86_64'), 'Worker userAgent must be Linux');
-    assert.strictEqual(creepWorkerMsg.locale, 'en-US', 'Worker locale must be en-US');
-    assert.strictEqual(creepWorkerMsg.languages, 'en-US,en', 'Worker languages must be en-US,en');
-    assert.strictEqual(creepWorkerMsg.timezoneLocation, 'America/Los_Angeles', 'Worker timezoneLocation must match activeTimezone');
-    assert.strictEqual(creepWorkerMsg.userAgentData.platform, 'Linux', 'Worker userAgentData.platform must be Linux');
-    assert.strictEqual(creepWorkerMsg.userAgentData.platformVersion, '', 'Worker platformVersion must be empty string on Linux');
+    worker2.dispatchEvent({ type: 'message', data: creepWorkerPayload });
+    assert.deepStrictEqual(creepWorkerMsg, creepWorkerPayload, 'Worker messages must arrive byte-identical (no rewriter: personas removed)');
+    assert.strictEqual(creepWorkerMsg.lied, 1, 'Worker lied flag must pass through untouched');
+    assert.strictEqual(creepWorkerMsg.locale, 'zh-CN', 'Worker locale must pass through natively');
 
-    // 8.8 Native Canvas 2D Preservation on Non-CYT Domains
+    // 8.8 Canvas 2D Farbling is now global (entropy reduction): non-CYT domains
+    // are farbled too, stable in-site.
     const canvasProbe = new winBot.HTMLCanvasElement();
     const ctxProbe = canvasProbe.getContext('2d');
     ctxProbe._pixels.set([255,255,255,255, 191,191,191,255, 223,223,223,255, 64,64,64,255]);
     const probeRes = ctxProbe.getImageData(0, 0, 2, 2);
-    assert.strictEqual(probeRes.data[0], 255, 'Canvas pixels preserved cleanly on non-CYT domains');
-    assert.strictEqual(probeRes.data[4], 191, 'Native Linux Skia anti-aliasing preserved');
+    assert.notStrictEqual(probeRes.data[0], 255, 'Canvas pixels must be farbled on non-CYT domains (global farbling)');
+    const probeRes2 = ctxProbe.getImageData(0, 0, 2, 2);
+    assert.deepStrictEqual(probeRes2.data, probeRes.data, 'Canvas farbling must be stable (idempotent) within the domain');
 
     // 8.9 Native AudioBuffer Preservation & Idempotency on Non-CYT Domains
     const audioBufferA = new winBot.AudioBuffer(5000);
@@ -1750,7 +2089,7 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     const chDataA2 = audioBufferA.getChannelData(0);
     assert.strictEqual(chDataA, chDataA2, 'Repeated getChannelData calls must return same buffer');
 
-    console.log('✓ CreepJS 0 lies, descriptor integrity, error stack, font verification, canvas & audio native fidelity passed.\n');
+    console.log('✓ CreepJS 0 lies, descriptor integrity, error stack, font verification, worker passthrough & global canvas farbling passed.\n');
 
     // 9. Validating Dynamic Toggle Controls & Whitelist Bypass
     console.log('[Test 9] Validating Dynamic Toggle Controls & Whitelist Bypass...');
@@ -1762,7 +2101,7 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     // Initially active: WebRTC SDP is sanitized, Canvas is farbled, Audio is farbled, Language is en-US
     const pcTogInit = new winToggle.RTCPeerConnection();
     const offerInit = await pcTogInit.createOffer();
-    assert(!offerInit.sdp.includes('192.168.1.100'), 'Initially, WebRTC SDP must be sanitized');
+    assert(offerInit.sdp.includes('a=candidate:1 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'), 'Initially, WebRTC SDP must be sanitized');
 
     const canvasTogInit = new winToggle.HTMLCanvasElement();
     const ctxTogInit = canvasTogInit.getContext('2d');
@@ -1774,17 +2113,13 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     const audioDataInit = audioBufInit.getChannelData(0);
     assert(audioDataInit[0] !== 0, 'Initially, AudioBuffer getChannelData must be farbled on CYT domain');
 
-    // Turn OFF globalShieldEnabled
-    winToggle.document.dispatchEvent({
-      type: '__bocchi_config_sync__',
-      detail: { globalShieldEnabled: false },
-      stopImmediatePropagation() {}
-    });
+    // Turn OFF globalShieldEnabled (authenticated CE payload)
+    driveConfig(winToggle, { cfg: { globalShieldEnabled: false } });
 
     // Verify WebRTC retains private IP when global shield is disabled
     const pcTogOff = new winToggle.RTCPeerConnection();
     const offerOff = await pcTogOff.createOffer();
-    assert(offerOff.sdp.includes('192.168.1.100'), 'When global shield is disabled, WebRTC SDP must NOT be sanitized');
+    assert(offerOff.sdp.includes('a=candidate:1 1 UDP 2122260223 192.168.1.100 54321 typ host generation 0'), 'When global shield is disabled, WebRTC SDP must NOT be sanitized');
 
     // Verify Canvas toDataURL does NOT farble when global shield is disabled
     const canvasTog = new winToggle.HTMLCanvasElement();
@@ -1803,15 +2138,11 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     assert.strictEqual(glTog.getParameter(37446), 'llvmpipe (LLVM 12.0.0, 256 bits)', 'When global shield is disabled, WebGL unmasked renderer must return native string');
 
     // Re-enable globalShieldEnabled
-    winToggle.document.dispatchEvent({
-      type: '__bocchi_config_sync__',
-      detail: { globalShieldEnabled: true },
-      stopImmediatePropagation() {}
-    });
+    driveConfig(winToggle, { cfg: { globalShieldEnabled: true } });
 
     const pcTogOn = new winToggle.RTCPeerConnection();
     const offerOn = await pcTogOn.createOffer();
-    assert(!offerOn.sdp.includes('192.168.1.100'), 'When global shield is re-enabled, WebRTC SDP must be sanitized again');
+    assert(offerOn.sdp.includes('a=candidate:1 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'), 'When global shield is re-enabled, WebRTC SDP must be sanitized again');
     console.log('✓ Global Master Switch enables and disables all protections dynamically.');
 
     // 9.2 Per-site Whitelist Bypass (siteBypassList)
@@ -1822,26 +2153,18 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     vm.runInContext(stealthCode, vm.createContext(winProtected));
 
     const bypassConfig = { siteBypassList: ['https://figma.com', '*.canva.com'] };
-    winBypass.document.dispatchEvent({
-      type: '__bocchi_config_sync__',
-      detail: bypassConfig,
-      stopImmediatePropagation() {}
-    });
-    winProtected.document.dispatchEvent({
-      type: '__bocchi_config_sync__',
-      detail: bypassConfig,
-      stopImmediatePropagation() {}
-    });
+    driveConfig(winBypass, { cfg: bypassConfig });
+    driveConfig(winProtected, { cfg: bypassConfig });
 
     // sub.figma.com matches figma.com -> bypassed
     const pcBypass = new winBypass.RTCPeerConnection();
     const offerBypass = await pcBypass.createOffer();
-    assert(offerBypass.sdp.includes('192.168.1.100'), 'Whitelisted/bypassed site must bypass WebRTC SDP sanitization');
+    assert(offerBypass.sdp.includes('a=candidate:1 1 UDP 2122260223 192.168.1.100 54321 typ host generation 0'), 'Whitelisted/bypassed site must bypass WebRTC SDP sanitization');
 
     // app.notion.so does NOT match -> protected
     const pcProtected = new winProtected.RTCPeerConnection();
     const offerProtected = await pcProtected.createOffer();
-    assert(!offerProtected.sdp.includes('192.168.1.100'), 'Non-bypassed site must remain protected');
+    assert(offerProtected.sdp.includes('a=candidate:1 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'), 'Non-bypassed site must remain protected');
     console.log('✓ Per-site whitelist bypass selectively disables spoofing for specified domains and subdomains.');
 
     // 9.3 Independent Feature Toggles (All 5 Modules)
@@ -1849,14 +2172,10 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     vm.runInContext(stealthCode, vm.createContext(winFeat));
 
     // Module 1: webrtcProtection toggle
-    winFeat.document.dispatchEvent({
-      type: '__bocchi_config_sync__',
-      detail: { webrtcProtection: false, canvasProtection: true, hardwareProtection: true, audioProtection: true, timezoneProtection: true },
-      stopImmediatePropagation() {}
-    });
+    driveConfig(winFeat, { cfg: { webrtcProtection: false, canvasProtection: true, hardwareProtection: true, audioProtection: true, timezoneProtection: true } });
     const pcFeat1 = new winFeat.RTCPeerConnection();
     const offerFeat1 = await pcFeat1.createOffer();
-    assert(offerFeat1.sdp.includes('192.168.1.100'), 'With webrtcProtection=false, WebRTC SDP must NOT be sanitized');
+    assert(offerFeat1.sdp.includes('a=candidate:1 1 UDP 2122260223 192.168.1.100 54321 typ host generation 0'), 'With webrtcProtection=false, WebRTC SDP must NOT be sanitized');
 
     // WebRTC enumerateDevices when disabled returns raw device list
     const devicesRaw = await winFeat.navigator.mediaDevices.enumerateDevices();
@@ -1881,11 +2200,7 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     assert(!dataUrlFeat1.includes('mockPngR0A0'), 'With canvasProtection=true, Canvas toDataURL must still be farbled');
 
     // Module 2: canvasProtection toggle
-    winFeat.document.dispatchEvent({
-      type: '__bocchi_config_sync__',
-      detail: { webrtcProtection: true, canvasProtection: false, hardwareProtection: true, audioProtection: true },
-      stopImmediatePropagation() {}
-    });
+    driveConfig(winFeat, { cfg: { webrtcProtection: true, canvasProtection: false, hardwareProtection: true, audioProtection: true } });
     const canvasFeat2 = new winFeat.HTMLCanvasElement();
     const ctxFeat2 = canvasFeat2.getContext('2d');
     for (let i = 0; i < ctxFeat2._pixels.length; i++) ctxFeat2._pixels[i] = 0;
@@ -1896,11 +2211,7 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     assert.strictEqual(imgDataFeat2.data[0], 0, 'With canvasProtection=false, getImageData must return unperturbed pixel');
 
     // Module 3: audioProtection toggle
-    winFeat.document.dispatchEvent({
-      type: '__bocchi_config_sync__',
-      detail: { audioProtection: false },
-      stopImmediatePropagation() {}
-    });
+    driveConfig(winFeat, { cfg: { audioProtection: false } });
     const audioBufFeat = new winFeat.AudioBuffer(500);
     const audioDataFeat = audioBufFeat.getChannelData(0);
     assert.strictEqual(audioDataFeat[0], 0, 'With audioProtection=false, AudioBuffer getChannelData must not be farbled');
@@ -1909,54 +2220,40 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     audioBufFeat.copyFromChannel(destBuf, 0);
     assert.strictEqual(destBuf[0], 0, 'With audioProtection=false, copyFromChannel must not be farbled');
 
-    // Module 4: timezoneProtection toggle
-    winFeat.document.dispatchEvent({
-      type: '__bocchi_config_sync__',
-      detail: { timezoneProtection: false },
-      stopImmediatePropagation() {}
-    });
-    assert.strictEqual(winFeat.navigator.language, 'zh-CN', 'With timezoneProtection=false, navigator.language returns native language');
-    assert(winFeat.navigator.languages.includes('zh-CN'), 'With timezoneProtection=false, navigator.languages includes native language');
+    // Module 4: timezoneProtection toggle (timezone only — locale/lang are
+    // native passthrough now, personas removed)
+    setTestTimezone(winFeat, 'Europe/Paris');
+    driveConfig(winFeat, { cfg: { timezoneProtection: false } });
+    assert.strictEqual(winFeat.navigator.language, 'zh-CN', 'navigator.language passes through natively (no persona, regardless of toggles)');
+    assert(winFeat.navigator.languages.includes('zh-CN'), 'navigator.languages keeps the native entries');
 
     const dtfFeatDisabled = new winFeat.Intl.DateTimeFormat('zh-CN');
     assert.strictEqual(dtfFeatDisabled.resolvedOptions().locale, 'zh-CN', 'With timezoneProtection=false, Intl.DateTimeFormat allows native zh-CN locale');
+    assert.strictEqual(dtfFeatDisabled.resolvedOptions().timeZone, new Intl.DateTimeFormat().resolvedOptions().timeZone, 'With timezoneProtection=false, timezone falls back to the native local zone');
 
-    // Re-enable timezoneProtection
-    winFeat.document.dispatchEvent({
-      type: '__bocchi_config_sync__',
-      detail: { timezoneProtection: true },
-      stopImmediatePropagation() {}
-    });
-    assert.strictEqual(winFeat.navigator.language, 'en-US', 'With timezoneProtection=true, navigator.language is spoofed to en-US');
+    // Re-enable timezoneProtection: locale stays native, timezone realigns.
+    driveConfig(winFeat, { cfg: { timezoneProtection: true } });
+    assert.strictEqual(winFeat.navigator.language, 'zh-CN', 'navigator.language stays native even with timezoneProtection=true (personas removed)');
     const dtfFeatEnabled = new winFeat.Intl.DateTimeFormat('zh-CN');
-    assert.strictEqual(dtfFeatEnabled.resolvedOptions().locale, 'en-US', 'With timezoneProtection=true, Intl.DateTimeFormat masks zh-CN to en-US');
+    assert.strictEqual(dtfFeatEnabled.resolvedOptions().locale, 'zh-CN', 'With timezoneProtection=true, zh-CN locale is still passed through natively');
+    assert.strictEqual(dtfFeatEnabled.resolvedOptions().timeZone, 'Europe/Paris', 'With timezoneProtection=true, timezone realigns with the exit IP zone');
 
     // Module 5: hardwareProtection toggle
-    winFeat.document.dispatchEvent({
-      type: '__bocchi_config_sync__',
-      detail: { hardwareProtection: false },
-      stopImmediatePropagation() {}
-    });
+    driveConfig(winFeat, { cfg: { hardwareProtection: false } });
     const glFeat = new winFeat.WebGLRenderingContext();
     assert.strictEqual(glFeat.getParameter(37446), 'llvmpipe (LLVM 12.0.0, 256 bits)', 'With hardwareProtection=false, WebGL renderer must return native string');
     assert.strictEqual(winFeat.navigator.hardwareConcurrency, 16, 'With hardwareProtection=false, hardwareConcurrency returns native core count');
     assert.strictEqual(winFeat.navigator.deviceMemory, 32, 'With hardwareProtection=false, deviceMemory returns native RAM');
     assert.strictEqual(winFeat.performance.memory.jsHeapSizeLimit, 4294967296, 'With hardwareProtection=false, jsHeapSizeLimit returns native heap size');
+    assert.strictEqual(winFeat.screen.availHeight, 1080, 'With hardwareProtection=false, screen spoof is disabled and availHeight returns the native 1080');
+    assert.strictEqual(winFeat.devicePixelRatio, 1.25, 'With hardwareProtection=false, devicePixelRatio returns the native 1.25');
 
     // Module 6: Font protection toggle
-    winFeat.document.dispatchEvent({
-      type: '__bocchi_config_sync__',
-      detail: { fontProtection: false },
-      stopImmediatePropagation() {}
-    });
+    driveConfig(winFeat, { cfg: { fontProtection: false } });
     const allFontsDisabled = await winFeat.queryLocalFonts();
     assert(allFontsDisabled.some(f => f.family === 'SimSun'), 'With fontProtection=false, SimSun must NOT be filtered from queryLocalFonts');
 
-    winFeat.document.dispatchEvent({
-      type: '__bocchi_config_sync__',
-      detail: { fontProtection: true },
-      stopImmediatePropagation() {}
-    });
+    driveConfig(winFeat, { cfg: { fontProtection: true } });
     const allFontsEnabled = await winFeat.queryLocalFonts();
     assert(!allFontsEnabled.some(f => f.family === 'SimSun'), 'With fontProtection=true, SimSun must be filtered from queryLocalFonts');
     console.log('✓ Independent feature toggles correctly control individual modules.');
@@ -1980,25 +2277,360 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     assert(!fontsDefault.some(f => f.family === 'SimSun'), 'SimSun must be filtered by default');
 
     // Turn ON blockOtherScripts
-    winOther.document.dispatchEvent({
-      type: '__bocchi_config_sync__',
-      detail: { blockOtherScripts: true },
-      stopImmediatePropagation() {}
-    });
+    driveConfig(winOther, { cfg: { blockOtherScripts: true } });
     const fontsBlocked = await winOther.queryLocalFonts();
     assert(!fontsBlocked.some(f => f.family === 'Noto Sans Arabic'), 'When blockOtherScripts=true, Noto Sans Arabic must be filtered');
     assert(!fontsBlocked.some(f => f.family === 'Amiri'), 'When blockOtherScripts=true, Amiri must be filtered');
     assert(fontsBlocked.some(f => f.family === 'Arial'), 'Standard Latin font Arial must still be retained');
 
     // Turn OFF blockOtherScripts
-    winOther.document.dispatchEvent({
-      type: '__bocchi_config_sync__',
-      detail: { blockOtherScripts: false },
-      stopImmediatePropagation() {}
-    });
+    driveConfig(winOther, { cfg: { blockOtherScripts: false } });
     const fontsRestored = await winOther.queryLocalFonts();
     assert(fontsRestored.some(f => f.family === 'Noto Sans Arabic'), 'When blockOtherScripts=false, Noto Sans Arabic must be restored');
     console.log('✓ Batch minority scripts toggle (blockOtherScripts) successfully filters and restores non-Latin fonts.\n');
+
+    // 10. Regression: v1.0.1 security & correctness fixes
+    console.log('[Test 10] Validating Regression: v1.0.1 security & correctness fixes...');
+
+    // 10.1 (S1) Config channel security: forged CE tokens and legacy fixed
+    // event names must never change engine configuration.
+    {
+      const winSec = createMockWindow('security-test.example', 'Linux x86_64');
+      vm.runInContext(stealthCode, vm.createContext(winSec));
+      const hs = getEngineHandshake(winSec);
+      assert(/^__bocchi_evt_[0-9a-f]{8,16}$/.test(hs.e), 'engine handshake must use a random per-frame config event name');
+      assert(/^[0-9a-f]{32}$/.test(hs.t), 'engine handshake token must be 16 bytes of hex');
+
+      // Forged payloads: correct CE name but wrong token...
+      winSec.document.dispatchEvent({ type: hs.e, detail: { t: '0000000000000000000000000000dead', cfg: { globalShieldEnabled: false, webrtcProtection: false } }, stopImmediatePropagation() {} });
+      // ...correct token but a guessed (wrong) event name...
+      dispatchUnauthenticated(winSec, '__bocchi_evt_00000000', { t: hs.t, cfg: { globalShieldEnabled: false } });
+      // ...and the removed legacy fixed event names.
+      dispatchUnauthenticated(winSec, '__bocchi_config_sync__', { globalShieldEnabled: false, webrtcProtection: false });
+      dispatchUnauthenticated(winSec, '__bocchi_tz_sync__', { timezone: 'Europe/Berlin' });
+      dispatchUnauthenticated(winSec, '__bocchi_fonts_sync__', { customFonts: ['Arial'], allowedFonts: [], blockBuiltin: true });
+
+      // None of the forged payloads may take effect.
+      const pcSec = new winSec.RTCPeerConnection();
+      const offerSec = await pcSec.createOffer();
+      assert(offerSec.sdp.includes('a=candidate:1 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'),
+        'forged config events must not disable WebRTC SDP sanitization');
+      assert.strictEqual(new winSec.Intl.DateTimeFormat().resolvedOptions().timeZone, 'America/Los_Angeles',
+        'forged __bocchi_tz_sync__ must not change the active timezone');
+      assert.strictEqual(winSec.document.fonts.check('16px Arial'), true,
+        'forged __bocchi_fonts_sync__ must not hide a standard font');
+      assert.strictEqual(winSec.document.fonts.check('12px "SimSun"'), false,
+        'SimSun must stay masked after forged font events');
+
+      // Control: the same payload over the authenticated channel DOES work,
+      // and after the first valid CE the engine stops re-answering __bocchi_req__.
+      const hsBefore = winSec._dispatchedDocEvents.filter(e => e.type === '__bocchi_hs__').length;
+      driveConfig(winSec, { tz: 'Europe/Berlin' });
+      assert.strictEqual(new winSec.Intl.DateTimeFormat().resolvedOptions().timeZone, 'Europe/Berlin',
+        'authenticated CE payload must be able to change the timezone');
+      driveConfig(winSec, { cfg: { globalShieldEnabled: false } });
+      const pcSecOff = new winSec.RTCPeerConnection();
+      const offerSecOff = await pcSecOff.createOffer();
+      assert(offerSecOff.sdp.includes('a=candidate:1 1 UDP 2122260223 192.168.1.100 54321 typ host generation 0'),
+        'authenticated CE payload must be able to disable the shield');
+      winSec.document.dispatchEvent({ type: '__bocchi_req__' });
+      const hsAfter = winSec._dispatchedDocEvents.filter(e => e.type === '__bocchi_hs__').length;
+      assert.strictEqual(hsAfter, hsBefore, 'after the first authenticated CE, __bocchi_req__ must not re-trigger the handshake (anti-fishing)');
+      driveConfig(winSec, { cfg: { globalShieldEnabled: true } });
+      console.log('✓ S1: config channel is token-secured; forged/legacy events are ignored.');
+    }
+
+    // 10.2 (S3) Array.prototype.includes backdoor removed (native semantics only)
+    {
+      assert.strictEqual(winCYT.Array.prototype.includes, Array.prototype.includes,
+        'Array.prototype.includes must remain the pristine native function (backdoor removed)');
+      const arr287 = new Array(287).fill('x');
+      arr287[0] = '00b72507';
+      assert.strictEqual(arr287.includes('not-present'), false, 'includes backdoor sentinel (287/00b72507) must no longer force true');
+      assert.strictEqual(arr287.includes('00b72507'), true, 'native includes must still find real members');
+      const arr237 = new Array(237).fill(1);
+      arr237[0] = -1056897629;
+      assert.strictEqual(arr237.includes('anything'), false, 'includes backdoor sentinel (237/-1056897629) must no longer force true');
+      assert.strictEqual(arr237.includes(-1056897629), true, 'native includes must still find real members');
+      console.log('✓ S3: Array.prototype.includes backdoor removed.');
+    }
+
+    // 10.3 (S6) SDP sanitization is line-based and only rewrites private
+    // candidate connection addresses (field 5).
+    {
+      const winSDP = createMockWindow('sdp-test.example', 'Linux x86_64');
+      vm.runInContext(stealthCode, vm.createContext(winSDP));
+      const pcSDP = new winSDP.RTCPeerConnection();
+      const fingerprintLine = 'a=fingerprint:sha-256 00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF';
+      const icePwdLine = 'a=ice-pwd:1/A3jOEqf2wMIPZxOEuUYpLi';
+      const iceUfragLine = 'a=ice-ufrag:AbCdEfGh';
+      const privLine = 'a=candidate:1 1 UDP 2122260223 192.168.1.100 54321 typ host generation 0';
+      const mdnsLine = 'a=candidate:2 1 UDP 2122260223 5f6a1f2e-3e4d-4a5b-9c6d-1a2b3c4d5e6f.local 54321 typ host generation 0';
+      const pubLine = 'a=candidate:3 1 UDP 1686052607 203.0.113.1 54321 typ srflx raddr 198.51.100.7 rport 54321';
+      const privV6Line = 'a=candidate:4 1 UDP 1686052607 fe80::abcd:1234 54324 typ host generation 0';
+      const sdpIn = [
+        'v=0',
+        'o=- 4611731400430051336 2 IN IP4 127.0.0.1',
+        's=-',
+        't=0 0',
+        fingerprintLine,
+        icePwdLine,
+        iceUfragLine,
+        privLine,
+        mdnsLine,
+        pubLine,
+        privV6Line,
+        'a=end-of-candidates'
+      ].join('\r\n');
+      pcSDP.setLocalDescription(new winSDP.RTCSessionDescription({ type: 'offer', sdp: sdpIn }));
+      const outLines = pcSDP.localDescription.sdp.split('\r\n');
+      assert(outLines.includes(fingerprintLine), 'a=fingerprint:sha-256 line must be preserved byte-for-byte');
+      assert(outLines.includes(icePwdLine), 'a=ice-pwd line must be preserved byte-for-byte');
+      assert(outLines.includes(iceUfragLine), 'a=ice-ufrag line must be preserved byte-for-byte');
+      assert(outLines.includes(mdnsLine), 'mDNS (.local) candidate line must be preserved untouched');
+      assert(outLines.includes(pubLine), 'public srflx candidate line must be preserved untouched');
+      assert(outLines.includes('a=candidate:1 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'),
+        'private IPv4 candidate connection address must be replaced with 0.0.0.0 (host line kept, not dropped)');
+      assert(!outLines.includes(privLine), 'raw private IPv4 candidate line must not survive');
+      assert(outLines.includes('a=candidate:4 1 UDP 1686052607 :: 54324 typ host generation 0'),
+        'link-local IPv6 candidate connection address must be replaced with ::');
+      assert(!outLines.includes(privV6Line), 'raw link-local IPv6 candidate line must not survive');
+      console.log('✓ S6: SDP sanitization preserves fingerprint/ice/mDNS lines and rewrites only private candidate addresses.');
+    }
+
+    // 10.4 (S4) AudioBuffer: copyFromChannel and getChannelData share one
+    // underlying one-time mutation (no destination delta accumulation).
+    {
+      const winAudio = createMockWindow('coveryourtracks.eff.org', 'Linux x86_64');
+      vm.runInContext(stealthCode, vm.createContext(winAudio));
+      const buf = new winAudio.AudioBuffer(5000);
+      const d1 = new Float32Array(5000);
+      buf.copyFromChannel(d1, 0);
+      const d2 = new Float32Array(5000);
+      buf.copyFromChannel(d2, 0);
+      let copiesConsistent = true;
+      for (let i = 0; i < 5000; i++) { if (d1[i] !== d2[i]) { copiesConsistent = false; break; } }
+      assert(copiesConsistent, 'two copyFromChannel calls into equivalent destinations must produce identical results (no delta accumulation)');
+      const ch = buf.getChannelData(0);
+      let matchesGetChannelData = true;
+      for (let i = 0; i < 5000; i++) { if (d1[i] !== ch[i]) { matchesGetChannelData = false; break; } }
+      assert(matchesGetChannelData, 'copyFromChannel output must match getChannelData exactly');
+      const chAgain = buf.getChannelData(0);
+      assert.strictEqual(ch, chAgain, 'repeated getChannelData calls must return the same buffer reference');
+
+      // copyFromChannel-first ordering must produce the same model.
+      const buf2 = new winAudio.AudioBuffer(5000);
+      const d3 = new Float32Array(5000);
+      buf2.copyFromChannel(d3, 0);
+      const ch2 = buf2.getChannelData(0);
+      let copyFirstConsistent = true;
+      for (let i = 0; i < 5000; i++) { if (d3[i] !== ch2[i]) { copyFirstConsistent = false; break; } }
+      assert(copyFirstConsistent, 'copyFromChannel before getChannelData must stay consistent');
+      assert.notStrictEqual(d1[0], 0, 'audio farbling must have perturbed the underlying data');
+      console.log('✓ S4: AudioBuffer copyFromChannel/getChannelData are consistent and idempotent.');
+    }
+
+    // 10.5 (S5) Overlapping toBlob exports must restore true pixels exactly once.
+    {
+      const canvasBlob = new winCYT.HTMLCanvasElement();
+      const ctxBlob = canvasBlob.getContext('2d');
+      for (let i = 0; i < ctxBlob._pixels.length; i++) ctxBlob._pixels[i] = 200;
+      const trueR = ctxBlob._pixels[0];
+      const trueA = ctxBlob._pixels[3];
+      let blob1 = null;
+      let blob2 = null;
+      canvasBlob.toBlob(b => { blob1 = b; });
+      canvasBlob.toBlob(b => { blob2 = b; }); // second export starts before the first callback fires
+      await new Promise(resolve => setTimeout(resolve, 20));
+      assert(blob1 && blob2, 'both overlapping toBlob callbacks must fire');
+      assert.notStrictEqual(blob1.r, trueR, 'first toBlob export must be farbled');
+      assert.notStrictEqual(blob2.r, trueR, 'second toBlob export must farble the true value, not stack on the first perturbation');
+      assert.strictEqual(ctxBlob._pixels[0], trueR, 'canvas red channel must be restored to the true value after overlapping exports');
+      assert.strictEqual(ctxBlob._pixels[3], trueA, 'canvas alpha channel must be restored to the true value after overlapping exports');
+      console.log('✓ S5: overlapping toBlob exports restore true pixels without stacked perturbations.');
+    }
+
+    // 10.6 (f) Same-window double patching is prevented by shared patch marks.
+    {
+      const winDP = createMockWindow('coveryourtracks.eff.org', 'Linux x86_64');
+      const ctxDP = vm.createContext(winDP);
+      vm.runInContext(stealthCode, ctxDP);
+      const toDataURLBefore = winDP.HTMLCanvasElement.prototype.toDataURL;
+      const getTZOBefore = winDP.Date.prototype.getTimezoneOffset;
+      const canvasDP = new winDP.HTMLCanvasElement();
+      canvasDP.getContext('2d');
+      const urlDP1 = canvasDP.toDataURL();
+      assert.notStrictEqual(urlDP1, 'data:image/png;base64,mockPngR100A255', 'control: single patch farbles the CYT canvas');
+
+      // Second engine instance in the same realm (same-origin iframe scenario).
+      vm.runInContext(stealthCode, ctxDP);
+      assert.strictEqual(winDP.HTMLCanvasElement.prototype.toDataURL, toDataURLBefore, 'second applyStealth must not re-wrap toDataURL (shared patch marks)');
+      assert.strictEqual(winDP.Date.prototype.getTimezoneOffset, getTZOBefore, 'second applyStealth must not re-wrap Date hooks');
+      const urlDP2 = canvasDP.toDataURL();
+      assert.strictEqual(urlDP1, urlDP2, 'toDataURL readback must be unchanged after a second engine load (no double farbling)');
+      console.log('✓ Double patching of the same window is prevented (shared patch marks).');
+    }
+
+    // 10.7 (g) REMOVED: the worker message rewriter (and its >= 2-field gate)
+    // was deleted together with the persona machinery — messages always pass
+    // through natively now (see 7.5 / 8.7).
+
+    // 10.8 (h) isCYTDomain uses exact domain matching (observable via the
+    // CYT-gated globalPrivacyControl spoof; canvas farbling is domain-global).
+    {
+      const winEvil = createMockWindow('eff.org.evil.com', 'Linux x86_64');
+      delete winEvil.navigator.globalPrivacyControl;
+      vm.runInContext(stealthCode, vm.createContext(winEvil));
+      assert.strictEqual(winEvil.navigator.globalPrivacyControl, undefined,
+        'eff.org.evil.com must NOT be treated as a CYT domain (no GPC spoof)');
+      const canvasEvil = new winEvil.HTMLCanvasElement();
+      canvasEvil.getContext('2d');
+      assert.notStrictEqual(canvasEvil.toDataURL(), 'data:image/png;base64,mockPngR100A255',
+        'look-alike host is still farbled (farbling applies to every domain)');
+
+      const winSub = createMockWindow('sub.eff.org', 'Linux x86_64');
+      delete winSub.navigator.globalPrivacyControl;
+      vm.runInContext(stealthCode, vm.createContext(winSub));
+      assert.strictEqual(winSub.navigator.globalPrivacyControl, true,
+        'a genuine eff.org subdomain must remain CYT-protected (GPC spoof active)');
+      const canvasSub = new winSub.HTMLCanvasElement();
+      canvasSub.getContext('2d');
+      assert.notStrictEqual(canvasSub.toDataURL(), 'data:image/png;base64,mockPngR100A255',
+        'a genuine eff.org subdomain must remain farbled');
+      console.log('✓ isCYTDomain exact matching: look-alike hosts get no CYT-only GPC spoof (farbling stays global).');
+    }
+
+    // 10.9 Screen spoof guardrail: a real window larger than the profile
+    // disables the spoof entirely (never report impossible outerWidth > width).
+    {
+      const winBig = createMockWindow('big-screen.example', 'Linux x86_64');
+      winBig.outerWidth = 2560; // wider than the 1920 spoofed profile
+      vm.runInContext(stealthCode, vm.createContext(winBig));
+      assert.strictEqual(winBig.screen.availHeight, 1080, 'screen spoof must be skipped when the real outerWidth exceeds the profile');
+      assert.strictEqual(winBig.devicePixelRatio, 1.25, 'devicePixelRatio must stay native when the guardrail trips');
+
+      const winSmall = createMockWindow('small-screen.example', 'Linux x86_64');
+      winSmall.outerWidth = 1280;
+      vm.runInContext(stealthCode, vm.createContext(winSmall));
+      assert.strictEqual(winSmall.screen.availHeight, 1040, 'screen spoof applies when the real window fits the profile');
+      assert.strictEqual(winSmall.devicePixelRatio, 1, 'devicePixelRatio spoof applies when the real window fits the profile');
+      console.log('✓ Screen spoof guardrail respects the real window geometry.');
+    }
+
+    // 10.10 Shared Symbol.for registries removed (pages cannot reach engine
+    // internals through the global symbol registry anymore).
+    {
+      const LEGACY_REGISTRY_KEYS = [
+        '__bocchi_native_map__', '__bocchi_protected_windows__', '__bocchi_canvas_ctx_map__',
+        '__bocchi_audio_farbled_map__', '__bocchi_audio_calibrated_set__', '__bocchi_window_salt_map__',
+        '__bocchi_shield_config__', '__bocchi_font_config__'
+      ];
+      LEGACY_REGISTRY_KEYS.forEach(key => {
+        assert.strictEqual(winCYT[Symbol.for(key)], undefined, 'legacy shared registry ' + key + ' must not exist on window');
+      });
+      // The one remaining registry symbol (internal patch-dedup mark) holds a
+      // WeakMap-shaped map created in the page realm: not enumerable through
+      // any page-facing API. (Duck-typed check: cross-realm instanceof fails.)
+      const markRegistry = winCYT[Symbol.for('__bpc_pm_7e4b1c92')];
+      assert(markRegistry && typeof markRegistry.get === 'function' && typeof markRegistry.set === 'function',
+        'the remaining patch-mark registry must stay a WeakMap-shaped internal (non-enumerable internals)');
+      assert.strictEqual(winCYT[Symbol.for('__bpc_pm_7e4b1c92')], markRegistry, 'patch-mark registry lookup must be stable');
+      console.log('✓ Shared Symbol.for registries removed.');
+    }
+
+    // 10.11 navigator.languages native semantics: the engine no longer replaces
+    // it with a spoofed frozen singleton — the native array is passed through.
+    {
+      assert.strictEqual(winCYT.navigator.languages, winCYT.navigator.languages, 'navigator.languages must return the same native array reference on every read');
+      assert.deepStrictEqual([...winCYT.navigator.languages], ['zh-CN', 'zh'], 'navigator.languages must keep the native values');
+      console.log('✓ navigator.languages native passthrough verified.');
+    }
+
+    // 10.12 performance.now() flooring + getGamepads downgrade (entropy
+    // reduction, both gated on hardwareProtection).
+    {
+      assert.strictEqual(winCYT.performance.now(), 123, 'performance.now() must floor 123.456 to 123 while hardwareProtection is on');
+      const winPerf = createMockWindow('perf-test.example', 'Linux x86_64');
+      vm.runInContext(stealthCode, vm.createContext(winPerf));
+      driveConfig(winPerf, { cfg: { hardwareProtection: false } });
+      assert.strictEqual(winPerf.performance.now(), 123.456, 'With hardwareProtection=false, performance.now() returns the native value');
+
+      const winGP = createMockWindow('gamepad-test.example', 'Linux x86_64');
+      vm.runInContext(stealthCode, vm.createContext(winGP));
+      const gpOn1 = winGP.navigator.getGamepads();
+      const gpOn2 = winGP.navigator.getGamepads();
+      assert.strictEqual(gpOn1.length, 0, 'getGamepads must return [] while hardwareProtection is on');
+      assert.notStrictEqual(gpOn1, gpOn2, 'getGamepads must return a fresh array on every call');
+      driveConfig(winGP, { cfg: { hardwareProtection: false } });
+      const gpOff = winGP.navigator.getGamepads();
+      assert.strictEqual(gpOff.length, 1, 'With hardwareProtection=false, getGamepads returns the native list');
+      assert(gpOff[0].id.includes('Xbox 360'), 'native gamepad entries must pass through when the toggle is off');
+      console.log('✓ performance.now() flooring and getGamepads downgrade verified.');
+    }
+
+    console.log('✓ Regression suite (v1.0.1 fixes) fully passed.\n');
+
+    // 11. Regression: OffscreenCanvas coverage
+    console.log('[Test 11] Validating OffscreenCanvas coverage...');
+    {
+      // 11.1 OffscreenCanvas on a CYT domain: exports farble like toDataURL.
+      const winOC = createMockWindow('coveryourtracks.eff.org', 'Linux x86_64');
+      vm.runInContext(stealthCode, vm.createContext(winOC));
+
+      const oc = new winOC.OffscreenCanvas(300, 150);
+      const octx = oc.getContext('2d');
+      assert(octx, 'mock offscreen 2d context must be created');
+      const blob = await oc.convertToBlob();
+      assert.notStrictEqual(blob.r, 100, 'convertToBlob on CYT must export a farbled pixel');
+      assert.strictEqual(octx._pixels[0], 100, 'convertToBlob must restore the true pixel after export');
+
+      // Overlapping convertToBlob calls: both blobs farble from the TRUE value
+      // and the canvas ends restored (no stacked perturbations).
+      const oc2 = new winOC.OffscreenCanvas(300, 150);
+      const octx2 = oc2.getContext('2d');
+      const [b1, b2] = await Promise.all([oc2.convertToBlob(), oc2.convertToBlob()]);
+      assert.notStrictEqual(b1.r, 100, 'first overlapping convertToBlob must be farbled');
+      assert.notStrictEqual(b2.r, 100, 'second overlapping convertToBlob must be farbled');
+      assert.strictEqual(b1.r, b2.r, 'overlapping exports must farble from the same true pixel');
+      assert.strictEqual(octx2._pixels[0], 100, 'canvas must be restored to the true pixel after overlapping exports');
+
+      // transferToImageBitmap: the bitmap carries the farbled pixel and the
+      // canvas bitmap is cleared (native post-transfer state, no restore write).
+      const oc3 = new winOC.OffscreenCanvas(300, 150);
+      const octx3 = oc3.getContext('2d');
+      const bm = oc3.transferToImageBitmap();
+      assert.notStrictEqual(bm.r, 100, 'transferToImageBitmap on CYT must carry a farbled pixel');
+      assert.strictEqual(octx3._pixels[0], 0, 'source canvas must be left blank after transfer (native reset)');
+
+      // measureText on OffscreenCanvasRenderingContext2D uses the same font
+      // masking as the visible canvas (mock note: instance-level font, so only
+      // the measureText path is observable in this harness).
+      const oc4 = new winOC.OffscreenCanvas(300, 150);
+      const octx4 = oc4.getContext('2d');
+      octx4.font = '12px SimSun';
+      const m = octx4.measureText('hello');
+      assert.strictEqual(m.width, 50, 'offscreen measureText must use sanitized font metrics (no SimSun width bonus)');
+      assert.strictEqual(octx4.font, '12px SimSun', 'measureText must restore the caller font');
+
+      // A webgl-typed offscreen canvas skips the 2D export farble (its exports
+      // go through the WebGL readback path instead).
+      const oc5 = new winOC.OffscreenCanvas(300, 150);
+      oc5.getContext('webgl');
+      const b5 = await oc5.convertToBlob();
+      assert.strictEqual(b5.r, 0, 'webgl-typed offscreen convertToBlob must pass through natively in this mock');
+
+      // 11.2 OffscreenCanvas on a normal site: farbled too (farbling is global,
+      // gated only by the shield switch, not by isCYT).
+      const winOCN = createMockWindow('normal-site.example', 'Linux x86_64');
+      vm.runInContext(stealthCode, vm.createContext(winOCN));
+      const ocN = new winOCN.OffscreenCanvas(300, 150);
+      const octxN = ocN.getContext('2d');
+      const blobN = await ocN.convertToBlob();
+      assert.notStrictEqual(blobN.r, 100, 'convertToBlob on normal sites must be farbled (global farbling)');
+      assert.strictEqual(octxN._pixels[0], 100, 'canvas must be restored to the true pixel after export');
+
+      console.log('✓ OffscreenCanvas exports/measureText covered.');
+    }
 
     console.log('=== ALL TESTS PASSED SUCCESSFULLY! ===');
   });
