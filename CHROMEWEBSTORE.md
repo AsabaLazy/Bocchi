@@ -1,6 +1,6 @@
 # Chrome Web Store Listing — Bocchi Privacy Shield
 
-> Last Updated: 2026-10-17
+> Last Updated: 2026-10-18
 
 ## Store Listing
 
@@ -28,7 +28,7 @@ How to Use:
 3. Browse normally with continuous protection against passive device identification.
 
 Privacy Commitment:
-Bocchi Privacy Shield is completely privacy-focused. All fingerprinting protections and calculations run strictly inside your local browser. The extension does not collect, record, track, or transmit your personal data, browsing history, or website content to any developer servers.
+Bocchi Privacy Shield is privacy-focused. All fingerprinting protections and calculations run strictly inside your local browser. The extension does not collect, record, or transmit your browsing history, page content, or personally identifiable information to any developer servers. One exception, disclosed in the Data Use table below: to keep the reported timezone aligned with your connection's exit point, the extension performs an hourly exit-timezone lookup via third-party GeoIP services (ipwho.is, get.geojs.io, ipapi.co). These providers necessarily receive your IP address as part of the request; only the timezone name is returned and cached locally, and the IP is not stored or shared with anyone.
 
 **Category** [REQUIRED]
 Productivity
@@ -61,12 +61,12 @@ English
 | `declarativeNetRequest` | permissions | Applies DNT/GPC privacy signals and blocks known tracking domains at the network layer without inspecting user page contents. |
 | `fontSettings` | permissions | Enumerates the user's installed system fonts to apply the user's font-privacy preferences (identifying and masking locale-revealing fonts). All processing stays on-device. |
 | `privacy` | permissions | Configures the browser WebRTC IP handling policy to `disable_non_proxied_udp`, preventing internal and private LAN IP addresses from leaking. |
-| `storage` | permissions | Stores local privacy preferences and caches exit-node timezone mapping on the user's device to prevent repeated network requests. |
-| `<all_urls>` | host_permissions | Applies anti-fingerprinting shields (randomized canvas, audio, and font characteristics) across all websites the user visits to stop cross-site profile tracking. |
+| `storage` | permissions | Stores local privacy preferences and caches the exit-node timezone mapping on the user's device. The hourly alarm forcibly refreshes this mapping on schedule; the 4-hour cache only reduces lookups between page navigations rather than preventing the recurring network requests. |
+| `<all_urls>` | host_permissions | Applies anti-fingerprinting shields (randomized canvas, audio, and font characteristics) across all websites the user visits to stop cross-site profile tracking. The same permission also supports the background service worker's cross-origin GeoIP exit-timezone lookups, in addition to content script injection. |
 
 ## Privacy & Data Use
 
-**Does the extension collect user data?** No
+**Does the extension collect user data?** Yes (limited) — IP-derived approximate location only; see the Data Use table below.
 
 | Data Type | Collected? | Transmitted Off-Device? | Purpose | Shared with Third Parties? |
 |-----------|-----------|------------------------|---------|---------------------------|
@@ -75,7 +75,7 @@ English
 | Financial info | No | No | None | No |
 | Authentication info | No | No | None | No |
 | Personal communications | No | No | None | No |
-| Location | No | No | Non-identifying timezone query | No |
+| Location | Yes (IP-derived approximate location) | Yes | Hourly exit-timezone lookup via third-party GeoIP services (ipwho.is, get.geojs.io, ipapi.co). Only the timezone name is returned and cached locally; the IP is not stored or shared with anyone. | Yes (GeoIP providers necessarily receive the IP address as part of each lookup) |
 | Web history | No | No | None | No |
 | User activity | No | No | None | No |
 | Website content | No | No | None | No |
@@ -112,13 +112,14 @@ Bocchi Privacy Team
 
 | Version | Date | Changes | Status |
 |---------|------|---------|--------|
+| 1.0.1 | 2026-10-18 | Entropy-reduction rework — per-page-load farbling on all sites, GPU profile pool, cross-realm toString consistency, timezone passthrough, privacy disclosure updates. | Draft |
 | 1.0.0 | 2026-09-30 | Initial Manifest V3 release with Canvas/WebGL/Audio protections, WebRTC IP masking, timezone synchronization, and TraceScope anti-leak mitigations. | Draft |
 
 ## Review Notes
 
 ### Known Issues / Limitations
 - Font filtering and fingerprint randomization still leave a theoretical detection window under extreme probing (e.g., exhaustive glyph-metric differential testing).
-- The Web Worker / SharedWorker wrapper (blob URL instrumentation) can affect the small number of libraries that rely on locating their own script via its blob URL.
+- The dedicated Web Worker wrapper (blob URL instrumentation) can affect the small number of libraries that rely on locating their own script via its blob URL. Only dedicated Workers are wrapped; SharedWorker construction is left fully native because blob-URL wrapping mints a unique URL per construction and would silently break cross-tab worker sharing semantics.
 - Per-session fingerprint randomization prioritizes unlinkability over uniformity: dedicated tooling may notice that fingerprint values change between sessions, even though it cannot link them across sites.
 
 Fully compatible with Chrome Manifest V3 specifications. Tested against EFF Cover Your Tracks and BrowserLeaks test suites.

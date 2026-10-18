@@ -1,12 +1,12 @@
 # Bocchi Privacy Shield —— 架构与代码量
 
-> 最后更新：2026-10-17（熵削减架构改造完成后）
+> 最后更新：2026-10-18（熵削减架构改造完成后；代码量与包装计数按实测校准）
 
 ## 一、设计策略
 
 **熵削减（entropy reduction）**，三层原则：
 
-1. **高熵向量 → per-session 随机化**：canvas / WebGL / audio 的输出在所有网站按「页面加载盐 × 域名种子」做确定性微扰。站内稳定（不破坏网站）、跨站分歧（切断跨站关联）、跨加载轮换（无长期 ID）。
+1. **高熵向量 → per-page-load 随机化**：canvas / WebGL / audio 的输出在所有网站按「页面加载盐 × 域名种子」做确定性微扰。加载内稳定（不破坏网站）、跨站分歧（切断跨站关联）、跨加载轮换（无长期 ID）。
 2. **低熵信号 → 原生透传**：UA、平台、语言、locale、`hardwareConcurrency`、`deviceMemory` 等本来就是人群常见值的信号不做任何伪装——伪装制造的可检测矛盾比保护收益更贵。
 3. **能一致降级的才降级**：计时器精度钳制（1ms）、Gamepad 禁用、媒体设备枚举降级、字体最小化、GPU 画像池化。凡是无法在全部 realm 保持一致的值（如被 SharedWorker 暴露的固定降级值）一律不做。
 
@@ -60,17 +60,17 @@
 - **内部状态**：闭包私有为主；仅两处共享结构挂在 `window.top`（混淆常量的 `Symbol.for` 键）：补丁标记 WeakMap（防同源 frame 双重打补丁，正向验证）+ nativeMap（跨 realm toString 原生化，消除 CreepJS `failed toString` 全部 197 条）。残余风险声明：知道源码中字面 key 的页面可触及这两个结构——成本高于收益的最优折中，已在代码注释中记录。
 - **iframe**：contentWindow/contentDocument getter 同步收养 + 插入钩子 + 被动 MutationObserver 兜底。
 
-## 五、代码量（2026-10-17）
+## 五、代码量（2026-10-18 实测，wc -l）
 
 | 文件 | 行数 | 说明 |
 |---|---|---|
-| content/stealth_engine.js | 4010 | 81 个 hook，10 个章节，97 处防御性 catch |
+| content/stealth_engine.js | 4010 | ~80 个原生外观包装（口径：createNativeFunction/createNativeGetter 调用点，实测 79 = 62 + 17），10 个章节，97 处防御性 catch |
 | content/bridge.js | 236 | 握手 + 配置同步 |
 | background/service_worker.js | 203 | WebRTC 策略 + 时区同步 + 消息 |
 | tests/stealth.test.js | 2822 | 单测（vm 沙箱，~55 组断言） |
-| popup/ + panel/ | 1151 | 设置 UI |
+| popup/ + panel/ | 1658 | 设置 UI（popup 801 + panel 857） |
 | manifest + rules | 185 | |
-| **合计** | **~8600** | |
+| **合计** | **9114** | |
 
 引擎章节规模：§2 Canvas 423 行 / §3 WebGL 182 / §4 Audio 71 / §5 WebRTC 428 / §6 字体度量 509 / §7 Navigator 340 / §8 iframe 139 / §9 时区 733 / §10 Worker 390；基础设施（注册表/握手/种子）约 790 行。
 

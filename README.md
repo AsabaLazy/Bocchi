@@ -4,8 +4,8 @@ A Manifest V3 Chromium extension engineered for advanced browser fingerprint def
 
 ## Key Features
 
-- **High-Entropy Vector Randomization**: Canvas 2D, WebGL, and audio fingerprints are randomized per session on every site. Values stay stable within a site for the session yet differ across sites and sessions, so trackers cannot correlate visits into a persistent cross-site profile. Low-entropy signals (user agent, platform, languages) are left native.
-- **Font Minimization & Filtering**: Hides locale-revealing and non-standard fonts from canvas measurement and `@font-face` probes, exposing only a minimal set of universal fonts, with per-site allow/block lists.
+- **High-Entropy Vector Randomization**: Canvas 2D, WebGL, and audio fingerprints are randomized per page load on every site. A fresh farbling salt is drawn on each page load; values stay stable within a single page load yet differ across sites and across reloads (refreshing rotates them), so trackers cannot correlate visits into a persistent cross-site profile. Low-entropy signals (user agent, platform, languages) are left native.
+- **Font Filtering & Masking (Two Modes)**: Hides fonts from canvas measurement, `@font-face`, and local font enumeration (`queryLocalFonts`) probes. Default **blacklist mode** hides built-in Chinese/CJK fonts (toggleable) plus user-defined custom entries, and can optionally hide other non-Latin script fonts — everything else stays visible. Optional **whitelist mode** restricts enumeration to a user-curated allow list. Font allow/block lists are global; per-site control is via the shield bypass list.
 - **Automatic Timezone Alignment**: Syncs the browser timezone (`Date`, `Intl.DateTimeFormat`) to match the network egress IP, eliminating timezone/IP discrepancies.
 - **WebRTC Leak Prevention**:
   - Enforces `disable_non_proxied_udp` policy via `chrome.privacy.network.webRTCIPHandlingPolicy`.
@@ -45,7 +45,9 @@ A Manifest V3 Chromium extension engineered for advanced browser fingerprint def
 │   ├── live_creep_verify.js   # CDP automated live verification against CreepJS
 │   ├── check_apivoid_live.js  # CDP live check against APIVoid bot-detection test page
 │   ├── diagnose_apivoid.js    # CDP diagnostics for APIVoid detection results
-│   └── test_apivoid_tamper.js # CDP tamper-resistance test on APIVoid bot-detection page
+│   ├── test_apivoid_tamper.js # CDP tamper-resistance test on APIVoid bot-detection page
+│   ├── perf_bench.js          # CDP performance baseline: extension off vs on (deltas)
+│   └── soak_verify.js         # CDP leak soak: mixed workload + retained-heap sampling
 ├── CHROMEWEBSTORE.md          # Chrome Web Store listing, permissions & review notes
 └── package-extension.sh       # Extension zip packager
 ```
