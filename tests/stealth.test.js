@@ -928,6 +928,11 @@ function createMockWindow(hostname, platform = 'Linux x86_64') {
       }
       return { width, actualBoundingBoxAscent: 10, actualBoundingBoxDescent: 2 };
     }
+    // No-op rasterization (mirrors CanvasRenderingContext2d.drawImage). The
+    // engine's offscreen-WebGL export path renders the source into a temp 2D
+    // offscreen canvas via drawImage before perturbing it — without this
+    // method that path throws and silently degrades to an unfarbled export.
+    drawImage() {}
   }
   win.OffscreenCanvasRenderingContext2D = OffscreenCanvasRenderingContext2D;
 
@@ -1313,6 +1318,38 @@ assert.strictEqual(winCYT.Function.prototype.toString.call(winCYT.Function.proto
 assert.throws(() => winCYT.Function.prototype.toString.call({}), /TypeError/, 'Calling toString on non-function must throw TypeError');
 console.log('✓ Function disguise conforms to native signatures.\n');
 
+// nativeMap cross-realm sharing: lie detectors read a hooked API's source
+// through a FOREIGN realm's Function.prototype.toString (CreepJS builds a
+// nested about:blank iframe chain and uses its contentWindow as scope).
+// Simulate the same-origin frame tree: realm A (parent) loads the engine and
+// owns the shared registry on window.top; realm B is a child frame
+// (top === A) with its OWN Function intrinsics taken from a pristine vm
+// realm (an engine-free fresh realm), and loads a second engine instance.
+// Before B's engine runs, B's pristine native toString must expose A's raw
+// hook source (the baseline lie the sharing has to cover); after it runs,
+// B's toString must resolve A's hooks through the SHARED map. A per-instance
+// map would miss fnA and fall back to B's pristine native toString —
+// leaking the raw source ("failed toString" lie).
+const winRealmA = createMockWindow('parent.example.com', 'Linux x86_64');
+vm.runInContext(stealthCode, vm.createContext(winRealmA));
+const fnA = Object.getOwnPropertyDescriptor(winRealmA.Navigator.prototype, 'webdriver').get;
+const winRealmB = createMockWindow('child.example.com', 'Linux x86_64');
+winRealmB.top = winRealmA; // same-origin child frame: window.top reaches the parent's registry
+const freshFunctionRealm = vm.createContext({});
+winRealmB.Function = vm.runInContext('Function', freshFunctionRealm); // B's own pristine intrinsics
+assert.notStrictEqual(winRealmB.Function.prototype.toString, winRealmA.Function.prototype.toString,
+  'precondition: realm B must have an independent Function.prototype (fresh-realm simulation)');
+const pristineBToString = winRealmB.Function.prototype.toString;
+assert(!pristineBToString.call(fnA).includes('[native code]'),
+  'precondition: an engine-free foreign realm must see the raw hook source (the lie the shared map must cover)');
+vm.runInContext(stealthCode, vm.createContext(winRealmB));
+assert.strictEqual(winRealmB.Function.prototype.toString.call(fnA), 'function get webdriver() { [native code] }',
+  "realm B's wrapped toString must resolve realm A's hooks through the shared nativeMap (cross-realm sharing)");
+const fnB = Object.getOwnPropertyDescriptor(winRealmB.Navigator.prototype, 'webdriver').get;
+assert.strictEqual(winRealmA.Function.prototype.toString.call(fnB), 'function get webdriver() { [native code] }',
+  "realm A's toString must resolve realm B's hooks too (the shared map is symmetric)");
+console.log('✓ nativeMap is shared across same-origin realms (foreign-realm toString reads [native code]).\n');
+
 console.log('Testing WebGL spoofing and platform detection...');
 const gl = new winCYT.WebGLRenderingContext();
 const expectedGpuCYT = expectedGpuProfile('coveryourtracks.eff.org');
@@ -1611,8 +1648,14 @@ assert.strictEqual(testDateUTC.getUTCHours(), 12, 'getUTCHours must return 12 in
 assert(testDateUTC.toLocaleString('en-GB', { timeZone: 'UTC' }).includes('12:00:00'), 'Explicit timeZone in toLocaleString must be respected');
 
 // tzSpoofNeeded: when the target zone IS the host's real zone (the common
-// "no VPN / matching exit IP" case) the engine must fall back to full native
-// passthrough — Date/Intl must be value-equivalent to the unwrapped natives.
+// "no VPN / matching exit IP" case) the assertions below only pin VALUE
+// equivalence with the unwrapped natives (same offsets, same rendered
+// strings). Mutation experiments show they do NOT discriminate the wrapping
+// itself — a still-hooked-but-value-correct implementation passes them too.
+// Discriminating the hook/disarm logic relies on the America/New_York and
+// Asia/Tokyo conversion assertions above (offset/hours must follow the
+// TARGET zone, not the host zone) and on the per-window Date isolation
+// (independent WDate subclasses per mock realm, see createMockWindow).
 // The real zone is read from the environment (HOST_REAL_TZ, defined in the
 // LA block above) so the test stays valid on any host TZ.
 const winSameTz = createMockWindow('same-tz-passthrough.test', 'Linux x86_64');
@@ -1625,7 +1668,7 @@ assert.strictEqual(new winSameTz.Date(sameTzProbe).getHours(), new Date(sameTzPr
 assert.strictEqual(new winSameTz.Date(sameTzProbe).getTimezoneOffset(), new Date(sameTzProbe).getTimezoneOffset(), 'getTimezoneOffset must equal the native value when target == real zone');
 assert.strictEqual(new winSameTz.Date(sameTzProbe).toString(), new Date(sameTzProbe).toString(), 'Date.toString must equal the native string when target == real zone');
 assert.strictEqual(new winSameTz.Date(sameTzProbe).getMinutes(), new Date(sameTzProbe).getMinutes(), 'getMinutes must equal the native value (no sub-minute offset shifts)');
-console.log('✓ Timezone passthrough confirmed when the target zone equals the host real zone.\n');
+console.log('✓ Timezone value equivalence confirmed when the target zone equals the host real zone (wrapping discrimination: NY/Tokyo conversions + Date isolation).\n');
 
 // DST rollback hour and non-hour offsets: the conversion path must agree with
 // what a native realm in that zone reports (the engine fixed the repeated
@@ -1647,6 +1690,21 @@ assert.strictEqual(kolkataDate.getHours(), 17, 'Kolkata hours must be 17 for 12:
 assert.strictEqual(kolkataDate.getMinutes(), 30, 'Kolkata minutes must be 30 (half-hour offset preserved exactly)');
 assert(kolkataDate.toString().includes('GMT+0530'), 'Kolkata Date.toString must include GMT+0530');
 console.log('✓ DST rollback hour and half-hour offset semantics match native behaviour.\n');
+
+// Sub-minute LMT-era offsets: historical Monrovia ran at UTC-0:44:30. The
+// engine must agree with what a native realm in that zone reports — exact
+// wall clock (11:50:26 for 12:34:56Z) and V8's truncated offset fields:
+// getTimezoneOffset 44 and toString GMT-0044 (Math.trunc toward zero, NOT
+// Math.round's 45). Expected values verified against a native
+// TZ=Africa/Monrovia Node run (ICU/tzdata ground truth).
+setTestTimezone(winSameTz, 'Africa/Monrovia');
+const monroviaDate = new winSameTz.Date('1969-06-15T12:34:56Z');
+assert.strictEqual(monroviaDate.getHours(), 11, 'LMT-era Monrovia getHours must be 11 for 12:34:56Z (UTC-0:44:30)');
+assert.strictEqual(monroviaDate.getMinutes(), 50, 'LMT-era Monrovia minutes must be 50 (sub-minute offset must not shift the minute)');
+assert.strictEqual(monroviaDate.getSeconds(), 26, 'LMT-era Monrovia seconds must be 26');
+assert.strictEqual(monroviaDate.getTimezoneOffset(), 44, 'LMT-era Monrovia getTimezoneOffset must be 44 (V8 truncates -0:44:30 toward zero, not 45)');
+assert(monroviaDate.toString().includes('GMT-0044'), 'LMT-era Monrovia toString must carry the truncated GMT-0044 field');
+console.log('✓ Sub-minute LMT-era offsets match native Monrovia semantics (truncated GMT fields, exact wall clock).\n');
 
 // Chinese locale in toLocaleString must be sanitized to English
 assert(!testDateUTC.toLocaleString('zh-CN').includes('上午') && !testDateUTC.toLocaleString('zh-CN').includes('下午'), 'Chinese locale in toLocaleString must default to English format');
@@ -1869,6 +1927,16 @@ assert.strictEqual(sharedWorker instanceof winCYT.SharedWorker, true, 'SharedWor
 assert.throws(() => winCYT.SharedWorker('shared_worker.js'), /Failed to construct 'SharedWorker'/, 'Calling SharedWorker without new must throw TypeError');
 assert.throws(() => new winCYT.SharedWorker(), /1 argument required/, 'Calling SharedWorker with 0 args must throw TypeError');
 
+// SharedWorker construction must stay fully unwrapped (blob wrapping would
+// break cross-tab worker sharing): the script URL passes through verbatim
+// and no blob URL is minted for it — contrast with Worker above, which is
+// blob-wrapped while the shield is on.
+assert.strictEqual(sharedWorker.scriptURL, 'shared_worker.js', 'SharedWorker scriptURL must be the URL exactly as passed in (never blob-wrapped)');
+const blobCountBeforeShared = winCYT.URL._created.size;
+const sharedWorkerAbs = new winCYT.SharedWorker('https://cdn.example.com/lib/shared-worker.js', { name: 'sw' });
+assert.strictEqual(sharedWorkerAbs.scriptURL, 'https://cdn.example.com/lib/shared-worker.js', 'SharedWorker scriptURL must be passed through untouched (absolute URL, options preserved)');
+assert.strictEqual(winCYT.URL._created.size, blobCountBeforeShared, 'SharedWorker construction must not mint a blob URL');
+
 console.log('✓ Font fingerprinting probes (Canvas, DOM, Range, SVG, fonts.check/load) cleanly masked.');
 console.log('✓ Web Worker and SharedWorker cross-context protections verified.\n');
 
@@ -2050,6 +2118,27 @@ const frameRendererB = new winFrameB.WebGLRenderingContext().getParameter(37446)
 assert.strictEqual(frameRendererA, frameRendererB, 'Same-site frames (a.example.com / b.example.com) must report an identical GPU renderer despite independent per-load salts');
 assert.strictEqual(frameRendererA, expectedGpuProfile('a.example.com').renderer, 'Same-site frame renderer must be the pool entry selected by djb2(eTLD+1) % 5');
 console.log('✓ Same-site frames agree on the GPU persona (salt-independent eTLD+1 derivation).');
+
+// Plugin description perturbation is host-derived with NO salt: two frames
+// of one site (a.example.com / b.example.com), each with its own per-load
+// salt, must still append the same number of spaces — a salt-derived key
+// would split them, and frames of one site disagreeing is itself a signal.
+const winPlugA = createMockWindow('a.example.com', 'Linux x86_64');
+vm.runInContext(stealthCode, vm.createContext(winPlugA));
+const winPlugB = createMockWindow('b.example.com', 'Linux x86_64');
+// Different per-load salt in the second frame: same-site agreement must survive it.
+winPlugB.crypto = {
+  getRandomValues(arr) {
+    for (let i = 0; i < arr.length; i++) arr[i] = (TEST_SESSION_SALT + 98765 + i * 2654435761) >>> 0;
+    return arr;
+  }
+};
+vm.runInContext(stealthCode, vm.createContext(winPlugB));
+const plugDescA = new winPlugA.Plugin().description;
+const plugDescB = new winPlugB.Plugin().description;
+assert.strictEqual(plugDescA, plugDescB, 'Same-site frames (a/b.example.com) must get an identical Plugin description despite independent per-load salts');
+assert.strictEqual(plugDescA, 'Portable Document Format' + ' '.repeat((djb2Hash('a.example.com') % 3) + 1), 'Plugin description must match the salt-free djb2(host) derivation');
+console.log('✓ Same-site frames agree on the host-derived Plugin description (salt-free derivation).');
 
 // Transparent Canvas toDataURL and toBlob non-clamping farbling
 const canvasZero = new winCYT.HTMLCanvasElement();
@@ -2298,6 +2387,12 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     // Verify WebGL renderer returns native renderer when global shield is disabled
     const glTog = new winToggle.WebGLRenderingContext();
     assert.strictEqual(glTog.getParameter(37446), 'llvmpipe (LLVM 12.0.0, 256 bits)', 'When global shield is disabled, WebGL unmasked renderer must return native string');
+
+    // Worker wrapping is gated on the master switch too: with the shield off,
+    // new Worker must keep the literal script URL (no blob bootstrap wrap).
+    const workerTogOff = new winToggle.Worker('toggle-off-worker.js');
+    assert.strictEqual(workerTogOff.scriptURL, 'toggle-off-worker.js', 'With globalShieldEnabled=false, Worker scriptURL must not be blob-wrapped');
+    assert(!String(workerTogOff.scriptURL).startsWith('blob:'), 'Worker script URL must stay the page URL (not a blob: URL) when the shield is off');
 
     // Re-enable globalShieldEnabled
     driveConfig(winToggle, { cfg: { globalShieldEnabled: true } });
@@ -2687,6 +2782,17 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
       assert.strictEqual(winTiny.screen.availHeight, 600, 'screen spoof must be skipped when the real screen is smaller than the profile');
       assert.strictEqual(winTiny.screen.width, 800, 'native screen width must pass through on a small real screen');
       assert.strictEqual(winTiny.devicePixelRatio, 1.25, 'devicePixelRatio must stay native on a small real screen');
+
+      // outerHeight dimension of the same guardrail: a maximized window on a
+      // tall real screen (2160p) exceeds the 1080 profile height, so the
+      // spoof must trip there too and every dimension passes through natively.
+      const winTall = createMockWindow('tall-screen.example', 'Linux x86_64');
+      winTall.screen._native = { width: 1920, height: 2160, availWidth: 1920, availHeight: 2112, colorDepth: 24, pixelDepth: 24 };
+      winTall.outerHeight = 2112; // taller than the 1080 profile
+      vm.runInContext(stealthCode, vm.createContext(winTall));
+      assert.strictEqual(winTall.screen.height, 2160, 'screen spoof must be skipped when the real outerHeight exceeds the profile height');
+      assert.strictEqual(winTall.screen.availHeight, 2112, 'native availHeight must pass through when the outerHeight guardrail trips');
+      assert.strictEqual(winTall.devicePixelRatio, 1.25, 'devicePixelRatio must stay native when the outerHeight guardrail trips');
       console.log('✓ Screen spoof guardrail respects the real window geometry.');
     }
 
@@ -2723,6 +2829,7 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     // reduction, both gated on hardwareProtection).
     {
       assert.strictEqual(winCYT.performance.now(), 123, 'performance.now() must floor 123.456 to 123 while hardwareProtection is on');
+      assert.strictEqual(winCYT.performance.memory.jsHeapSizeLimit, 2172649472, 'jsHeapSizeLimit must clamp to 2172649472 while hardwareProtection is on');
       const winPerf = createMockWindow('perf-test.example', 'Linux x86_64');
       vm.runInContext(stealthCode, vm.createContext(winPerf));
       driveConfig(winPerf, { cfg: { hardwareProtection: false } });
@@ -2785,12 +2892,15 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
       assert.strictEqual(m.width, 50, 'offscreen measureText must use sanitized font metrics (no SimSun width bonus)');
       assert.strictEqual(octx4.font, '12px SimSun', 'measureText must restore the caller font');
 
-      // A webgl-typed offscreen canvas skips the 2D export farble (its exports
-      // go through the WebGL readback path instead).
+      // A webgl-typed offscreen canvas takes the temp-canvas WebGL readback
+      // path instead of the 2D export farble: the blob is farbled from a
+      // throwaway 2D canvas while the webgl source canvas itself stays
+      // untouched (no restore/race bookkeeping on the source).
       const oc5 = new winOC.OffscreenCanvas(300, 150);
       oc5.getContext('webgl');
       const b5 = await oc5.convertToBlob();
-      assert.strictEqual(b5.r, 0, 'webgl-typed offscreen convertToBlob must pass through natively in this mock');
+      assert.notStrictEqual(b5.r, 100, 'webgl-typed offscreen convertToBlob must export a farbled pixel (temp-canvas readback path)');
+      assert.strictEqual(oc5._ctx._pixels[0], 100, 'the webgl-typed source canvas must stay untouched by the temp-canvas export');
 
       // 11.2 OffscreenCanvas on a normal site: farbled too (farbling is global,
       // gated only by the shield switch, not by isCYT).
@@ -2850,6 +2960,171 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
       assert(/\[native code\]/.test(String(workerSelf.navigator.gpu.requestAdapter)), 'worker requestAdapter must keep a native-looking toString');
       console.log('✓ Worker-side navigator.gpu adapter info masked to the pooled persona.');
     }
+
+    // 12. Regression: first-wave fix coverage (handshake ACK protocol,
+    // offscreen WebGL exports, transfer restore cleanup, font cache
+    // invalidation, inline font preservation, worker bootstrap Date, UTC tz).
+    console.log('[Test 12] Validating first-wave fix regressions...');
+
+    // 12.1 Handshake ACK protocol: a wrong-token '__bocchi_ack__' must NOT
+    // disarm the replay window (only the token-matching ACK or the first
+    // authenticated CE may). While armed, '__bocchi_req__' re-announces;
+    // after the authenticated CE, it must stay silent (anti-fishing).
+    {
+      const winHS = createMockWindow('handshake-ack.example', 'Linux x86_64');
+      vm.runInContext(stealthCode, vm.createContext(winHS));
+      getEngineHandshake(winHS);
+      const hsCount = () => winHS._dispatchedDocEvents.filter(e => e.type === '__bocchi_hs__').length;
+      const hsBase = hsCount();
+      dispatchUnauthenticated(winHS, '__bocchi_ack__', { t: 'ffffffffffffffffffffffffffffffff' });
+      winHS.document.dispatchEvent({ type: '__bocchi_req__' });
+      assert.strictEqual(hsCount(), hsBase + 1, 'a wrong-token __bocchi_ack__ must not disarm: __bocchi_req__ must still re-announce the handshake');
+      driveConfig(winHS, { tz: 'Europe/Berlin' }); // authenticated CE completes the handshake flow
+      winHS.document.dispatchEvent({ type: '__bocchi_req__' });
+      assert.strictEqual(hsCount(), hsBase + 1, 'after the first authenticated CE, __bocchi_req__ must produce no new handshake (anti-fishing)');
+      console.log('✓ ACK protocol: wrong-token ACK ignored, authenticated CE disarms replay.');
+    }
+
+    // 12.2 OffscreenCanvas webgl-type exports: getContext('webgl') marks the
+    // canvas for the temp-canvas WebGL readback path — convertToBlob must
+    // export perturbed pixels derived from the salted webgl seed, and the
+    // source canvas must never be modified (no restore bookkeeping on it).
+    // (Mock note: the mock models a webgl-typed offscreen canvas by tagging
+    // _ctxType='webgl'; the engine's type map only needs a truthy context.)
+    {
+      const winOCW = createMockWindow('offscreen-webgl.example', 'Linux x86_64');
+      vm.runInContext(stealthCode, vm.createContext(winOCW));
+      const ocW = new winOCW.OffscreenCanvas(300, 150);
+      assert(ocW.getContext('webgl'), 'mock offscreen webgl context must be created');
+      const blobW = await ocW.convertToBlob();
+      const ocwDelta = (djb2Hash('offscreen-webgl.example' + ':' + TEST_SESSION_SALT + ':webgl') % 12) * 2 + 1;
+      assert.notStrictEqual(blobW.r, 100, 'offscreen webgl convertToBlob must export perturbed pixels (temp-canvas readback path)');
+      assert.strictEqual(blobW.r, perturbPixelRef(100, ocwDelta), 'the perturbed pixel must match the djb2-derived webgl delta applied to the temp canvas pixel');
+      assert.strictEqual(blobW.a, 255, 'offscreen webgl blob alpha must stay opaque');
+      assert.strictEqual(ocW._ctx._pixels[0], 100, 'the webgl-typed source canvas must not be modified by the temp-canvas export');
+      console.log('✓ OffscreenCanvas webgl-type convertToBlob farbles via the temp-canvas readback.');
+    }
+
+    // 12.3 transferToImageBitmap must drop the pending export-restore record:
+    // a convertToBlob still in flight when the transfer blanks the canvas
+    // must NOT write its remembered true pixel back afterwards.
+    {
+      const winTR = createMockWindow('transfer-restore.example', 'Linux x86_64');
+      vm.runInContext(stealthCode, vm.createContext(winTR));
+      const ocT = new winTR.OffscreenCanvas(300, 150);
+      const octxT = ocT.getContext('2d');
+      const pendingBlob = ocT.convertToBlob(); // async export pending: true pixel is remembered
+      const bmT = ocT.transferToImageBitmap(); // transfer blanks the canvas + must drop the record
+      assert.notStrictEqual(bmT.r, 100, 'transferToImageBitmap must carry a farbled pixel');
+      await pendingBlob;
+      assert.strictEqual(octxT._pixels[0], 0, 'the still-pending convertToBlob restore must not repaint the blank canvas (record dropped by the transfer)');
+      console.log('✓ transferToImageBitmap clears pending restore records (no stale repaint).');
+    }
+
+    // 12.4 needsFontMasking cache invalidation: a verdict computed under one
+    // protection/config state must never be served after the state changes.
+    // (a) the module toggle gates the whole masking path; (b) a whitelisted
+    // SimSun verdict (false, cached while active) must be recomputed when the
+    // allowedFonts list is replaced (identity-based cache signature).
+    {
+      const winFM = createMockWindow('font-cache.example', 'Linux x86_64');
+      vm.runInContext(stealthCode, vm.createContext(winFM));
+      driveConfig(winFM, { cfg: { fontProtection: false } });
+      const fmEl = new winFM.HTMLElement();
+      fmEl.style.fontFamily = '"SimSun", monospace';
+      assert.strictEqual(fmEl.offsetWidth, 220, 'With fontProtection=false, the SimSun probe must read the native 220 width');
+      driveConfig(winFM, { cfg: { fontProtection: true } });
+      assert.strictEqual(fmEl.offsetWidth, 150, 'After re-enabling fontProtection, the SAME element must mask again (150)');
+      driveConfig(winFM, { fonts: { allowedFonts: ['SimSun'], customFonts: [], blockBuiltin: true } });
+      const fmEl2 = new winFM.HTMLElement();
+      fmEl2.style.fontFamily = '"SimSun", monospace';
+      assert.strictEqual(fmEl2.offsetWidth, 220, 'A whitelisted SimSun must read natively (false verdict enters the cache)');
+      driveConfig(winFM, { fonts: { allowedFonts: [], customFonts: [], blockBuiltin: true } });
+      assert.strictEqual(fmEl2.offsetWidth, 150, 'After the whitelist is dropped, the SAME element must mask again (stale false verdict must not be served)');
+      console.log('✓ needsFontMasking verdicts are invalidated by protection/config changes.');
+    }
+
+    // 12.5 withMaskedElementFont must preserve BOTH inline declarations: an
+    // element carrying an untouched fontFamily plus a masked CJK font
+    // shorthand must come back byte-identical on both properties.
+    {
+      const winFIB = createMockWindow('font-inline.example', 'Linux x86_64');
+      vm.runInContext(stealthCode, vm.createContext(winFIB));
+      const fibEl = new winFIB.HTMLElement();
+      fibEl.style.fontFamily = 'Arial';
+      fibEl.style.font = '12px "SimSun", serif';
+      fibEl.getBoundingClientRect();
+      assert.strictEqual(fibEl.style.fontFamily, 'Arial', 'the untouched inline fontFamily must survive a masked measurement exactly');
+      assert.strictEqual(fibEl.style.font, '12px "SimSun", serif', 'the masked inline font shorthand must be restored byte-identically');
+      // Control: a CJK font shorthand alone (empty fontFamily) must actually
+      // drive the masking swap — otherwise the restore checks above are vacuous.
+      const fibEl2 = new winFIB.HTMLElement();
+      fibEl2.style.font = '12px "SimSun", serif';
+      assert.strictEqual(fibEl2.getBoundingClientRect().width, 100, 'a CJK font shorthand alone must trigger metric masking (100, not the SimSun 180)');
+      assert.strictEqual(fibEl2.style.font, '12px "SimSun", serif', 'the font shorthand must be restored after getBoundingClientRect');
+      assert.strictEqual(fibEl2.style.fontFamily, '', 'the empty inline fontFamily must stay untouched');
+      console.log('✓ Inline fontFamily and font shorthand both survive masked measurements.');
+    }
+
+    // 12.6 Worker bootstrap Date consistency: the bootstrap baked into the
+    // blob must carry the page's synced timezone and convert worker-side
+    // Date reads/writes (getHours/setHours) in that zone. Executed
+    // functionally in a worker-shaped realm (engine NOT loaded there, so the
+    // only Date/Intl hooks present are the bootstrap's own).
+    // (Harness limitation: the mock's isolated Intl ctor returns host-proto
+    // instances on function-call construction, so the bootstrap's
+    // Intl.DateTimeFormat.resolvedOptions hook is not reachable here — real
+    // worker realms patch their own realm prototype. The Date hooks — the
+    // point of this check — are fully exercisable.)
+    {
+      const winWB = createMockWindow('worker-date.example', 'Linux x86_64');
+      vm.runInContext(stealthCode, vm.createContext(winWB));
+      driveConfig(winWB, { tz: 'America/New_York' });
+      const wbWorker = new winWB.Worker('date-worker.js');
+      const wbBlob = winWB.URL._created.get(wbWorker.scriptURL);
+      assert(wbBlob, 'Worker must be blob-wrapped for the bootstrap Date check');
+      assert(wbBlob.content.includes('"America/New_York"'), 'the worker bootstrap must bake the synced timezone into its source');
+      const wbBootstrap = wbBlob.content.replace(/\n(?:importScripts|import)\b[\s\S]*$/, '\n');
+      const wbShell = createMockWindow('worker-date-shell.example'); // engine NOT loaded
+      const wbSelf = {
+        Date: wbShell.Date,
+        Intl: wbShell.Intl,
+        navigator: {
+          gpu: {
+            requestAdapter() {
+              const realInfo = { vendor: 'nvidia', architecture: 'ampere', device: 'real-device', description: 'real-desc' };
+              return Promise.resolve({
+                info: Object.assign({}, realInfo),
+                requestAdapterInfo() { return Promise.resolve(Object.assign({}, realInfo)); }
+              });
+            }
+          }
+        }
+      };
+      vm.runInContext(wbBootstrap, vm.createContext({ self: wbSelf }));
+      const wbDate = new wbSelf.Date('2026-09-29T12:00:00Z');
+      assert.strictEqual(wbDate.getHours(), 8, 'worker Date getHours must render NY EDT (8) for 12:00Z');
+      wbDate.setHours(15);
+      assert.strictEqual(wbDate.getHours(), 15, 'worker setHours(15) must land on hour 15 in the target zone');
+      assert.strictEqual(wbDate.getTime(), Date.UTC(2026, 8, 29, 19, 0, 0), 'worker setHours must map 15:00 NY (EDT) back to the 19:00Z epoch');
+      assert(wbDate.toString().includes('GMT-0400'), 'worker Date.toString must carry the NY EDT offset');
+      console.log('✓ Worker bootstrap converts Date reads/writes in the synced timezone.');
+    }
+
+    // 12.7 updateActiveTimezone must accept 'UTC' (a legal IANA id without a
+    // '/' segment — the slash-only guard must not reject it).
+    {
+      const winUTCTz = createMockWindow('utc-target.example', 'Linux x86_64');
+      vm.runInContext(stealthCode, vm.createContext(winUTCTz));
+      driveConfig(winUTCTz, { tz: 'UTC' });
+      assert.strictEqual(new winUTCTz.Intl.DateTimeFormat().resolvedOptions().timeZone, 'UTC', "driveConfig tz:'UTC' must be accepted and reported back");
+      const utcDate = new winUTCTz.Date('2026-09-29T12:00:00Z');
+      assert.strictEqual(utcDate.getTimezoneOffset(), 0, 'A UTC target must report a zero offset');
+      assert.strictEqual(utcDate.getHours(), utcDate.getUTCHours(), 'Local hours must equal UTC hours under a UTC target');
+      console.log('✓ updateActiveTimezone accepts the UTC zone id.');
+    }
+
+    console.log('✓ First-wave fix regressions fully passed.\n');
 
     console.log('=== ALL TESTS PASSED SUCCESSFULLY! ===');
   });

@@ -29,7 +29,8 @@ if command -v zip >/dev/null 2>&1; then
     -x "CHROMEWEBSTORE.md" \
     -x "README.md" \
     -x "CHANGELOG.md" \
-    -x "skills-lock.json"
+    -x "skills-lock.json" \
+    -x "docs/*"
 elif command -v python3 >/dev/null 2>&1; then
   python3 - <<EOF
 import os, zipfile, json
@@ -38,7 +39,7 @@ manifest = json.load(open('manifest.json'))
 version = manifest.get('version', '1.0.0')
 output = f"bocchi-privacy-shield-v{version}.zip"
 
-exclude_dirs = {'node_modules', 'tests', '__tests__', 'store-assets', '_metadata', '.agents', '.git'}
+exclude_dirs = {'node_modules', 'tests', '__tests__', 'store-assets', '_metadata', '.agents', '.git', 'docs'}
 exclude_files = {'CHROMEWEBSTORE.md', 'README.md', 'CHANGELOG.md', 'skills-lock.json', '.DS_Store', 'Thumbs.db', '.env', '.gitignore', output}
 
 with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as zf:
