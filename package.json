@@ -1,0 +1,14 @@
+{
+  "name": "bocchi-privacy-shield",
+  "private": true,
+  "version": "1.0.1",
+  "description": "MV3 anti-fingerprinting extension",
+  "scripts": {
+    "test": "node tests/run_all.js unit",
+    "test:tz": "node tests/run_all.js tz",
+    "test:live": "node tests/run_all.js live",
+    "test:headed": "node tests/run_all.js headed",
+    "test:all": "node tests/run_all.js all",
+    "package": "./package-extension.sh"
+  }
+}

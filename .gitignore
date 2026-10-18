@@ -22,3 +22,6 @@ apivoid_*.js
 # Agent environment files
 .agents/
 skills-lock.json
+
+# Test reports
+tests/reports/
