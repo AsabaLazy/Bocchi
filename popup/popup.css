@@ -1,25 +1,29 @@
 :root {
-  --background: #09090b;
-  --foreground: #fafafa;
-  --card: #18181b;
-  --card-foreground: #fafafa;
-  --popover: #09090b;
-  --popover-foreground: #fafafa;
-  --primary: #fafafa;
-  --primary-foreground: #18181b;
-  --secondary: #27272a;
-  --secondary-foreground: #fafafa;
-  --muted: #27272a;
-  --muted-foreground: #a1a1aa;
-  --accent: #27272a;
-  --accent-foreground: #fafafa;
-  --border: #27272a;
-  --input: #27272a;
-  --ring: #d4d4d8;
+  /* 与 panel.css 同源的现代黑体系 + Bocchi 粉强调色 */
+  --background: #0a0a0c;
+  --foreground: #f4f2f5;
+  --card: #131316;
+  --card-foreground: #f4f2f5;
+  --popover: #0a0a0c;
+  --popover-foreground: #f4f2f5;
+  --primary: #f4f2f5;
+  --primary-foreground: #131316;
+  --secondary: #1a1a1f;
+  --secondary-foreground: #f4f2f5;
+  --muted: #1a1a1f;
+  --muted-foreground: #93919b;
+  --accent: #1a1a1f;
+  --accent-foreground: #f4f2f5;
+  --border: rgba(255,255,255,.08);
+  --input: #1a1a1f;
+  --ring: #f2a4b8;
   --radius: 8px;
   --status-active: #10b981;
   --status-warn: #f59e0b;
   --status-disabled: #71717a;
+  --brand: #f2a4b8;                        /* Bocchi pink */
+  --brand-soft: rgba(242,164,184,.13);
+  --brand-border: rgba(242,164,184,.38);
 }
 
 * {
@@ -315,13 +319,13 @@ body {
 }
 
 input:checked + .slider {
-  background-color: var(--primary);
-  border-color: var(--primary);
+  background-color: var(--brand-soft);
+  border-color: var(--brand-border);
 }
 
 input:checked + .slider:before {
   transform: translateX(16px);
-  background-color: var(--primary-foreground);
+  background-color: var(--brand);
 }
 
 /* Small switch */

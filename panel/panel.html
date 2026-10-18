@@ -1,58 +1,91 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Bocchi Privacy Shield - 浏览器字体管理</title>
+  <title>Bocchi · 字体可见性</title>
   <link rel="stylesheet" href="panel.css">
 </head>
 <body>
-  <div class="app">
-    <!-- Top Bar: Mode Selector & Search -->
-    <header class="top-bar">
-      <div class="mode-section">
-        <span class="mode-label">防指纹模式</span>
-        <div class="segmented-control" id="modeControl">
-          <button class="mode-btn active" data-mode="blacklist" type="button">黑名单模式</button>
-          <button class="mode-btn" data-mode="whitelist" type="button">白名单模式</button>
-        </div>
+  <div class="shell">
+
+    <!-- 页头:品牌锚点 + 全局总开关(与 popup 共用 globalShieldEnabled) -->
+    <header class="masthead">
+      <svg class="shield" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 3l7 2.6v5.2c0 4.6-3 8.2-7 9.9-4-1.7-7-5.3-7-9.9V5.6L12 3z"/>
+        <circle cx="12" cy="11" r="2.1"/>
+      </svg>
+      <div class="brand">
+        <div class="brand-name">Bocchi Privacy Shield</div>
+        <div class="brand-sub">字体可见性控制</div>
       </div>
-      <div class="batch-section">
-        <span class="batch-label">冷门小语种隐藏</span>
-        <label class="switch" title="一键隐藏梵文、阿拉伯文、符号及古代文字等冷门小语种字体（字体照常渲染，仅对网站的字体探测不可见）">
-          <input type="checkbox" id="toggleOtherScripts">
-          <span class="slider"></span>
-        </label>
-      </div>
-      <div class="search-section">
-        <input type="text" id="searchInput" class="search-input" placeholder="快速搜索字体..." spellcheck="false" autocomplete="off">
-        <span class="font-count" id="fontCount">加载中...</span>
-      </div>
+      <label class="status-pill" id="statusPill" title="扩展全局开关：关闭后所有站点不再隐藏任何字体">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span class="status-text" id="statusText">防护运行中</span>
+        <span class="switch">
+          <input type="checkbox" id="globalShieldEnabled" checked aria-label="扩展全局开关">
+          <i></i>
+        </span>
+      </label>
     </header>
 
-    <!-- Hint Bar -->
-    <div class="hint-bar" id="modeHint">
-      黑名单模式：勾选的字体将被隐藏，未勾选保持可见
+    <!-- 工具条:模式(点阵即语义) + 语种批处理(样字即内容) + 搜索 -->
+    <div class="toolbar">
+      <span class="ctl-label">模式</span>
+      <div class="mode-seg" id="modeControl" role="group" aria-label="可见性模式">
+        <button class="mode-btn" type="button" data-mode="blacklist" title="默认全部可见；只隐藏你点暗的字体">
+          <span class="mode-dots" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span>
+          黑名单
+        </button>
+        <button class="mode-btn" type="button" data-mode="whitelist" title="默认全部隐藏；只显示你点亮的字体">
+          <span class="mode-dots" aria-hidden="true"><i></i><i></i><i></i><i></i><i class="on"></i><i class="on"></i></span>
+          白名单
+        </button>
+      </div>
+
+      <label class="script-chip" id="scriptChip" title="一键隐藏阿拉伯文、天城文、泰文等冷门小语种字体（字体照常渲染，仅对网站的字体探测不可见）">
+        <span class="script-glyphs" aria-hidden="true"><i>أ</i><i>अ</i><i>ก</i></span>
+        <span class="switch">
+          <input type="checkbox" id="toggleOtherScripts" aria-label="冷门小语种隐藏">
+          <i></i>
+        </span>
+      </label>
+
+      <label class="search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input type="text" id="searchInput" class="search-input" placeholder="搜索字体…" spellcheck="false" autocomplete="off">
+        <span class="kbd">/</span>
+      </label>
+      <span class="font-count" id="fontCount"></span>
     </div>
 
-    <!-- Font List Table -->
+    <!-- 比例条:可见/隐藏的统计视觉化 -->
+    <div class="census" aria-live="polite">
+      <div class="census-bar"><div class="census-vis" id="barVis"></div><div class="census-hid" id="barHid"></div></div>
+      <div class="census-legend">
+        <span class="cell" id="nVisCell"><b id="nVis">0</b>&nbsp;可见</span>
+        <span class="cell hid" id="nHidCell"><b id="nHid">0</b>&nbsp;隐藏</span>
+      </div>
+    </div>
+
+    <!-- 列表 -->
     <main class="list-container">
-      <div class="table-header">
-        <div class="col-toggle sortable" id="headerToggle" title="点击按开关状态排序">
-          <span id="titleToggle">隐藏状态</span>
+      <div class="cols">
+        <div class="col sortable" id="headerToggle" title="按可见性排序">
+          <span id="titleToggle">可见性</span>
           <span class="sort-icon" id="iconToggle">↕</span>
         </div>
-        <div class="col-name sortable" id="headerName" title="点击按名称 A-Z 排序">
-          <span>字体名称（原生字形）</span>
+        <div class="col sortable col-name" id="headerName" title="按名称 A-Z 排序">
+          <span>字体样张</span>
           <span class="sort-icon" id="iconName">↕</span>
         </div>
-        <div class="col-badge sortable" id="headerCategory" title="点击按中西文分类排序">
-          <span>分类</span>
+        <div class="col sortable col-badge" id="headerCategory" title="按语系排序">
+          <span>语系</span>
           <span class="sort-icon" id="iconCategory">↕</span>
         </div>
       </div>
       <div id="fontRows" class="font-rows">
-        <div class="loading">正在加载底层字体库...</div>
+        <div class="no-result">正在加载底层字体库…</div>
       </div>
     </main>
   </div>

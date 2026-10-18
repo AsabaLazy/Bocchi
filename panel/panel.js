@@ -8,8 +8,8 @@ const OTHER_SCRIPTS_REGEX = /(?:arabic|kufi|naskh|nastaliq|urdu|hebrew|amiri|ald
 
 // DOM Elements
 const $modeControl = document.getElementById('modeControl');
-const $modeHint = document.getElementById('modeHint');
 const $toggleOtherScripts = document.getElementById('toggleOtherScripts');
+const $scriptChip = document.getElementById('scriptChip');
 const $searchInput = document.getElementById('searchInput');
 const $fontCount = document.getElementById('fontCount');
 const $headerToggle = document.getElementById('headerToggle');
@@ -19,6 +19,20 @@ const $iconName = document.getElementById('iconName');
 const $headerCategory = document.getElementById('headerCategory');
 const $iconCategory = document.getElementById('iconCategory');
 const $fontRows = document.getElementById('fontRows');
+const $globalShieldEnabled = document.getElementById('globalShieldEnabled');
+const $statusText = document.getElementById('statusText');
+const $barVis = document.getElementById('barVis');
+const $barHid = document.getElementById('barHid');
+const $nVis = document.getElementById('nVis');
+const $nHid = document.getElementById('nHid');
+
+// 眼睛图标:可见=睁眼,隐藏=眼斜杠,无需读表头即可理解
+const EYE_ON = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>';
+const EYE_OFF = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><path d="M4 4l16 16"/></svg>';
+
+// 语系徽章:字形即分类
+const CAT_GLYPH = { cjk: '字', latin: 'Aa', other: 'أ' };
+const CAT_TITLE = { cjk: '中文字体', latin: '西文字体', other: '其他语系' };
 
 // State
 let allFonts = [];
@@ -28,6 +42,7 @@ let blockBuiltinChineseFonts = true;
 let blockOtherScripts = false;
 let fontMode = 'blacklist'; // 'blacklist' | 'whitelist'
 let searchQuery = '';
+let globalShieldEnabled = true; // 与 popup 共用的全局开关(chrome.storage.local.globalShieldEnabled)
 
 // Sorting State
 let sortField = 'none'; // 'none' | 'toggle' | 'name' | 'category'
@@ -190,16 +205,26 @@ function updateSortHeaders() {
 function renderList() {
   updateSortHeaders();
 
-  // Update mode UI
+  // Update mode UI (点阵按钮的 active 态即当前模式)
   document.querySelectorAll('.mode-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.mode === fontMode);
   });
-  if ($modeHint) {
-    if (fontMode === 'blacklist') {
-      $modeHint.textContent = '黑名单模式：勾选的字体将被隐藏，未勾选保持可见';
-    } else {
-      $modeHint.textContent = '白名单模式：仅勾选的字体允许显示，未勾选全部隐藏';
-    }
+
+  // 语种批处理 chip 状态
+  if ($scriptChip) {
+    $scriptChip.classList.toggle('on', blockOtherScripts);
+  }
+
+  // 比例条:全库可见/隐藏统计(全局关闭时一切都是"可见"的诚实呈现)
+  const engineActive = globalShieldEnabled;
+  const nHid = engineActive ? allFonts.filter(f => isFontHidden(f)).length : 0;
+  const nVis = allFonts.length - nHid;
+  if ($nVis && $nHid && $barVis && $barHid) {
+    $nVis.textContent = nVis;
+    $nHid.textContent = nHid;
+    const tot = allFonts.length || 1;
+    $barVis.style.width = (nVis / tot * 100) + '%';
+    $barHid.style.width = (nHid / tot * 100) + '%';
   }
 
   const list = getProcessedFonts();
@@ -219,30 +244,22 @@ function renderList() {
 
   $fontRows.innerHTML = list.map(f => {
     const checked = isFontChecked(f);
-    const hidden = isFontHidden(f);
+    const hidden = engineActive && isFontHidden(f);
     const cat = getFontCategory(f);
 
-    let badgeHtml = '';
-    if (cat === 'cjk') {
-      badgeHtml = '<span class="badge badge-cjk">中文</span>';
-    } else if (cat === 'other') {
-      badgeHtml = '<span class="badge badge-other">小语种</span>';
-    } else {
-      badgeHtml = '<span class="badge badge-latin">西文</span>';
-    }
+    const badgeClass = cat === 'latin' ? ' glyph-badge lat' : ' glyph-badge';
+    const badgeHtml = `<span class="${badgeClass.trim()}" title="${CAT_TITLE[cat]}">${CAT_GLYPH[cat]}</span>`;
 
-    const switchTooltip = fontMode === 'blacklist'
-      ? (checked ? '已加入黑名单（隐藏），点击移出黑名单' : '未在黑名单（保持可见），点击加入黑名单')
-      : (checked ? '已加入白名单（保持可见），点击移出白名单' : '未在白名单（隐藏），点击加入白名单');
+    // 眼睛按钮的语义随模式翻转,但对用户永远只有"可见/隐藏"两种呈现
+    const eyeTooltip = !engineActive
+      ? '防护已全局关闭：当前没有任何字体被隐藏'
+      : (hidden ? '已隐藏，点击恢复可见' : '网站可见，点击隐藏');
+
+    const rowAria = `${f}，${hidden ? '已对网站隐藏' : '网站可见'}，点击切换`;
 
     return `
-      <div class="font-row ${hidden ? 'is-hidden' : ''}" data-font="${escapeHtml(f)}">
-        <div class="col-toggle">
-          <label class="switch" title="${switchTooltip}">
-            <input type="checkbox" class="toggle-font" data-font="${escapeHtml(f)}" ${checked ? 'checked' : ''}>
-            <span class="slider"></span>
-          </label>
-        </div>
+      <div class="font-row ${hidden ? 'is-hidden' : ''}" data-font="${escapeHtml(f)}" role="button" tabindex="0" aria-label="${rowAria}">
+        <button type="button" class="eye" data-font="${escapeHtml(f)}" title="${eyeTooltip}" aria-label="${eyeTooltip}">${hidden ? EYE_OFF : EYE_ON}</button>
         <div class="col-name">
           <span class="font-title" style="font-family: '${escapeHtml(f)}', sans-serif;">${escapeHtml(f)}</span>
         </div>
@@ -329,19 +346,15 @@ if ($headerCategory) {
   });
 }
 
-// Toggle font handler (event delegation)
-$fontRows.addEventListener('change', (e) => {
-  const checkbox = e.target.closest('.toggle-font');
-  if (!checkbox) return;
+// Toggle font handler:整行或眼睛按钮均可点击(键盘 Enter/Space 同效),落库逻辑不变
+function toggleFont(fontName) {
+  if (!fontName || !globalShieldEnabled) return; // 全局关闭时不改配置,只读
 
-  const fontName = checkbox.dataset.font;
-  if (!fontName) return;
-
-  const isChecked = checkbox.checked;
   const lower = fontName.toLowerCase();
+  const checked = !isFontChecked(fontName); // 点击 = 翻转当前状态
 
   if (fontMode === 'blacklist') {
-    if (isChecked) {
+    if (checked) {
       // Add to blacklist (hide)
       if (!customHiddenFonts.some(f => f.toLowerCase() === lower)) {
         customHiddenFonts.push(fontName);
@@ -358,7 +371,7 @@ $fontRows.addEventListener('change', (e) => {
     }
   } else {
     // Whitelist mode: checked = in whitelist (allowed)
-    if (isChecked) {
+    if (checked) {
       if (!customAllowedFonts.some(f => f.toLowerCase() === lower)) {
         customAllowedFonts.push(fontName);
       }
@@ -369,6 +382,20 @@ $fontRows.addEventListener('change', (e) => {
 
   saveState();
   renderList();
+}
+
+$fontRows.addEventListener('click', (e) => {
+  const row = e.target.closest('.font-row');
+  if (!row) return;
+  toggleFont(row.dataset.font);
+});
+
+$fontRows.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const row = e.target.closest('.font-row');
+  if (!row) return;
+  e.preventDefault();
+  toggleFont(row.dataset.font);
 });
 
 // Toggle other minority scripts batch switch
@@ -376,6 +403,35 @@ if ($toggleOtherScripts) {
   $toggleOtherScripts.addEventListener('change', () => {
     blockOtherScripts = $toggleOtherScripts.checked;
     saveState();
+    renderList();
+  });
+}
+
+// '/' 聚焦搜索
+document.addEventListener('keydown', (e) => {
+  if (e.key === '/' && document.activeElement !== $searchInput) {
+    e.preventDefault();
+    $searchInput && $searchInput.focus();
+  }
+});
+
+// 全局总开关:与 popup 共用 chrome.storage.local.globalShieldEnabled
+function applyShieldState(enabled) {
+  globalShieldEnabled = !!enabled;
+  document.body.classList.toggle('off', !globalShieldEnabled);
+  if ($globalShieldEnabled) {
+    $globalShieldEnabled.checked = globalShieldEnabled;
+  }
+  if ($statusText) {
+    $statusText.textContent = globalShieldEnabled ? '防护运行中' : '防护已关闭';
+  }
+}
+
+if ($globalShieldEnabled) {
+  $globalShieldEnabled.addEventListener('change', () => {
+    globalShieldEnabled = $globalShieldEnabled.checked;
+    chrome.storage.local.set({ globalShieldEnabled });
+    applyShieldState(globalShieldEnabled);
     renderList();
   });
 }
@@ -407,6 +463,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
       }
       changed = true;
     }
+    if (changes.globalShieldEnabled) {
+      applyShieldState(changes.globalShieldEnabled.newValue !== false);
+      changed = true;
+    }
     if (changed) renderList();
   }
 });
@@ -432,7 +492,7 @@ async function init() {
 
   allFonts.sort((a, b) => a.localeCompare(b));
 
-  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'fontMode'], (res) => {
+  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'fontMode', 'globalShieldEnabled'], (res) => {
     fontMode = res.fontMode === 'whitelist' ? 'whitelist' : 'blacklist';
     customHiddenFonts = Array.isArray(res.customHiddenFonts) ? res.customHiddenFonts : [];
     customAllowedFonts = Array.isArray(res.customAllowedFonts) ? res.customAllowedFonts : [];
@@ -441,6 +501,7 @@ async function init() {
     if ($toggleOtherScripts) {
       $toggleOtherScripts.checked = blockOtherScripts;
     }
+    applyShieldState(res.globalShieldEnabled !== false);
     renderList();
   });
 }
