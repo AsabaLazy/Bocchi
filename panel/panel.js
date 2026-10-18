@@ -164,14 +164,18 @@ function getProcessedFonts() {
   return list;
 }
 
+// 表头排序状态:资源管理器式纯箭头(↕ 未排序 / ↑↓ 方向),并维护 aria-sort 供屏幕阅读器播报
 function updateSortHeaders() {
   if ($headerToggle && $iconToggle) {
     if (sortField === 'toggle') {
       $iconToggle.textContent = sortOrder === 'checked-first' ? '↑' : '↓';
       $headerToggle.classList.add('active');
+      // 可见性两态没有天然的"升/降"方向,这里按约定:隐藏优先=ascending
+      $headerToggle.setAttribute('aria-sort', sortOrder === 'checked-first' ? 'ascending' : 'descending');
     } else {
       $iconToggle.textContent = '↕';
       $headerToggle.classList.remove('active');
+      $headerToggle.setAttribute('aria-sort', 'none');
     }
   }
 
@@ -179,25 +183,24 @@ function updateSortHeaders() {
     if (sortField === 'name') {
       $iconName.textContent = sortOrder === 'asc' ? '↑' : '↓';
       $headerName.classList.add('active');
+      $headerName.setAttribute('aria-sort', sortOrder === 'asc' ? 'ascending' : 'descending');
     } else {
       $iconName.textContent = '↕';
       $headerName.classList.remove('active');
+      $headerName.setAttribute('aria-sort', 'none');
     }
   }
 
   if ($headerCategory && $iconCategory) {
     if (sortField === 'category') {
-      if (sortOrder === 'cjk-first') {
-        $iconCategory.textContent = '↑ 中文';
-      } else if (sortOrder === 'latin-first') {
-        $iconCategory.textContent = '↑ 西文';
-      } else if (sortOrder === 'other-first') {
-        $iconCategory.textContent = '↑ 小语种';
-      }
+      // 三种语系优先序视为该列的排序形态,统一报 ascending
+      $iconCategory.textContent = '↑';
       $headerCategory.classList.add('active');
+      $headerCategory.setAttribute('aria-sort', 'ascending');
     } else {
       $iconCategory.textContent = '↕';
       $headerCategory.classList.remove('active');
+      $headerCategory.setAttribute('aria-sort', 'none');
     }
   }
 }
@@ -345,6 +348,15 @@ if ($headerCategory) {
     renderList();
   });
 }
+
+// 表头键盘操作:Enter/Space 触发与点击相同的排序
+document.querySelector('.cols').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const col = e.target.closest('.sortable');
+  if (!col) return;
+  e.preventDefault();
+  col.click();
+});
 
 // Toggle font handler:整行或眼睛按钮均可点击(键盘 Enter/Space 同效),落库逻辑不变
 function toggleFont(fontName) {
