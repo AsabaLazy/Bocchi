@@ -85,5 +85,7 @@
 
 ## 七、验证状态
 
-- 单元套件：`node tests/stealth.test.js` 全绿（55 组断言），含 S1-S6 回归、池化/一致性/透传/护栏专项。
+- 单元套件：`node tests/stealth.test.js` 全绿（55+ 组断言），含 S1-S6 回归、池化/一致性/透传/护栏专项。
 - 真机（Chrome for Testing 155，无头）：CreepJS `totalLies` 203 → **3**（残余为 canvas/audio/WebGL farbling 固有）；`failed toString` 197 → 0；headless 评分回到裸浏览器基线；stealth 评分 40% → 20%。
+- 性能（`tests/perf_bench.js`，无头基准）：引擎初始化 ~5ms/帧；布局读取 +0.19µs/次；`performance.now` +3ns/次；canvas 导出 +10µs/次；字体探测 +10µs/次；内存 ~1.5MB/主帧、~0.4MB/iframe 边际。
+- 泄漏（`tests/soak_verify.js`，29 分钟 1703 周期混合负载）：保留堆 -1.0 MB/h（负斜率）、节点/监听器持平或下降——无泄漏。
