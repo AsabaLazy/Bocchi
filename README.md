@@ -76,6 +76,12 @@ node tests/stealth.test.js
 
 # Run live CreepJS audit (requires Chromium installed)
 node tests/live_creep_verify.js
+
+# Performance baseline: extension off vs on, same workload (deltas are the output)
+CHROME_BIN=/path/to/chrome node tests/perf_bench.js both
+
+# Leak soak: mixed workload churn, retained-heap sampling every minute
+CHROME_BIN=/path/to/chrome node tests/soak_verify.js 30
 ```
 
-The live verification scripts (`live_creep_verify.js`, `check_apivoid_live.js`, `diagnose_apivoid.js`, `test_apivoid_tamper.js`) drive a real browser over the Chrome DevTools Protocol and therefore require a local Chromium / Google Chrome installation (override the binary via the `CHROME_BIN` environment variable). The unit test suite runs under plain Node.js with no browser required.
+The live verification scripts (`live_creep_verify.js`, `check_apivoid_live.js`, `diagnose_apivoid.js`, `test_apivoid_tamper.js`, `perf_bench.js`, `soak_verify.js`) drive a real browser over the Chrome DevTools Protocol and therefore require a local Chromium installation (override the binary via the `CHROME_BIN` environment variable). **Note:** branded Google Chrome 137+ silently ignores `--load-extension` — for live/bench scripts use Chromium or Chrome for Testing (`npx @puppeteer/browsers install chrome@stable --path /tmp/cft`). The unit test suite runs under plain Node.js with no browser required.
