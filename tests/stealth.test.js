@@ -385,7 +385,20 @@ function createMockWindow(hostname, platform = 'Linux x86_64') {
 
   // Builtin globals
   win.Function = Function;
-  win.Date = Date;
+  // Per-window Date: sharing the host Date across mock windows (and with the
+  // test file itself) lets every engine instance chain its prototype hooks
+  // onto the same object — the outermost instance's activeTimezone silently
+  // wins, which both masks cross-realm bugs and makes results host-TZ
+  // dependent. Real realms each have their own Date intrinsics, so expose an
+  // isolated subclass with a fresh prototype (statics delegate to the host).
+  class WDate extends Date {}
+  // Statics are tz-neutral (UTC-based) and never hooked by the engine, so the
+  // host function objects can be shared directly — keeping their native
+  // toString — while the fresh WDate.prototype prevents hook chaining.
+  ['now', 'parse', 'UTC'].forEach(m => {
+    WDate[m] = Date[m];
+  });
+  win.Date = WDate;
   // Per-window Intl: real realms each have their own Intl intrinsics. Sharing
   // the host Intl object across mock windows would let every engine instance
   // chain its prototype hooks (DateTimeFormat/resolvedOptions etc.) onto the
@@ -1470,6 +1483,12 @@ assert.strictEqual(col.resolvedOptions().locale, new Intl.Collator().resolvedOpt
 console.log('✓ Intl locale passthrough verified (zh preserved, timezone still aligned).\n');
 
 console.log('Testing Timezone Dynamic Auto-sync and Date Hooks...');
+// Host real zone (defined once, reused by the passthrough block below).
+// The LA-targeted assertions in this block test the engine's CONVERSION to
+// America/Los_Angeles and are host-independent; only the native-string
+// equality checks require the host to actually be in LA (target == real zone
+// -> passthrough), so they are guarded.
+const HOST_REAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 // Initial timezone matches America/Los_Angeles
 assert.strictEqual(dtf.resolvedOptions().timeZone, 'America/Los_Angeles', 'Default detected timezone must be America/Los_Angeles');
 
@@ -1478,11 +1497,14 @@ const nativeDateSummer = new Date('2026-09-29T12:00:00Z');
 // In Los Angeles (PDT): offset is 420 minutes (UTC-7)
 assert.strictEqual(testDateSummer.getTimezoneOffset(), 420, 'getTimezoneOffset in Summer (PDT) must be 420');
 assert(testDateSummer.toString().includes('GMT-0700'), 'Date.toString must include GMT-0700');
-// Target zone == host real zone, so tzSpoofNeeded is false and every Date
-// method must be byte-identical to the untouched native (no re-formatted
-// English zone name — the host locale supplies whatever native produces).
-assert.strictEqual(testDateSummer.toString(), nativeDateSummer.toString(), 'Date.toString must match the native string when the target zone equals the real zone');
-assert.strictEqual(testDateSummer.toTimeString(), nativeDateSummer.toTimeString(), 'toTimeString must match the native string when the target zone equals the real zone');
+// Native-string equality only holds when the host really is in LA (target ==
+// real zone -> full passthrough). On other hosts the engine converts and
+// renders LA itself; the general passthrough case is covered by the
+// HOST_REAL_TZ-driven block further below.
+if (HOST_REAL_TZ === 'America/Los_Angeles') {
+  assert.strictEqual(testDateSummer.toString(), nativeDateSummer.toString(), 'Date.toString must match the native string when the target zone equals the real zone');
+  assert.strictEqual(testDateSummer.toTimeString(), nativeDateSummer.toTimeString(), 'toTimeString must match the native string when the target zone equals the real zone');
+}
 assert.strictEqual(testDateSummer.toDateString(), 'Tue Sep 29 2026', 'toDateString must match Tue Sep 29 2026');
 assert.strictEqual(testDateSummer.getHours(), 5, 'getHours in LA for 12:00 UTC must be 5 (12 - 7)');
 assert(testDateSummer.toLocaleString().includes('2026'), 'toLocaleString must format in the native default locale (year present)');
@@ -1529,8 +1551,10 @@ const nativeDateWinter = new Date('2026-01-15T12:00:00Z');
 // In Los Angeles (PST): offset is 480 minutes (UTC-8)
 assert.strictEqual(testDateWinter.getTimezoneOffset(), 480, 'getTimezoneOffset in Winter (PST) must be 480');
 assert(testDateWinter.toString().includes('GMT-0800'), 'Date.toString must include GMT-0800');
-// Zone-name suffix is native (host locale), not an engine-formatted English name.
-assert.strictEqual(testDateWinter.toString(), nativeDateWinter.toString(), 'Winter Date.toString must match the native string (target zone == real zone)');
+// Native-string equality is host-LA-guarded (see the summer block above).
+if (HOST_REAL_TZ === 'America/Los_Angeles') {
+  assert.strictEqual(testDateWinter.toString(), nativeDateWinter.toString(), 'Winter Date.toString must match the native string (target zone == real zone)');
+}
 assert.strictEqual(testDateWinter.getHours(), 4, 'getHours in LA for 12:00 UTC in Winter must be 4 (12 - 8)');
 assert.strictEqual(testDateWinter.getMinutes(), 0, 'getMinutes must be 0');
 assert.strictEqual(testDateWinter.getSeconds(), 0, 'getSeconds must be 0');
@@ -1544,13 +1568,24 @@ assert.strictEqual(testDateWinter.getYear(), 126, 'getYear must be 126');
 setTestTimezone(winCYT, 'America/New_York');
 assert.strictEqual(new winCYT.Intl.DateTimeFormat().resolvedOptions().timeZone, 'America/New_York', 'DateTimeFormat must reflect updated timezone');
 assert.strictEqual(new winCYT.Date('2026-09-29T12:00:00Z').getTimezoneOffset(), 240, 'Summer offset in NY (EDT) must be 240 (UTC-4)');
-assert(new winCYT.Date('2026-09-29T12:00:00Z').toString().includes('GMT-0400 (Eastern Daylight Time)'), 'Date.toString must reflect NY EDT');
+// The engine only formats the English zone name itself when conversion is
+// active (target != real zone). When the host really is in NY, passthrough
+// renders the native (host-locale) name instead.
+if ('America/New_York' !== HOST_REAL_TZ) {
+  assert(new winCYT.Date('2026-09-29T12:00:00Z').toString().includes('GMT-0400 (Eastern Daylight Time)'), 'Date.toString must reflect NY EDT');
+} else {
+  assert.strictEqual(new winCYT.Date('2026-09-29T12:00:00Z').toString(), new Date('2026-09-29T12:00:00Z').toString(), 'NY-host passthrough must render the native string');
+}
 assert.strictEqual(new winCYT.Date('2026-09-29T12:00:00Z').getHours(), 8, 'getHours in NY for 12:00 UTC must be 8 (12 - 4)');
 
 // Test Dynamic Timezone Switching to Asia/Tokyo (UTC+9)
 setTestTimezone(winCYT, 'Asia/Tokyo');
 assert.strictEqual(new winCYT.Date('2026-09-29T12:00:00Z').getTimezoneOffset(), -540, 'Offset in Tokyo must be -540 (UTC+9)');
-assert(new winCYT.Date('2026-09-29T12:00:00Z').toString().includes('GMT+0900 (Japan Standard Time)'), 'Date.toString must reflect Tokyo JST');
+if ('Asia/Tokyo' !== HOST_REAL_TZ) {
+  assert(new winCYT.Date('2026-09-29T12:00:00Z').toString().includes('GMT+0900 (Japan Standard Time)'), 'Date.toString must reflect Tokyo JST');
+} else {
+  assert.strictEqual(new winCYT.Date('2026-09-29T12:00:00Z').toString(), new Date('2026-09-29T12:00:00Z').toString(), 'Tokyo-host passthrough must render the native string');
+}
 assert.strictEqual(new winCYT.Date('2026-09-29T12:00:00Z').getHours(), 21, 'getHours in Tokyo for 12:00 UTC must be 21 (12 + 9)');
 
 // Test authenticated CE timezone sync and ensure window.postMessage is ignored
@@ -1577,10 +1612,9 @@ assert(testDateUTC.toLocaleString('en-GB', { timeZone: 'UTC' }).includes('12:00:
 
 // tzSpoofNeeded: when the target zone IS the host's real zone (the common
 // "no VPN / matching exit IP" case) the engine must fall back to full native
-// passthrough — Date/Intl must be indistinguishable from the unwrapped natives.
-// The real zone is read from the environment rather than hardcoded so the test
-// stays valid on any host TZ.
-const HOST_REAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+// passthrough — Date/Intl must be value-equivalent to the unwrapped natives.
+// The real zone is read from the environment (HOST_REAL_TZ, defined in the
+// LA block above) so the test stays valid on any host TZ.
 const winSameTz = createMockWindow('same-tz-passthrough.test', 'Linux x86_64');
 vm.runInContext(stealthCode, vm.createContext(winSameTz));
 driveConfig(winSameTz, { tz: HOST_REAL_TZ });
