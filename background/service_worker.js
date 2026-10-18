@@ -8,7 +8,7 @@
  *    prevent local/non-proxied UDP IP leakage.
  *  - Periodically resolve the egress IP's timezone via GeoIP endpoints and
  *    cache it in chrome.storage.local for content scripts.
- *  - Answer GET_TIMEZONE / REFRESH_TIMEZONE runtime messages.
+ *  - Answer GET_TIMEZONE runtime messages.
  *
  * The extension no longer spoofs any identity headers (User-Agent,
  * Client-Hints, Accept-Language): low-entropy signals are left native.
@@ -55,7 +55,8 @@ async function applyWebRTCPolicy(specifiedEnabled) {
 
 /**
  * Fetch current egress IP geolocation and timezone from public GeoIP endpoints.
- * Tries ipwho.is first, then ipapi.co as fallback, defaulting to America/Los_Angeles.
+ * Tries ipwho.is first, then get.geojs.io and ipapi.co as fallbacks, defaulting
+ * to America/Los_Angeles.
  */
 async function fetchEgressTimezone(fallback = DEFAULT_TIMEZONE) {
   const fetchOpts = (typeof AbortSignal !== 'undefined' && AbortSignal.timeout)
@@ -180,12 +181,6 @@ if (typeof chrome !== 'undefined' && chrome.runtime) {
           } else {
             sendResponse({ timezone: DEFAULT_TIMEZONE });
           }
-        })();
-        return true;
-      } else if (message && message.type === 'REFRESH_TIMEZONE') {
-        (async () => {
-          const tz = await syncTimezone(true);
-          sendResponse({ timezone: tz });
         })();
         return true;
       }

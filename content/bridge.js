@@ -6,18 +6,26 @@
  * Runs in ISOLATED world at document_start.
  * Reads egress IP timezone and privacy shield configuration cached in chrome.storage.local
  * and synchronizes it to the MAIN world stealth engine over a handshake-secured
- * channel (protocol v2):
+ * channel (protocol v2.1):
  *
  *  1. The MAIN world engine generates a random token T and a random config event
- *     name CE, then dispatches '__bocchi_hs__' with detail { t: T, e: CE }.
+ *     name CE, dispatches '__bocchi_hs__' with detail { t: T, e: CE }, and keeps
+ *     its handshake replay channel armed until it receives the matching ACK.
  *  2. Because the engine runs before this script, we missed the initial broadcast;
  *     we dispatch '__bocchi_req__' at once so the engine re-sends the handshake.
  *     This exchange happens in the document_start window, before any page script
  *     can observe it.
- *  3. All config syncs afterwards go to CE with detail { t: T, tz?, fonts?, cfg? }.
+ *  3. On the first valid handshake we synchronously dispatch '__bocchi_ack__'
+ *     with detail { t: T } before any async work (storage reads, config pushes).
+ *     The ACK closes the loop while still inside the document_start window: the
+ *     engine disarms its replay channel, so page scripts that later dispatch
+ *     '__bocchi_req__' get no '__bocchi_hs__' response and cannot fish for the
+ *     token, and a forged ACK carrying the wrong token is ignored engine-side.
+ *     Page scripts can thus neither observe nor forge the handshake exchange.
+ *  4. All config syncs afterwards go to CE with detail { t: T, tz?, fonts?, cfg? }.
  *     The engine validates detail.t === T and ignores anything else, so page
  *     scripts can neither spoof config events nor learn the channel name.
- *  4. No fallback: if no handshake ever arrives (engine missing), payloads are
+ *  5. No fallback: if no handshake ever arrives (engine missing), payloads are
  *     simply dropped — the engine no longer listens on any fixed event name,
  *     so dispatching there would only broadcast into the void, and without an
  *     engine there is no protection left to configure anyway.
@@ -71,7 +79,7 @@
   }
 
   // ------------------------------------------------------------------
-  // Handshake handling (protocol v2)
+  // Handshake handling (protocol v2.1)
   // ------------------------------------------------------------------
 
   function onHandshake(evt) {
@@ -89,6 +97,12 @@
       }
       handshakeToken = d.t;
       configEventName = d.e;
+      // ACK the handshake synchronously, before any async work (storage reads,
+      // config pushes): the engine disarms its replay channel on this
+      // token-matching ACK, so the loop closes entirely inside the
+      // document_start window and page scripts can neither observe nor forge
+      // it afterwards.
+      safeDispatch('__bocchi_ack__', { t: handshakeToken });
       // Push a full config payload over the secured channel.
       sendInitialConfig();
     } catch (_) {}
@@ -219,11 +233,11 @@
       document.addEventListener('__bocchi_hs__', onHandshake, true);
 
       // b. Ask the engine to re-send the handshake we missed at document_start.
-      //    The engine answers synchronously, so onHandshake above already
-      //    pushes the full config over the secured channel. If the engine is
-      //    missing, no handshake ever arrives and every payload is dropped
-      //    (there is no protection to configure); no retry or legacy fallback
-      //    is needed.
+      //    The engine answers synchronously, so onHandshake above already ACKs
+      //    the handshake and pushes the full config over the secured channel.
+      //    If the engine is missing, no handshake ever arrives and every
+      //    payload is dropped (there is no protection to configure); no retry
+      //    or legacy fallback is needed.
       safeDispatch('__bocchi_req__', null);
     }
   } catch (_) {}

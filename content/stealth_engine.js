@@ -56,7 +56,7 @@
   // Global timezone state (defaulting to America/Los_Angeles, dynamically synced)
   let activeTimezone = 'America/Los_Angeles';
 
-  // Privacy Shield configuration registry (Master switch, per-site bypass, 5 core modules, font switch)
+  // Privacy Shield configuration registry (Master switch, per-site bypass, 6 module switches)
   const shieldConfig = {};
   if (typeof shieldConfig.globalShieldEnabled !== 'boolean') shieldConfig.globalShieldEnabled = true;
   if (typeof shieldConfig.isBypassed !== 'boolean') shieldConfig.isBypassed = false;
@@ -526,8 +526,7 @@
     return {
       canvas: djb2(prefix + ':canvas'),
       webgl: djb2(prefix + ':webgl'),
-      audio: djb2(prefix + ':audio'),
-      plugins: djb2(prefix + ':plugins')
+      audio: djb2(prefix + ':audio')
     };
   }
 
@@ -587,7 +586,7 @@
 
   /**
    * Helper to identify EFF Cover Your Tracks family evaluation domains.
-   * Used by the GPC-injection and timezone sections; canvas/WebGL/audio
+   * Used only by the GPC-injection section; canvas/WebGL/audio
    * farbling no longer depends on it — it now applies on every domain with
    * per-load-salt + per-domain-seed randomization (stable within one site
    * during a page load, different across sites and visits).
@@ -750,9 +749,9 @@
     } catch (_) {}
 
     const host = resolveHostName(targetWin);
-    // Audit-domain marker, still consumed by the GPC-injection and timezone
-    // sections below; canvas/WebGL/audio farbling itself now applies on every
-    // domain (per-domain seeds below), so it no longer consults isCYT.
+    // Audit-domain marker, still consumed only by the GPC-injection section
+    // below; canvas/WebGL/audio farbling itself now applies on every domain
+    // (per-domain seeds below), so it no longer consults isCYT.
     const isCYT = isCYTDomain(host);
     const seeds = getDomainSeeds(host, activeSessionSalt);
     const canvasDelta = (seeds.canvas % 12) * 2 + 1;
@@ -956,7 +955,18 @@
               restoreMap.delete(canvasLike);
             }
           };
-          return { farbleForExport, restoreAfterExport };
+          // Wholesale record drop without restoring. Needed after
+          // transferToImageBitmap: the native call resets the source bitmap,
+          // so any true-pixel writeback — from this transfer or from a still
+          // pending convertToBlob restore — would repaint a blank canvas, a
+          // detectable deviation from native. Dropping the record instead
+          // turns those later restores into no-ops (a pending blob already
+          // snapshotted its farbled bitmap when convertToBlob was called, so
+          // it is unaffected).
+          const dropRecord = (canvasLike) => {
+            restoreMap.delete(canvasLike);
+          };
+          return { farbleForExport, restoreAfterExport, dropRecord };
         };
 
         if (targetWin.CanvasRenderingContext2D && targetWin.CanvasRenderingContext2D.prototype) {
@@ -1144,7 +1154,7 @@
             // stay safe). Unlike there, the context-type and size checks live
             // in resolveCtx because the offscreen export hooks pass every
             // canvas through and let the farbler decide.
-            const { farbleForExport: ocFarbleForExport, restoreAfterExport: ocRestoreAfterExport } = makeExportFarbler({
+            const { farbleForExport: ocFarbleForExport, restoreAfterExport: ocRestoreAfterExport, dropRecord: ocDropExportRecord } = makeExportFarbler({
               resolveCtx: (oc) => {
                 if (canvasContextTypeMap.get(oc) !== '2d' || oc.width <= 0 || oc.height <= 0) return null;
                 return origOCGetContext.call(oc, '2d');
@@ -1166,6 +1176,36 @@
                   return origConvertToBlob.apply(this, arguments);
                 }
                 const oc = this;
+                // WebGL-typed offscreen canvases have no 2D context, so the
+                // shared farbler below cannot touch the framebuffer and the
+                // export would leave it raw. Mirror the visible-canvas WebGL
+                // export path: render the source into a throwaway 2D
+                // OffscreenCanvas, perturb one pixel there (the source canvas
+                // is never modified, so no restore/race handling is needed)
+                // and convert the temp canvas instead.
+                if (canvasContextTypeMap.get(oc) === 'webgl' && oc.width > 0 && oc.height > 0) {
+                  try {
+                    const temp = new targetWin.OffscreenCanvas(oc.width, oc.height);
+                    const tempCtx = origOCGetContext.call(temp, '2d');
+                    if (tempCtx) {
+                      tempCtx.drawImage(oc, 0, 0);
+                      const imgData = origOCGetImageData.call(tempCtx, 0, 0, 1, 1);
+                      if (imgData.data[3] > 10) {
+                        imgData.data[0] = perturbPixel(imgData.data[0], webglDelta);
+                      } else {
+                        imgData.data[0] = webglDelta;
+                        imgData.data[1] = 0;
+                        imgData.data[2] = 0;
+                        imgData.data[3] = 255; // Full alpha prevents premultiplied alpha collapse
+                      }
+                      origOCPutImageData.call(tempCtx, imgData, 0, 0);
+                      return origConvertToBlob.apply(temp, arguments);
+                    }
+                  } catch (_) {
+                    // Fallback: export the source natively rather than risk a
+                    // broken or wrongly farbled blob.
+                  }
+                }
                 const ctx = ocFarbleForExport(oc);
                 if (!ctx) {
                   return origConvertToBlob.apply(this, arguments);
@@ -1198,15 +1238,35 @@
             // transferToImageBitmap: sync export. No restore afterwards: the
             // native transfer resets the source canvas to a blank state, so the
             // restored-true-pixel writeback must NOT happen here (it would leave
-            // the canvas non-blank, a detectable deviation from native).
+            // the canvas non-blank, a detectable deviation from native). The
+            // pending record is dropped instead: a still-pending convertToBlob
+            // restore would equally repaint the blank canvas, so turning it
+            // into a no-op is correct — the pending blob already snapshotted
+            // its farbled bitmap at call time, so it is unaffected. The drop
+            // only runs after a successful transfer: if the native call throws,
+            // the source was not reset and the record stays valid.
+            //
+            // WebGL-typed offscreen canvases deliberately skip farbling here.
+            // The temp-canvas trick used for convertToBlob cannot preserve the
+            // native reset-the-source semantics (the source framebuffer would
+            // keep its contents after the transfer, an observable deviation),
+            // and re-clearing the source through its WebGL context would mean
+            // re-acquiring the exact context type (the type map only keeps the
+            // 'webgl' bucket) plus save/restore of clearColor and scissor
+            // state — too fragile. Better an unfarbled transfer than a wrong
+            // one.
             const origTransferToImageBitmap = ocProto.transferToImageBitmap;
             if (origTransferToImageBitmap) {
               const hookedTransferToImageBitmap = createNativeFunction(function transferToImageBitmap() {
                 if (!isShieldActive('canvasProtection') || inInternalCanvas) {
                   return origTransferToImageBitmap.apply(this, arguments);
                 }
-                ocFarbleForExport(this);
-                return origTransferToImageBitmap.apply(this, arguments);
+                const ctx = ocFarbleForExport(this);
+                const bitmap = origTransferToImageBitmap.apply(this, arguments);
+                if (ctx) {
+                  ocDropExportRecord(this);
+                }
+                return bitmap;
               }, 'transferToImageBitmap', 0, ocProto);
               ocProto.transferToImageBitmap = hookedTransferToImageBitmap;
             }
@@ -1229,14 +1289,14 @@
       // the loaded site. VENDOR (0x1F00) / RENDERER (0x1F01) stay the native
       // 'WebKit' / 'WebKit WebGL' values, and MAX_TEXTURE_SIZE stays 16384
       // (crowd-common for these GPUs).
-      function getSpoofedInfo(win) {
+      function getSpoofedInfo() {
         return {
           vendor: GPU_VENDOR_WEBGL,
           renderer: gpuProfile.renderer
         };
       }
 
-      const spoofed = getSpoofedInfo(targetWin);
+      const spoofed = getSpoofedInfo();
 
       function hookWebGLProto(proto, isWebGL2) {
         if (!proto) return;
@@ -1639,26 +1699,30 @@
         const origSetLocalDesc = rtcProto.setLocalDescription;
         if (origSetLocalDesc) {
           // Errors are passed through; we only retry once with the original
-          // (pre-sanitized) description when the failure looks like it was
-          // caused by our SDP rewriting, and re-reject with the original error.
-          const isSanitizeRelatedError = (err) => {
+          // (pre-sanitized) description when the native call failed with
+          // InvalidAccessError/OperationError and rawOfferMap holds the
+          // original of the description the page passed in. If the retry also
+          // fails, re-reject with the original error.
+          const isRetryableError = (err) => {
             if (!err || typeof err !== 'object') return false;
             const name = err.name || '';
-            if (name !== 'InvalidAccessError' && name !== 'OperationError') return false;
-            return /description|sdp/i.test(String(err.message || ''));
+            return name === 'InvalidAccessError' || name === 'OperationError';
           };
           const hookedSetLocalDesc = createNativeFunction(function setLocalDescription(...args) {
             if (!isShieldActive('webrtcProtection')) {
               return origSetLocalDesc.apply(this, args);
             }
-            const rawDesc = (args.length > 0 && args[0] && rawOfferMap.get(args[0])) || undefined;
-            const actualArg = args.length > 0 ? (rawDesc || args[0]) : undefined;
-            const callArgs = args.length > 0 ? [actualArg] : [];
+            // First attempt: call native with exactly what the page passed.
+            // For a description produced by our createOffer/createAnswer hook
+            // that is the sanitized copy; rawOfferMap maps it back to the
+            // original for the retry below. Swapping the original in up front
+            // would defeat the sanitization (and make the retry a no-op).
+            const rawDesc = (args.length > 0 && rawOfferMap.get(args[0])) || undefined;
             try {
-              const p = origSetLocalDesc.apply(this, callArgs);
+              const p = origSetLocalDesc.apply(this, args);
               if (p && typeof p.then === 'function' && typeof p.catch === 'function') {
                 return p.catch(err => {
-                  if (rawDesc && isSanitizeRelatedError(err)) {
+                  if (rawDesc && isRetryableError(err)) {
                     return origSetLocalDesc.apply(this, [rawDesc]).catch(() => { throw err; });
                   }
                   throw err;
@@ -1666,7 +1730,7 @@
               }
               return p;
             } catch (err) {
-              if (rawDesc && isSanitizeRelatedError(err)) {
+              if (rawDesc && isRetryableError(err)) {
                 try {
                   return origSetLocalDesc.apply(this, [rawDesc]);
                 } catch (_) {
@@ -1913,9 +1977,10 @@
       // layout read passes straight through to the native call: no
       // getComputedStyle, no style rewrite, no extra forced reflow and no
       // visibility to MutationObserver. Verdicts are memoized per element,
-      // keyed by the inline strings plus the font config state (the bridge
-      // replaces the custom font arrays wholesale, so array identity plus the
-      // scalar fields detect every config update).
+      // keyed by the inline strings plus a state signature (sig) covering the
+      // live protection switch and the font config (the bridge replaces the
+      // custom font arrays wholesale, so array identity plus the scalar fields
+      // and the isShieldActive boolean detect every runtime update).
       const inlineFontMaskCache = new WeakMap();
       function needsFontMasking(elem) {
         if (!elem || elem.nodeType !== 1) return false;
@@ -1939,44 +2004,64 @@
           } catch (_) {}
         }
         if (!inlineFF && !inlineFont) return false;
+        // Invalidation signature (sig): the verdict below is gated by the
+        // live protection state - isChineseOrNonStandardFont() short-circuits
+        // to false whenever fontProtection is off, the master switch is down
+        // or the site is bypassed - so a false verdict cached while
+        // protection was disabled must never be served after protection is
+        // re-enabled mid-run (font metrics would then pass straight through).
+        // isShieldActive() collapses master switch + per-site bypass + module
+        // flag into one boolean and is itself hot-path cached per window, so
+        // probing it here stays cheap. The custom font arrays are compared by
+        // reference only: the bridge (section 9) rebuilds both arrays via
+        // .slice() on every config update, so a changed array identity is a
+        // reliable invalidation signal without touching that listener. Any
+        // sig mismatch forces a fresh verdict that overwrites the entry.
+        const active = isShieldActive('fontProtection');
         const cached = inlineFontMaskCache.get(elem);
         if (cached &&
             cached.ff === inlineFF &&
             cached.font === inlineFont &&
-            cached.hiddenList === fontConfig.customHiddenFonts &&
-            cached.allowList === fontConfig.customAllowedFonts &&
-            cached.mode === fontConfig.fontMode &&
-            cached.blockBuiltin === fontConfig.blockBuiltinChineseFonts &&
-            cached.blockOther === fontConfig.blockOtherScripts) {
-          return cached.needs;
+            cached.sig.active === active &&
+            cached.sig.blockBuiltin === fontConfig.blockBuiltinChineseFonts &&
+            cached.sig.fontMode === fontConfig.fontMode &&
+            cached.sig.blockOther === fontConfig.blockOtherScripts &&
+            cached.sig.hiddenList === fontConfig.customHiddenFonts &&
+            cached.sig.allowList === fontConfig.customAllowedFonts) {
+          return cached.verdict;
         }
-        let needs = false;
-        if (inlineFF && isChineseOrNonStandardFont(inlineFF)) needs = true;
-        if (!needs && inlineFont && isChineseOrNonStandardFont(inlineFont)) needs = true;
+        let verdict = false;
+        if (inlineFF && isChineseOrNonStandardFont(inlineFF)) verdict = true;
+        if (!verdict && inlineFont && isChineseOrNonStandardFont(inlineFont)) verdict = true;
         inlineFontMaskCache.set(elem, {
           ff: inlineFF,
           font: inlineFont,
-          hiddenList: fontConfig.customHiddenFonts,
-          allowList: fontConfig.customAllowedFonts,
-          mode: fontConfig.fontMode,
-          blockBuiltin: fontConfig.blockBuiltinChineseFonts,
-          blockOther: fontConfig.blockOtherScripts,
-          needs: needs
+          sig: {
+            active: active,
+            blockBuiltin: fontConfig.blockBuiltinChineseFonts,
+            fontMode: fontConfig.fontMode,
+            blockOther: fontConfig.blockOtherScripts,
+            hiddenList: fontConfig.customHiddenFonts,
+            allowList: fontConfig.customAllowedFonts
+          },
+          verdict: verdict
         });
-        return needs;
+        return verdict;
       }
 
       function withMaskedElementFont(elem, fn) {
         if (!isShieldActive('fontProtection')) return fn();
         if (!needsFontMasking(elem)) return fn();
+        let ffModified = false;
         let fontModified = false;
         let origFF = '';
         let origFont = '';
         if (elem && elem.style) {
-          if (typeof elem.style.fontFamily === 'string' && isChineseOrNonStandardFont(elem.style.fontFamily)) {
-            origFF = elem.style.fontFamily;
+          if (typeof elem.style.fontFamily === 'string') origFF = elem.style.fontFamily;
+          if (typeof elem.style.font === 'string') origFont = elem.style.font;
+          if (typeof elem.style.fontFamily === 'string' && isChineseOrNonStandardFont(origFF)) {
             elem.style.fontFamily = sanitizeFontList(origFF);
-            fontModified = true;
+            ffModified = true;
           } else {
             let computedFF = '';
             try {
@@ -1994,13 +2079,11 @@
               }
             } catch (_) {}
             if (computedFF && isChineseOrNonStandardFont(computedFF)) {
-              origFF = elem.style.fontFamily || '';
               elem.style.fontFamily = sanitizeFontList(computedFF);
-              fontModified = true;
+              ffModified = true;
             }
           }
-          if (typeof elem.style.font === 'string' && isChineseOrNonStandardFont(elem.style.font)) {
-            origFont = elem.style.font;
+          if (typeof elem.style.font === 'string' && isChineseOrNonStandardFont(origFont)) {
             elem.style.font = sanitizeFontSpec(origFont);
             fontModified = true;
           }
@@ -2008,11 +2091,9 @@
         try {
           return fn();
         } finally {
-          if (fontModified && elem && elem.style) {
-            elem.style.fontFamily = origFF;
-            if (origFont) {
-              elem.style.font = origFont;
-            }
+          if (elem && elem.style) {
+            if (ffModified) elem.style.fontFamily = origFF;
+            if (fontModified) elem.style.font = origFont;
           }
         }
       }
@@ -2685,15 +2766,34 @@
           const getSpoofedVoiceObjects = () => {
             if (!spoofedVoiceObjects) {
               const VoiceProto = (targetWin.SpeechSynthesisVoice && targetWin.SpeechSynthesisVoice.prototype) || Object.prototype;
-              spoofedVoiceObjects = LINUX_SPEECH_VOICES.map(v => {
-                const obj = Object.create(VoiceProto);
-                Object.defineProperties(obj, {
-                  name: { value: v.name, enumerable: true, configurable: true },
-                  lang: { value: v.lang, enumerable: true, configurable: true },
-                  voiceURI: { value: v.voiceURI, enumerable: true, configurable: true },
-                  default: { value: v.default, enumerable: true, configurable: true },
-                  localService: { value: v.localService, enumerable: true, configurable: true }
+              // Native SpeechSynthesisVoice exposes name/lang/voiceURI/default/
+              // localService as accessor properties on the interface prototype;
+              // instances carry no own properties (Object.keys(voice) is empty).
+              // Mirror that shape — same approach the getVoices hook below uses
+              // (properties live on a prototype, never as own instance props):
+              // per-voice values are kept in a private WeakMap (the JS analogue
+              // of the engine-internal native storage) and served by getters on
+              // one shared hidden prototype chained to
+              // SpeechSynthesisVoice.prototype, so the spoofed voices keep
+              // instanceof behavior, share a single prototype, and gain no own
+              // enumerable properties. The getters are deliberately NOT
+              // installed on VoiceProto itself: that would replace the native
+              // accessors real voice objects rely on.
+              const voiceData = new WeakMap();
+              const fallbackVoiceProto = Object.create(VoiceProto);
+              ['name', 'lang', 'voiceURI', 'default', 'localService'].forEach(prop => {
+                Object.defineProperty(fallbackVoiceProto, prop, {
+                  get: createNativeGetter(function() {
+                    const data = voiceData.get(this);
+                    return data ? data[prop] : undefined;
+                  }, prop, fallbackVoiceProto),
+                  enumerable: true,
+                  configurable: true
                 });
+              });
+              spoofedVoiceObjects = LINUX_SPEECH_VOICES.map(v => {
+                const obj = Object.create(fallbackVoiceProto);
+                voiceData.set(obj, v);
                 return obj;
               });
             }
@@ -2927,7 +3027,9 @@
       refreshTzSpoofNeed();
 
       function updateActiveTimezone(tz) {
-        if (typeof tz === 'string' && tz.includes('/')) {
+        // Accept any non-empty IANA zone id. 'UTC' is a legal target without
+        // a '/' segment, so it must not be rejected by the slash-only check.
+        if (typeof tz === 'string' && tz !== '' && (tz.includes('/') || tz === 'UTC')) {
           activeTimezone = tz;
           // A target that now equals the real system zone switches every hook
           // below back to native passthrough (and vice versa when it diverges).
@@ -2935,7 +3037,7 @@
         }
       }
 
-      // Secure bridge channel (protocol v2). The engine (MAIN world,
+      // Secure bridge channel (protocol v2.1). The engine (MAIN world,
       // document_start, before any page script) generates a random token and a
       // per-frame random config event name, announces both via '__bocchi_hs__',
       // re-announces on '__bocchi_req__' (the bridge may register its listener
@@ -2943,6 +3045,12 @@
       // on the random event name and only when the token matches exactly.
       // The previous fixed, guessable event names let any page script forge
       // config events and flip shieldConfig at will.
+      // Replay capability ('__bocchi_req__') is now closed inside the
+      // document_start window: the bridge synchronously acknowledges the
+      // handshake via '__bocchi_ack__', and a 5s fallback timer covers
+      // bridge-less edge cases. Once page scripts run, '__bocchi_req__' no
+      // longer gets any response, so inline scripts cannot fish for the
+      // token through the replay path.
       if (targetWin.document && targetWin.document.addEventListener) {
         const randomHex = (byteLen) => {
           try {
@@ -2965,9 +3073,10 @@
         };
         const bridgeToken = randomHex(16);
         const configEventName = '__bocchi_evt_' + randomHex(8);
-        // Once the first authenticated config event arrives, the bridge no
-        // longer needs the handshake; any later '__bocchi_req__' can only be a
-        // page script fishing for the token, so re-dispatching is disabled.
+        // Once the first authenticated config event or a token-matching
+        // '__bocchi_ack__' arrives, the bridge no longer needs the handshake;
+        // any later '__bocchi_req__' can only be a page script fishing for
+        // the token, so re-dispatching is disabled.
         let handshakeArmed = true;
 
         const dispatchHandshake = () => {
@@ -2985,6 +3094,16 @@
 
         targetWin.document.addEventListener('__bocchi_req__', function() {
           if (handshakeArmed) dispatchHandshake();
+        }, true);
+
+        // ACK protocol v2.1: the bridge acknowledges receipt of the handshake
+        // synchronously while still inside the document_start window. A
+        // token-matching ACK disarms replay immediately, so page scripts that
+        // run afterwards cannot trigger '__bocchi_hs__' via '__bocchi_req__'.
+        targetWin.document.addEventListener('__bocchi_ack__', function(e) {
+          if (e && e.detail && e.detail.t === bridgeToken) {
+            handshakeArmed = false;
+          }
         }, true);
 
         targetWin.document.addEventListener(configEventName, function(e) {
@@ -3055,6 +3174,17 @@
         // Immediate handshake at document_start. If the bridge has not
         // registered yet it misses this and recovers via '__bocchi_req__'.
         dispatchHandshake();
+
+        // Fallback: if no ACK ever arrives (e.g. this frame has no bridge
+        // injection), still close the replay window after 5 seconds so an
+        // inline page script cannot fish for the token over a long-lived
+        // '__bocchi_req__' window. In the normal path the synchronous ACK
+        // arrives within milliseconds, long before this timer fires.
+        try {
+          setTimeout(function() {
+            handshakeArmed = false;
+          }, 5000);
+        } catch (_) {}
       }
 
       // Caching and zoned calculation helpers
@@ -3521,7 +3651,9 @@
           Object.defineProperty(targetWin, 'Date', {
             value: HookedDate,
             writable: true,
-            enumerable: false,
+            // Native globals expose built-ins as enumerable own properties
+            // (window.propertyIsEnumerable('Date') === true).
+            enumerable: true,
             configurable: true
           });
         } catch (_) {
@@ -3620,19 +3752,65 @@
     // 10. Web Worker & SharedWorker Cross-Context Protection
     try {
       function generateWorkerBootstrap() {
+        // JSON text is not template-literal-safe: JSON.stringify leaves raw
+        // backticks and dollar-brace sequences unescaped, and either would
+        // break (or silently corrupt) the interpolated bootstrap source.
+        const jsonLit = (v) => JSON.stringify(v).replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
         return `(function() {
   'use strict';
   try {
     const targetTz = ${JSON.stringify(activeTimezone)};
+
+    // Real local timezone of this worker realm, probed through the pristine
+    // native DateTimeFormat before any hook below replaces it. When it already
+    // equals targetTz, every Date/Intl hook below degrades to a pure
+    // pass-through and the realm behaves exactly like an unhooked worker.
+    let realLocalTz = null;
+    try {
+      const RawDTF = self.Intl && self.Intl.DateTimeFormat;
+      if (RawDTF) realLocalTz = new RawDTF().resolvedOptions().timeZone || null;
+    } catch (_) {}
+    const tzSpoofNeeded = !!targetTz && realLocalTz !== targetTz;
 
     // Self-contained native-look patch: without this, String(hookFn) inside the
     // worker reveals this bootstrap source. Keeps every hook function's
     // Function.prototype.toString output looking native.
     const origFnToString = Function.prototype.toString;
     const nativeTextMap = new WeakMap();
-    const makeNative = function(fn, fnName) {
+    const makeNative = function(fn, fnName, fnLength) {
+      if (typeof fnName === 'string') {
+        try {
+          Object.defineProperty(fn, 'name', {
+            value: fnName,
+            writable: false,
+            enumerable: false,
+            configurable: true
+          });
+        } catch (_) {}
+      }
+      if (typeof fnLength === 'number') {
+        try {
+          Object.defineProperty(fn, 'length', {
+            value: fnLength,
+            writable: false,
+            enumerable: false,
+            configurable: true
+          });
+        } catch (_) {}
+      }
       try {
         nativeTextMap.set(fn, 'function ' + (fnName || (fn && fn.name) || '') + '() { [native code] }');
+      } catch (_) {}
+      // Native built-in methods expose no own "prototype" property: drop the
+      // auto-created one so getOwnPropertyNames(hookFn) matches the native
+      // shape. Constructor wrappers below (HookedDTF/HookedDate) keep theirs —
+      // they assign a real prototype owning more than "constructor", so the
+      // guard never fires for them.
+      try {
+        const p = fn.prototype;
+        if (p && p.constructor === fn && Object.getOwnPropertyNames(p).length === 1) {
+          delete fn.prototype;
+        }
       } catch (_) {}
       return fn;
     };
@@ -3692,38 +3870,74 @@
     }
 
     // Intl in worker: timezone consistency only — default any missing
-    // timeZone to targetTz and report it via resolvedOptions. Locale
-    // handling stays fully native.
+    // timeZone to targetTz. resolvedOptions rewrites the reported timezone
+    // ONLY for default-timezone instances (or instances resolving to the
+    // real local zone, which would leak it); an explicitly requested foreign
+    // timeZone passes through untouched, mirroring the main-thread hook.
+    // Locale handling stays fully native.
     if (self.Intl && self.Intl.DateTimeFormat) {
       const origDTF = self.Intl.DateTimeFormat;
+      const defaultTzInstances = new WeakSet();
       function HookedDTF(locales, options) {
+        const hasExplicitTz = !!(options && options.timeZone);
         const opts = Object.assign({}, options);
         if (!opts.timeZone) opts.timeZone = targetTz;
-        return origDTF.call(this, locales, opts);
+        const inst = origDTF.call(this, locales, opts);
+        if (!hasExplicitTz) {
+          try { defaultTzInstances.add(inst); } catch (_) {}
+        }
+        return inst;
       }
       HookedDTF.prototype = origDTF.prototype;
       HookedDTF.supportedLocalesOf = origDTF.supportedLocalesOf;
-      makeNative(HookedDTF, 'DateTimeFormat');
+      makeNative(HookedDTF, 'DateTimeFormat', 0);
       self.Intl.DateTimeFormat = HookedDTF;
       const origResolved = origDTF.prototype.resolvedOptions;
-      origDTF.prototype.resolvedOptions = makeNative(function() {
+      origDTF.prototype.resolvedOptions = makeNative(function resolvedOptions() {
         const res = origResolved.apply(this, arguments);
-        if (res) {
+        if (res && tzSpoofNeeded &&
+            (defaultTzInstances.has(this) || !res.timeZone || (realLocalTz && res.timeZone === realLocalTz))) {
           res.timeZone = targetTz;
         }
         return res;
       }, 'resolvedOptions');
     }
 
-    // Date timezone and string formatting in worker
+    // Date timezone and string formatting in worker: mirrors the main-thread
+    // Date hooks (local getters, setters, toLocale*, constructor) on top of
+    // the zoned-parts helper below, all gated on tzSpoofNeeded so a realm
+    // whose real zone already equals targetTz gets pure native pass-through.
     if (self.Date && self.Date.prototype) {
-      const origGetTimezoneOffset = self.Date.prototype.getTimezoneOffset;
-      const origToString = self.Date.prototype.toString;
+      const OrigDate = self.Date;
+      const origGetTimezoneOffset = OrigDate.prototype.getTimezoneOffset;
+      const origGetTime = OrigDate.prototype.getTime;
+      const origSetTime = OrigDate.prototype.setTime;
+      const origToString = OrigDate.prototype.toString;
+      const origToTimeString = OrigDate.prototype.toTimeString;
+      const origToLocaleString = OrigDate.prototype.toLocaleString;
+      const origToLocaleDateString = OrigDate.prototype.toLocaleDateString;
+      const origToLocaleTimeString = OrigDate.prototype.toLocaleTimeString;
       const monthsShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
       const daysShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+      // V8 reports the method name in this TypeError
+      // ("Method Date.prototype.<name> called on incompatible receiver").
+      function checkDateReceiver(receiver, methodName) {
+        if (!(receiver instanceof OrigDate) && Object.prototype.toString.call(receiver) !== '[object Date]') {
+          throw new TypeError('Method Date.prototype.' + methodName + ' called on incompatible receiver');
+        }
+      }
+
+      // Zoned parts for a Date in targetTz. Single-slot memo (same instant +
+      // fixed zone => same parts), mirroring the main-thread getZonedParts
+      // cache, so getter-heavy scripts do not re-format on every call.
+      // Returns null on lookup failure (e.g. invalid Date).
+      let lastDateT = null;
+      let lastParts = null;
       function getWorkerZonedParts(date) {
         try {
+          const t = date.getTime();
+          if (t === lastDateT && lastParts) return lastParts;
           const dtf = new Intl.DateTimeFormat('en-US', {
             timeZone: targetTz,
             year: 'numeric', month: 'numeric', day: 'numeric',
@@ -3733,15 +3947,14 @@
           const parts = dtf.formatToParts(date);
           const m = {};
           for (let i = 0; i < parts.length; i++) m[parts[i].type] = parts[i].value;
-          const asUTC = Date.UTC(
-            parseInt(m.year, 10),
-            parseInt(m.month, 10) - 1,
-            parseInt(m.day, 10),
-            parseInt(m.hour === '24' ? '0' : m.hour, 10),
-            parseInt(m.minute, 10),
-            parseInt(m.second, 10)
-          );
-          const offsetMin = Math.round((date.getTime() - asUTC) / 60000);
+          const nYear = parseInt(m.year, 10);
+          const nMonth = parseInt(m.month, 10) - 1;
+          const nDay = parseInt(m.day, 10);
+          const nHour = parseInt(m.hour === '24' ? '0' : m.hour, 10);
+          const nMinute = parseInt(m.minute, 10);
+          const nSecond = parseInt(m.second, 10);
+          const asUTC = OrigDate.UTC(nYear, nMonth, nDay, nHour, nMinute, nSecond);
+          const offsetMin = Math.round((t - asUTC) / 60000);
           const tzDtf = new Intl.DateTimeFormat('en-US', { timeZone: targetTz, timeZoneName: 'long' });
           const tzParts = tzDtf.formatToParts(date);
           const tzNamePart = tzParts.find(p => p.type === 'timeZoneName');
@@ -3751,50 +3964,338 @@
           const offH = String(Math.floor(absMin / 60)).padStart(2, '0');
           const offM = String(absMin % 60).padStart(2, '0');
           const gmtStr = 'GMT' + sign + offH + offM;
-          const dObj = new Date(asUTC);
-          return {
+          const dObj = new OrigDate(asUTC);
+          const res = {
+            // Numeric zoned fields drive the local-time getters/setters below.
+            nYear: nYear, month: nMonth, nDay: nDay, nHour: nHour,
+            nMinute: nMinute, nSecond: nSecond, weekday: dObj.getUTCDay(),
+            // Pre-formatted string fields drive toString/toTimeString.
             year: m.year,
-            month: parseInt(m.month, 10) - 1,
-            day: String(m.day).padStart(2, '0'),
-            hour: String(m.hour === '24' ? '0' : m.hour).padStart(2, '0'),
-            minute: String(m.minute).padStart(2, '0'),
-            second: String(m.second).padStart(2, '0'),
+            day: String(nDay).padStart(2, '0'),
+            hour: String(nHour).padStart(2, '0'),
+            minute: String(nMinute).padStart(2, '0'),
+            second: String(nSecond).padStart(2, '0'),
             weekdayShort: daysShort[dObj.getUTCDay()],
-            monthShort: monthsShort[parseInt(m.month, 10) - 1],
+            monthShort: monthsShort[nMonth],
             offsetMin: offsetMin,
             gmtStr: gmtStr,
             tzName: tzName
           };
+          lastDateT = t;
+          lastParts = res;
+          return res;
         } catch (_) {
           return null;
         }
       }
 
-      self.Date.prototype.getTimezoneOffset = makeNative(function() {
+      self.Date.prototype.getTimezoneOffset = makeNative(function getTimezoneOffset() {
+        if (!tzSpoofNeeded) return origGetTimezoneOffset.apply(this, arguments);
         const parts = getWorkerZonedParts(this);
         return parts ? parts.offsetMin : (origGetTimezoneOffset ? origGetTimezoneOffset.call(this) : 420);
       }, 'getTimezoneOffset');
 
-      self.Date.prototype.toString = makeNative(function() {
+      self.Date.prototype.toString = makeNative(function toString() {
+        if (!tzSpoofNeeded) return origToString.apply(this, arguments);
         const parts = getWorkerZonedParts(this);
         if (!parts) return origToString ? origToString.call(this) : '';
         return parts.weekdayShort + ' ' + parts.monthShort + ' ' + parts.day + ' ' + parts.year + ' ' + parts.hour + ':' + parts.minute + ':' + parts.second + ' ' + parts.gmtStr + ' (' + parts.tzName + ')';
       }, 'toString');
 
-      self.Date.prototype.toTimeString = makeNative(function() {
+      self.Date.prototype.toTimeString = makeNative(function toTimeString() {
+        if (!tzSpoofNeeded) return origToTimeString.apply(this, arguments);
         const parts = getWorkerZonedParts(this);
         if (!parts) return '';
         return parts.hour + ':' + parts.minute + ':' + parts.second + ' ' + parts.gmtStr + ' (' + parts.tzName + ')';
       }, 'toTimeString');
+
+      // toLocale*: locale passes through natively (entropy-reduction
+      // strategy); only the timezone is aligned with targetTz, exactly like
+      // the main-thread hooks (native method + injected timeZone option).
+      [['toLocaleString', origToLocaleString],
+       ['toLocaleDateString', origToLocaleDateString],
+       ['toLocaleTimeString', origToLocaleTimeString]].forEach(entry => {
+        const fnName = entry[0];
+        const origFn = entry[1];
+        self.Date.prototype[fnName] = makeNative(function(locales, options) {
+          checkDateReceiver(this, fnName);
+          if (!tzSpoofNeeded) return origFn.apply(this, arguments);
+          const t = origGetTime.call(this);
+          if (isNaN(t)) return 'Invalid Date';
+          const opts = Object.assign({}, options);
+          if (!opts.timeZone) opts.timeZone = targetTz;
+          return origFn.call(this, locales, opts);
+        }, fnName, 0);
+      });
+
+      // Local-time getters, derived from the zoned parts above.
+      const origDateGetters = {
+        getHours: OrigDate.prototype.getHours,
+        getMinutes: OrigDate.prototype.getMinutes,
+        getSeconds: OrigDate.prototype.getSeconds,
+        getDate: OrigDate.prototype.getDate,
+        getDay: OrigDate.prototype.getDay,
+        getMonth: OrigDate.prototype.getMonth,
+        getFullYear: OrigDate.prototype.getFullYear,
+        getYear: OrigDate.prototype.getYear
+      };
+      [
+        ['getHours', 'nHour'],
+        ['getMinutes', 'nMinute'],
+        ['getSeconds', 'nSecond'],
+        ['getDate', 'nDay'],
+        ['getDay', 'weekday'],
+        ['getMonth', 'month'],
+        ['getFullYear', 'nYear'],
+        ['getYear', 'nYear', y => y - 1900]
+      ].forEach(entry => {
+        const fnName = entry[0];
+        const prop = entry[1];
+        const transform = entry[2];
+        self.Date.prototype[fnName] = makeNative(function() {
+          checkDateReceiver(this, fnName);
+          if (!tzSpoofNeeded) return origDateGetters[fnName].apply(this, arguments);
+          const p = getWorkerZonedParts(this);
+          return p ? (transform ? transform(p[prop]) : p[prop]) : (origGetTime.call(this), NaN);
+        }, fnName);
+      });
+
+      // Local setters: read the current target-zone parts, apply the field
+      // updates, then map the resulting wall clock back to an epoch using the
+      // target-zone offset at that moment. DST ambiguity — a wall clock that
+      // occurs twice across a fall-back transition — resolves to the EARLIER
+      // instant; a wall clock inside a spring-forward gap resolves with the
+      // pre-transition offset (shifting past the gap). Same rules as V8 and
+      // the main-thread setters.
+      function workerResolveWall(naiveUtc, firstGuessOffset) {
+        const offAt = (t) => {
+          const p = getWorkerZonedParts(new OrigDate(t));
+          return p ? p.offsetMin : null;
+        };
+        // Only the offsets in effect one day before/after the naive wall can
+        // apply; probing both sides brackets any transition (including
+        // 30/45-minute DST zones).
+        const before = offAt(naiveUtc - 86400000);
+        const after = offAt(naiveUtc + 86400000);
+        const guess = (typeof firstGuessOffset === 'number' && !isNaN(firstGuessOffset)) ? firstGuessOffset : 0;
+        if (before === null && after === null) return naiveUtc + guess * 60000;
+        const candidates = [];
+        if (before !== null) candidates.push(before);
+        if (after !== null && after !== before) candidates.push(after);
+        let earliest = null;
+        for (let i = 0; i < candidates.length; i++) {
+          const t = naiveUtc + candidates[i] * 60000;
+          // A candidate is real iff the zone's offset at the resulting
+          // instant is exactly that candidate (the wall clock round-trips).
+          if (offAt(t) === candidates[i] && (earliest === null || t < earliest)) earliest = t;
+        }
+        if (earliest !== null) return earliest;
+        // No candidate round-trips: the wall clock does not exist (gap).
+        return naiveUtc + (before !== null ? before : after) * 60000;
+      }
+
+      function updateWorkerZoned(date, updater) {
+        const p = getWorkerZonedParts(date);
+        if (!p) {
+          origGetTime.call(date);
+          return NaN;
+        }
+        const u = {
+          year: p.nYear, month: p.month, day: p.nDay, hour: p.nHour,
+          minute: p.nMinute, second: p.nSecond,
+          ms: date.getUTCMilliseconds(), offsetMin: p.offsetMin
+        };
+        updater(u);
+        const yr = (u.year >= 0 && u.year < 100) ? 1900 + u.year : u.year;
+        const naiveUtc = OrigDate.UTC(yr, u.month, u.day, u.hour, u.minute, u.second, u.ms || 0);
+        const newT = workerResolveWall(naiveUtc, u.offsetMin);
+        origSetTime.call(date, newT);
+        return newT;
+      }
+
+      const origSetters = {
+        setHours: OrigDate.prototype.setHours,
+        setMinutes: OrigDate.prototype.setMinutes,
+        setSeconds: OrigDate.prototype.setSeconds,
+        setDate: OrigDate.prototype.setDate,
+        setMonth: OrigDate.prototype.setMonth,
+        setFullYear: OrigDate.prototype.setFullYear
+      };
+      self.Date.prototype.setHours = makeNative(function setHours(h, m, s, ms) {
+        checkDateReceiver(this, 'setHours');
+        if (!tzSpoofNeeded) return origSetters.setHours.apply(this, arguments);
+        return updateWorkerZoned(this, u => {
+          u.hour = Number(h);
+          if (m !== undefined) u.minute = Number(m);
+          if (s !== undefined) u.second = Number(s);
+          if (ms !== undefined) u.ms = Number(ms);
+        });
+      }, 'setHours');
+      self.Date.prototype.setMinutes = makeNative(function setMinutes(m, s, ms) {
+        checkDateReceiver(this, 'setMinutes');
+        if (!tzSpoofNeeded) return origSetters.setMinutes.apply(this, arguments);
+        return updateWorkerZoned(this, u => {
+          u.minute = Number(m);
+          if (s !== undefined) u.second = Number(s);
+          if (ms !== undefined) u.ms = Number(ms);
+        });
+      }, 'setMinutes');
+      self.Date.prototype.setSeconds = makeNative(function setSeconds(s, ms) {
+        checkDateReceiver(this, 'setSeconds');
+        if (!tzSpoofNeeded) return origSetters.setSeconds.apply(this, arguments);
+        return updateWorkerZoned(this, u => {
+          u.second = Number(s);
+          if (ms !== undefined) u.ms = Number(ms);
+        });
+      }, 'setSeconds');
+      self.Date.prototype.setDate = makeNative(function setDate(d) {
+        checkDateReceiver(this, 'setDate');
+        if (!tzSpoofNeeded) return origSetters.setDate.apply(this, arguments);
+        return updateWorkerZoned(this, u => {
+          u.day = Number(d);
+        });
+      }, 'setDate');
+      self.Date.prototype.setMonth = makeNative(function setMonth(m, d) {
+        checkDateReceiver(this, 'setMonth');
+        if (!tzSpoofNeeded) return origSetters.setMonth.apply(this, arguments);
+        return updateWorkerZoned(this, u => {
+          u.month = Number(m);
+          if (d !== undefined) u.day = Number(d);
+        });
+      }, 'setMonth');
+      self.Date.prototype.setFullYear = makeNative(function setFullYear(y, m, d) {
+        checkDateReceiver(this, 'setFullYear');
+        if (!tzSpoofNeeded) return origSetters.setFullYear.apply(this, arguments);
+        return updateWorkerZoned(this, u => {
+          u.year = Number(y);
+          if (m !== undefined) u.month = Number(m);
+          if (d !== undefined) u.day = Number(d);
+        });
+      }, 'setFullYear');
+
+      // Hook the Date constructor: Date() without new renders the current
+      // time through the hooked toString (target zone), and wall-clock
+      // constructor args (y, m, d, ...) resolve through the target zone —
+      // same semantics as the main-thread HookedDate.
+      const HookedDate = function Date(...args) {
+        if (!new.target) {
+          const d = new OrigDate();
+          return tzSpoofNeeded ? OrigDate.prototype.toString.call(d) : origToString.call(d);
+        }
+        if (args.length >= 2 && tzSpoofNeeded) {
+          try {
+            const yr = Number(args[0]);
+            const mo = Number(args[1]);
+            const da = args.length > 2 ? Number(args[2]) : 1;
+            const hr = args.length > 3 ? Number(args[3]) : 0;
+            const mi = args.length > 4 ? Number(args[4]) : 0;
+            const se = args.length > 5 ? Number(args[5]) : 0;
+            const ms = args.length > 6 ? Number(args[6]) : 0;
+            const fullYr = (yr >= 0 && yr < 100) ? 1900 + yr : yr;
+            const naiveUtc = OrigDate.UTC(fullYr, mo, da, hr, mi, se, ms);
+            const guessP = getWorkerZonedParts(new OrigDate(naiveUtc));
+            const targetMs = workerResolveWall(naiveUtc, guessP ? guessP.offsetMin : 0);
+            return Reflect.construct(OrigDate, [targetMs], new.target);
+          } catch (_) {}
+        }
+        return Reflect.construct(OrigDate, args, new.target);
+      };
+      HookedDate.prototype = OrigDate.prototype;
+      try {
+        OrigDate.prototype.constructor = HookedDate;
+      } catch (_) {}
+      Object.setPrototypeOf(HookedDate, OrigDate);
+      ['now', 'parse', 'UTC'].forEach(prop => {
+        try {
+          const desc = Object.getOwnPropertyDescriptor(OrigDate, prop);
+          if (desc) Object.defineProperty(HookedDate, prop, desc);
+        } catch (_) {}
+      });
+      makeNative(HookedDate, 'Date', 7);
+      try {
+        Object.defineProperty(self, 'Date', {
+          value: HookedDate,
+          writable: true,
+          // Native globals expose built-ins as enumerable own properties
+          // (self.propertyIsEnumerable('Date') === true).
+          enumerable: true,
+          configurable: true
+        });
+      } catch (_) {
+        self.Date = HookedDate;
+      }
     }
 
-    // self.fonts in worker
+    // self.fonts in worker: same fontConfig-driven verdicts as the
+    // main-thread FontFaceSet.check hook (family extraction, whitelist/
+    // blacklist modes, custom rules, CJK/other-script regexes). The config
+    // is a snapshot interpolated when the bootstrap blob was generated — a
+    // worker cannot reach back into the page for live toggles — so verdicts
+    // track the font-protection state at worker construction time.
     if (self.fonts && typeof self.fonts.check === 'function') {
-      const origFontsCheck = self.fonts.check;
-      self.fonts.check = makeNative(function(font, text) {
-        if (typeof font === 'string') {
-          if (/(?:simsun|nsimsun|simhei|yahei|wenquanyi|pingfang|kaiti|fangsong)/i.test(font)) return false;
+      const fontShieldOn = ${isShieldActive('fontProtection')};
+      const fontMode = ${jsonLit(fontConfig.fontMode)};
+      const customHiddenFonts = ${jsonLit(fontConfig.customHiddenFonts)};
+      const customAllowedFonts = ${jsonLit(fontConfig.customAllowedFonts)};
+      const blockBuiltinChineseFonts = ${jsonLit(fontConfig.blockBuiltinChineseFonts)};
+      const blockOtherScripts = ${jsonLit(fontConfig.blockOtherScripts)};
+      // Regex sources interpolated from the module-scope main-thread
+      // definitions so worker and page always test the same patterns.
+      const CHINESE_FONTS_REGEX = /${CHINESE_FONTS_REGEX.source}/i;
+      const OTHER_SCRIPTS_REGEX = /${OTHER_SCRIPTS_REGEX.source}/i;
+      const GENERIC_CSS_FAMILIES = new Set(${jsonLit(Array.from(GENERIC_CSS_FAMILIES))});
+
+      const extractFontFamilies = (fontStr) => {
+        if (!fontStr || typeof fontStr !== 'string') return [];
+        let s = fontStr.trim();
+        const m = /(?:\\d+(?:\\.\\d+)?(?:px|pt|em|rem|%)\\s*(?:\\/\\s*[\\d.]+(?:px|em|%)?)?)\\s+(.*)$/i.exec(s);
+        if (m && m[1]) s = m[1];
+        return s.split(',').map(f => f.trim().replace(/['"]/g, '').toLowerCase()).filter(Boolean);
+      };
+
+      const isBlockedFont = (name) => {
+        if (!fontShieldOn) return false;
+        if (!name || typeof name !== 'string') return false;
+        let families = extractFontFamilies(name);
+        if (!families || families.length === 0) {
+          families = [name.trim().replace(/^['"]|['"]$/g, '').toLowerCase()];
         }
+        return families.some(fam => {
+          // 0. Generic CSS family keywords are always protected first (fangsong
+          // is both a generic CSS family and a CHINESE_FONTS_REGEX match; the
+          // generic keyword wins).
+          if (GENERIC_CSS_FAMILIES.has(fam)) return false;
+          // 1. Whitelist mode: only fonts in customAllowedFonts are NOT hidden
+          // (generic CSS families remain safe).
+          if (fontMode === 'whitelist') {
+            const isAllowed = customAllowedFonts && customAllowedFonts.some(f => {
+              const s = f && f.trim().toLowerCase();
+              return s && (fam === s || fam.includes(s));
+            });
+            return !isAllowed;
+          }
+          // 2. Blacklist mode (default):
+          if (customAllowedFonts && customAllowedFonts.some(f => f.trim().toLowerCase() === fam)) return false;
+          if (customHiddenFonts && customHiddenFonts.length > 0) {
+            const matchCustom = customHiddenFonts.some(r => {
+              const s = r && r.trim();
+              if (!s) return false;
+              if (s.startsWith('/') && s.length > 2 && s.endsWith('/')) {
+                try { return new RegExp(s.slice(1, -1), 'i').test(fam); } catch (_) {}
+              }
+              return fam.includes(s.toLowerCase());
+            });
+            if (matchCustom) return true;
+          }
+          if (blockBuiltinChineseFonts && CHINESE_FONTS_REGEX.test(fam)) return true;
+          if (blockOtherScripts && OTHER_SCRIPTS_REGEX.test(fam)) return true;
+          return false;
+        });
+      };
+
+      const origFontsCheck = self.fonts.check;
+      self.fonts.check = makeNative(function check(font, text) {
+        if (typeof font === 'string' && isBlockedFont(font)) return false;
         return origFontsCheck.apply(this, arguments);
       }, 'check');
     }
@@ -3819,6 +4320,9 @@
             // MAX_TEXTURE_SIZE: keep worker reads identical to the main-thread
             // GPU persona (16384, crowd-common for these Intel GPUs).
             if (pname === 0x0D33) return 16384;
+            // MAX_COMBINED_TEXTURE_IMAGE_UNITS: normalize to the crowd-common
+            // Chromium value, same farble as the main-thread getParameter hook.
+            if (pname === 0x8B4D) return 16;
             return origGP.apply(this, arguments);
           }, 'getParameter');
         }
@@ -3975,7 +4479,9 @@
               value: HookedWorker,
               writable: true,
               configurable: true,
-              enumerable: false
+              // Native globals expose built-ins as enumerable own properties
+              // (window.propertyIsEnumerable('Worker') === true).
+              enumerable: true
             });
           } catch (_) {
             targetWin[name] = HookedWorker;
