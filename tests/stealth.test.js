@@ -361,8 +361,10 @@ function expectedAudioDelta(host) {
 }
 // GPU persona pool (mirrors the engine's GPU_PROFILES): renderer + the Dawn
 // architecture spelling paired with it. Selection is
-// GPU_PROFILES[seeds.webgl % 5], i.e. djb2(host:salt:webgl) % 5 — the same
-// seed already replicated above for the readPixels farbling delta.
+// GPU_PROFILES[djb2(eTLD+1(host)) % 5]: keyed on the site's registrable-domain
+// approximation (last two host labels) with NO salt, so every frame of one site
+// — each frame hashes independently — reports the same renderer, and the
+// persona is stable across reloads/sessions.
 const GPU_PROFILES_REF = [
   { renderer: 'Mesa Intel(R) UHD Graphics (CML GT2)', wgpuArch: 'gen-9' },
   { renderer: 'Mesa Intel(R) Iris(R) Xe Graphics (TGL GT2)', wgpuArch: 'gen-12lp' },
@@ -370,8 +372,12 @@ const GPU_PROFILES_REF = [
   { renderer: 'Mesa Intel(R) HD Graphics 530 (SKL GT2)', wgpuArch: 'gen-9' },
   { renderer: 'Mesa Intel(R) Iris(R) Plus Graphics (ICL GT2)', wgpuArch: 'gen-11' }
 ];
+// eTLD+1 approximation used by the engine's GPU profile selection.
+function etld1(host) {
+  return String(host).split('.').slice(-2).join('.');
+}
 function expectedGpuProfile(host) {
-  return GPU_PROFILES_REF[djb2Hash(host + ':' + TEST_SESSION_SALT + ':webgl') % GPU_PROFILES_REF.length];
+  return GPU_PROFILES_REF[djb2Hash(etld1(host)) % GPU_PROFILES_REF.length];
 }
 
 function createMockWindow(hostname, platform = 'Linux x86_64') {
@@ -1298,14 +1304,14 @@ console.log('Testing WebGL spoofing and platform detection...');
 const gl = new winCYT.WebGLRenderingContext();
 const expectedGpuCYT = expectedGpuProfile('coveryourtracks.eff.org');
 // Pooled Intel/Mesa persona: vendor stays constant (hardware-driven), while the
-// renderer is one of the five GPU_PROFILES entries picked by seeds.webgl. Assert
-// pool membership (1) and the exact entry the seed selects (2); the WebGPU
-// architecture pairing (3) is asserted in the apivoid realm below, where both
-// WebGPU and WebGL are read from the same realm.
+// renderer is one of the five GPU_PROFILES entries picked by the site's eTLD+1
+// (no salt in the key). Assert pool membership (1) and the exact entry the
+// hostname selects (2); the WebGPU architecture pairing (3) is asserted in the
+// apivoid realm below, where both WebGPU and WebGL are read from the same realm.
 assert.strictEqual(gl.getParameter(37445), 'Google Inc. (Intel)', 'UNMASKED_VENDOR_WEBGL must be spoofed to Google Inc. (Intel)');
 const cyTzRenderers = GPU_PROFILES_REF.map(p => p.renderer);
 assert(cyTzRenderers.includes(gl.getParameter(37446)), 'UNMASKED_RENDERER_WEBGL must be one of the GPU profile pool renderers');
-assert.strictEqual(gl.getParameter(37446), expectedGpuCYT.renderer, 'UNMASKED_RENDERER_WEBGL must be the pooled profile selected by djb2(host:salt:webgl) % 5');
+assert.strictEqual(gl.getParameter(37446), expectedGpuCYT.renderer, 'UNMASKED_RENDERER_WEBGL must be the pooled profile selected by djb2(eTLD+1) % 5');
 assert.strictEqual(gl.getParameter(0x1F00), 'WebKit', 'gl.VENDOR must be WebKit');
 assert.strictEqual(gl.getParameter(0x1F01), 'WebKit WebGL', 'gl.RENDERER must be WebKit WebGL');
 assert.strictEqual(gl.getParameter(0x1F02), 'WebGL 1.0 (OpenGL ES 2.0 Chromium)', 'WebGL1 VERSION must be the real Chromium string');
@@ -1420,10 +1426,10 @@ assert.strictEqual(winCYT.navigator.platform, 'Linux x86_64', 'navigator.platfor
 assert.strictEqual(winCYT.navigator.userAgent, NATIVE_UA, 'navigator.userAgent must pass through the native value (no UA persona)');
 assert.strictEqual(winCYT.navigator.appVersion, '5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', 'navigator.appVersion must pass through the native value');
 assert.strictEqual(winCYT.navigator.vendor, 'Apple Computer, Inc.', 'navigator.vendor must pass through the native value');
-assert.strictEqual(winCYT.navigator.deviceMemory, 8, 'navigator.deviceMemory must be spoofed to 8');
+assert.strictEqual(winCYT.navigator.deviceMemory, 32, 'navigator.deviceMemory must pass through the native value (no degradation: SharedWorker consistency)');
 assert.strictEqual(winCYT.navigator.language, 'zh-CN', 'navigator.language must pass through the native value');
 assert.deepStrictEqual([...winCYT.navigator.languages], ['zh-CN', 'zh'], 'navigator.languages must pass through the native array (same reference semantics)');
-console.log('✓ Browser identity passes through natively; only entropy-reduction hooks (deviceMemory) applied.\n');
+console.log('✓ Browser identity passes through natively; hardware values are native too (SharedWorker consistency).\n');
 
 // window.chrome: the engine only ensures the object exists (an empty object
 // still defeats `typeof chrome === 'undefined'` headless probes); the persona-era
@@ -1795,8 +1801,8 @@ assert.throws(() => new winCYT.Worker(), /1 argument required/, 'Calling Worker 
 
 const workerBlob = winCYT.URL._created.get(worker.scriptURL);
 assert(workerBlob, 'Worker script must be wrapped in a blob URL');
-assert(workerBlob.content.includes('chosenConcurrency = 8'), 'Worker bootstrap must pin hardwareConcurrency to 8');
-assert(workerBlob.content.includes('deviceMemory'), 'Worker bootstrap must hook deviceMemory to 8');
+assert(!workerBlob.content.includes('chosenConcurrency'), 'Worker bootstrap must NOT pin hardwareConcurrency (native on all realms: SharedWorker consistency)');
+assert(!workerBlob.content.includes("'deviceMemory'"), 'Worker bootstrap must NOT pin deviceMemory (native on all realms)');
 assert(!workerBlob.content.includes('Linux x86_64'), 'Worker bootstrap must NOT spoof a platform persona (native passthrough)');
 assert(!/navigator\.(language|platform|userAgent)/.test(workerBlob.content), 'Worker bootstrap must NOT spoof UA-family values (native passthrough)');
 // Cross-context GPU consistency: the worker bootstrap interpolates the same
@@ -1806,6 +1812,19 @@ assert(workerBlob.content.includes(expectedGpuCYT.renderer), 'Worker bootstrap m
 const workerRendererMatch = /if \(pname === 37446\) return '([^']*)';/.exec(workerBlob.content);
 assert(workerRendererMatch, 'Worker bootstrap must hook WebGL UNMASKED_RENDERER_WEBGL');
 assert.strictEqual(workerRendererMatch[1], gl.getParameter(37446), 'Worker renderer must be byte-identical to the main-thread renderer (cross-context consistency)');
+// WebGPU: the worker bootstrap must mask navigator.gpu adapter.info with the
+// same interpolated persona (vendor/architecture/device/description) the main
+// thread serves — an unmasked worker-side adapter would contradict the page.
+assert(workerBlob.content.includes('requestAdapter'), 'Worker bootstrap must hook navigator.gpu requestAdapter (WebGPU)');
+assert(workerBlob.content.includes("vendor: 'intel'"), 'Worker bootstrap must spoof the WebGPU vendor token to intel');
+assert(workerBlob.content.includes("device: ''") && workerBlob.content.includes("description: ''"), 'Worker bootstrap must blank WebGPU device/description');
+assert(workerBlob.content.includes('GPUAdapterInfo'), 'Worker bootstrap must shape the spoofed adapter info like GPUAdapterInfo');
+const workerArchMatch = /architecture: '([^']*)'/.exec(workerBlob.content);
+assert(workerArchMatch, 'Worker bootstrap must interpolate a WebGPU architecture');
+assert.strictEqual(workerArchMatch[1], expectedGpuCYT.wgpuArch, 'Worker WebGPU architecture must match the pooled profile of the main thread');
+const workerPoolEntry = GPU_PROFILES_REF.find(p => p.renderer === workerRendererMatch[1]);
+assert(workerPoolEntry, 'Worker renderer must come from the GPU profile pool');
+assert.strictEqual(workerArchMatch[1], workerPoolEntry.wgpuArch, 'Worker WebGPU architecture must pair with the worker WebGL renderer from the same pool entry');
 assert(workerBlob.content.includes('DateTimeFormat'), 'Worker bootstrap must spoof Intl.DateTimeFormat timezone');
 assert(workerBlob.content.includes('getTimezoneOffset'), 'Worker bootstrap must spoof Date timezone offset');
 
@@ -1924,9 +1943,9 @@ console.log('✓ Audio: Stable within domain, randomized across domains (determi
 // value: degrading beats diverging; divergence only pays for seed-farbled vectors).
 const concCYT = winCYT.navigator.hardwareConcurrency;
 const concFPS = winFPS.navigator.hardwareConcurrency;
-assert.strictEqual(concCYT, 8, 'Hardware concurrency must be pinned to 8 on CYT');
-assert.strictEqual(concFPS, 8, 'Hardware concurrency must be pinned to 8 on normal sites too (no cross-domain divergence)');
-console.log(`✓ Hardware Concurrency: CYT=${concCYT}, FPS=${concFPS} (constant 8).`);
+assert.strictEqual(concCYT, 16, 'Hardware concurrency must pass through natively (SharedWorker consistency)');
+assert.strictEqual(concFPS, 16, 'Hardware concurrency must pass through natively on all sites');
+console.log(`✓ Hardware Concurrency: CYT=${concCYT}, FPS=${concFPS} (native passthrough).`);
 
 // Metric 5: Plugins Description
 const pluginCYT = new winCYT.Plugin();
@@ -1973,8 +1992,30 @@ vm.runInContext(stealthCode, vm.createContext(winMac));
 const glMac = new winMac.WebGLRenderingContext();
 const expectedGpuMac = expectedGpuProfile('mac-test.com');
 assert(GPU_PROFILES_REF.map(p => p.renderer).includes(glMac.getParameter(37446)), 'Linux platform must draw its WebGL renderer from the GPU profile pool');
-assert.strictEqual(glMac.getParameter(37446), expectedGpuMac.renderer, 'Linux platform renderer must be the pool entry selected by djb2(host:salt:webgl) % 5');
+assert.strictEqual(glMac.getParameter(37446), expectedGpuMac.renderer, 'Linux platform renderer must be the pool entry selected by djb2(eTLD+1) % 5');
 console.log('✓ WebGL correctly provides the pooled Linux Intel renderer persona.');
+
+// Cross-frame GPU consistency: two frames of the same site (a.example.com and
+// b.example.com) are independent engine instances, each with its own per-load
+// salt, yet must report the same GPU renderer — the profile key is the site's
+// eTLD+1 (last two host labels) and carries no salt. A salt-derived key would
+// make the two frames disagree, which no real GPU ever does.
+const winFrameA = createMockWindow('a.example.com', 'Linux x86_64');
+vm.runInContext(stealthCode, vm.createContext(winFrameA));
+const winFrameB = createMockWindow('b.example.com', 'Linux x86_64');
+// Different per-load salt in the second frame: same-site agreement must survive it.
+winFrameB.crypto = {
+  getRandomValues(arr) {
+    for (let i = 0; i < arr.length; i++) arr[i] = (TEST_SESSION_SALT + 12345 + i * 2654435761) >>> 0;
+    return arr;
+  }
+};
+vm.runInContext(stealthCode, vm.createContext(winFrameB));
+const frameRendererA = new winFrameA.WebGLRenderingContext().getParameter(37446);
+const frameRendererB = new winFrameB.WebGLRenderingContext().getParameter(37446);
+assert.strictEqual(frameRendererA, frameRendererB, 'Same-site frames (a.example.com / b.example.com) must report an identical GPU renderer despite independent per-load salts');
+assert.strictEqual(frameRendererA, expectedGpuProfile('a.example.com').renderer, 'Same-site frame renderer must be the pool entry selected by djb2(eTLD+1) % 5');
+console.log('✓ Same-site frames agree on the GPU persona (salt-independent eTLD+1 derivation).');
 
 // Transparent Canvas toDataURL and toBlob non-clamping farbling
 const canvasZero = new winCYT.HTMLCanvasElement();
@@ -2075,10 +2116,9 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     console.log('[Test 8] Validating CreepJS 0 Lies & Anti-Fingerprinting Defenses...');
 
     // 8.1 Navigator Prototype Getter Receiver & Descriptor Integrity
-    // Persona getters (platform/userAgent/language) are gone: the engine only
-    // installs prototype getters for the entropy-reduction hooks.
-    assert.throws(() => winBot.Navigator.prototype.hardwareConcurrency, /Illegal invocation/, 'Navigator.prototype.hardwareConcurrency must throw TypeError on prototype');
-    assert.throws(() => winBot.Navigator.prototype.deviceMemory, /Illegal invocation/, 'Navigator.prototype.deviceMemory must throw TypeError on prototype');
+    // Persona getters (platform/userAgent/language) are gone, and hardware
+    // values (hardwareConcurrency/deviceMemory) are native now (SharedWorker
+    // consistency): only the remaining hooked getters are checked here.
     assert.throws(() => winBot.Navigator.prototype.webdriver, /Illegal invocation/, 'Navigator.prototype.webdriver must throw TypeError on prototype');
     assert.strictEqual(winBot.navigator.platform, 'Linux x86_64', 'navigator.platform instance access must return the native value');
     assert.strictEqual(Object.prototype.hasOwnProperty.call(winBot.navigator, 'platform'), true, 'native own platform property must be preserved (no persona getter)');
@@ -2108,7 +2148,7 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     assert.strictEqual('prototype' in appendChild, false, 'Node.prototype.appendChild must have no .prototype');
 
     // 8.5 Function.prototype.toString Error Stack Cleanliness (Blink native emulation)
-    const platGetter = Object.getOwnPropertyDescriptor(winBot.Navigator.prototype, 'hardwareConcurrency').get;
+    const platGetter = Object.getOwnPropertyDescriptor(winBot.Navigator.prototype, 'webdriver').get;
     try {
       Object.create(platGetter).toString();
       assert.fail('Object.create(apiFunction).toString() should throw');
@@ -2589,7 +2629,10 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     }
 
     // 10.9 Screen spoof guardrail: a real window larger than the profile
-    // disables the spoof entirely (never report impossible outerWidth > width).
+    // disables the spoof entirely (never report impossible outerWidth > width),
+    // and a real screen smaller than the profile is left untouched (claiming a
+    // bigger screen than physically present contradicts matchMedia/rendering —
+    // headless VMs land here).
     {
       const winBig = createMockWindow('big-screen.example', 'Linux x86_64');
       winBig.outerWidth = 2560; // wider than the 1920 spoofed profile
@@ -2602,6 +2645,14 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
       vm.runInContext(stealthCode, vm.createContext(winSmall));
       assert.strictEqual(winSmall.screen.availHeight, 1040, 'screen spoof applies when the real window fits the profile');
       assert.strictEqual(winSmall.devicePixelRatio, 1, 'devicePixelRatio spoof applies when the real window fits the profile');
+
+      const winTiny = createMockWindow('tiny-screen.example', 'Linux x86_64');
+      winTiny.screen._native = { width: 800, height: 600, availWidth: 800, availHeight: 600, colorDepth: 24, pixelDepth: 24 };
+      winTiny.outerWidth = 780;
+      vm.runInContext(stealthCode, vm.createContext(winTiny));
+      assert.strictEqual(winTiny.screen.availHeight, 600, 'screen spoof must be skipped when the real screen is smaller than the profile');
+      assert.strictEqual(winTiny.screen.width, 800, 'native screen width must pass through on a small real screen');
+      assert.strictEqual(winTiny.devicePixelRatio, 1.25, 'devicePixelRatio must stay native on a small real screen');
       console.log('✓ Screen spoof guardrail respects the real window geometry.');
     }
 
@@ -2718,6 +2769,52 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
       assert.strictEqual(octxN._pixels[0], 100, 'canvas must be restored to the true pixel after export');
 
       console.log('✓ OffscreenCanvas exports/measureText covered.');
+    }
+
+    // 11.3 Worker bootstrap WebGPU masking (functional): execute the generated
+    // worker bootstrap in a fresh realm whose navigator.gpu exposes real-looking
+    // adapter info, then read it back from the worker side. The bootstrap must
+    // hand out the pooled persona (intel / interpolated architecture / empty
+    // device+description) so a worker cannot contradict the main thread.
+    {
+      const realInfo = { vendor: 'nvidia', architecture: 'ampere', device: 'real-device', description: 'real-desc' };
+      const workerSelf = {
+        navigator: {
+          gpu: {
+            requestAdapter() {
+              return Promise.resolve({
+                info: Object.assign({}, realInfo),
+                requestAdapterInfo() {
+                  return Promise.resolve(Object.assign({}, realInfo));
+                }
+              });
+            }
+          }
+        }
+      };
+      // The blob source is bootstrap + the page's own importScripts/import
+      // line; run only the bootstrap (the import would need a worker network
+      // stack that does not exist in a vm realm).
+      const bootstrapOnly = workerBlob.content.replace(/\n(?:importScripts|import)\b[\s\S]*$/, '\n');
+      assert(bootstrapOnly.includes('requestAdapter'), 'bootstrap-only source must still contain the WebGPU hook');
+      vm.runInContext(bootstrapOnly, vm.createContext({ self: workerSelf }));
+      const workerAdapter = await workerSelf.navigator.gpu.requestAdapter();
+      assert(workerAdapter, 'worker mock adapter must resolve');
+      assert.strictEqual(workerAdapter.info.vendor, 'intel', 'worker WebGPU info.vendor must be masked to intel');
+      assert.strictEqual(workerAdapter.info.architecture, expectedGpuCYT.wgpuArch, 'worker WebGPU info.architecture must be the interpolated pooled architecture');
+      assert.strictEqual(workerAdapter.info.architecture, workerArchMatch[1], 'functional worker architecture must match the bootstrap interpolation');
+      assert.strictEqual(workerAdapter.info.device, '', 'worker WebGPU info.device must be emptied');
+      assert.strictEqual(workerAdapter.info.description, '', 'worker WebGPU info.description must be emptied');
+      const workerInfoDesc = Object.getOwnPropertyDescriptor(workerAdapter, 'info');
+      assert(workerInfoDesc && typeof workerInfoDesc.get === 'function' && workerInfoDesc.enumerable === false,
+        'worker WebGPU info must be a non-enumerable own getter (native accessor shape)');
+      assert.strictEqual(workerAdapter.info, workerAdapter.info, 'worker WebGPU info must be a stable record');
+      const workerInfo = await workerAdapter.requestAdapterInfo();
+      assert.strictEqual(workerInfo.vendor, 'intel', 'worker requestAdapterInfo() must return the masked vendor');
+      assert.strictEqual(workerInfo.architecture, expectedGpuCYT.wgpuArch, 'worker requestAdapterInfo() must return the masked architecture');
+      assert.strictEqual(typeof workerSelf.navigator.gpu.requestAdapter, 'function', 'worker requestAdapter must stay callable');
+      assert(/\[native code\]/.test(String(workerSelf.navigator.gpu.requestAdapter)), 'worker requestAdapter must keep a native-looking toString');
+      console.log('✓ Worker-side navigator.gpu adapter info masked to the pooled persona.');
     }
 
     console.log('=== ALL TESTS PASSED SUCCESSFULLY! ===');

@@ -13,8 +13,8 @@ A Manifest V3 Chromium extension engineered for advanced browser fingerprint def
 - **Network Privacy**:
   - DeclarativeNetRequest rules block intrusive tracking domains (`trackersimulator.org`, `eviltracker.net`, etc.).
   - Enforces `DNT: 1` and `Sec-GPC: 1` privacy signal headers.
-- **LibreWolf-Style Reductions**: Clamps timer precision and degrades high-resolution device enumeration (media devices, hardware concurrency, device memory).
-- **Worker & SharedWorker Isolation**: Injects cross-context protections into dedicated Web Workers and SharedWorkers via blob URL instrumentation.
+- **LibreWolf-Style Reductions**: Clamps timer precision, degrades the Gamepad API and high-resolution device enumeration (media devices). `hardwareConcurrency`/`deviceMemory` stay native on purpose: their fixed-value degradation cannot be kept consistent across realms (SharedWorker script URLs cannot be safely wrapped), and consistency beats a marginal entropy reduction on these low-signal vectors.
+- **Worker Cross-Context Protection**: Injects cross-context protections into dedicated Web Workers (classic and module, via blob URL instrumentation). SharedWorkers are intentionally left unwrapped: blob-wrapping a SharedWorker breaks cross-tab worker sharing (a documented Vite/Parcel regression class), and the resulting inconsistency would be worse than the exposed values.
 - **Secure Cross-World Config Sync**: ISOLATED↔MAIN world configuration synchronization uses a secured channel with a one-time token handshake (randomized event names + token validation), so page scripts cannot forge or eavesdrop on shield configuration.
 
 ## Directory Structure
