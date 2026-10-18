@@ -236,8 +236,7 @@ async function launch(opts = {}) {
   try {
     cdp = await Promise.race([connectCDP(port), spawnFailed]);
   } catch (err) {
-    try { chromeProcess.kill('SIGTERM'); } catch (_) {}
-    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (_) {}
+    killAndRemove(chromeProcess, tempDir);
     throw err;
   }
   return { chromeProcess, cdp, tempDir, port, bin, headed };
@@ -280,11 +279,43 @@ async function ensureEngine(cdp) {
 }
 
 /** Idempotent teardown of a launch() context; safe to call twice. */
+function removeTempDir(tempDir) {
+  try {
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  } catch (_) {}
+}
+
+// Chrome flushes profile state (recreating Default/{Cache, Network Persistent
+// State}) as it shuts down; removing the profile right after SIGTERM races
+// those writes and leaks a skeleton temp dir per run. Wait for actual exit —
+// with SIGKILL escalation and a timer fallback — before removing.
+function killAndRemove(proc, tempDir) {
+  const remove = () => removeTempDir(tempDir);
+  if (proc && proc.exitCode === null && proc.signalCode === null) {
+    try { proc.kill('SIGTERM'); } catch (_) {}
+    const killTimer = setTimeout(() => {
+      try { proc.kill('SIGKILL'); } catch (_) {}
+    }, 3000);
+    proc.once('exit', () => {
+      clearTimeout(killTimer);
+      remove();
+    });
+    // Fallback if 'exit' never fires (e.g. it fired before we attached).
+    setTimeout(() => {
+      clearTimeout(killTimer);
+      remove();
+    }, 6000).unref();
+  } else {
+    // Already dead (or never started): its shutdown writes are done.
+    try { if (proc) proc.kill('SIGKILL'); } catch (_) {}
+    remove();
+  }
+}
+
 function cleanup(ctx) {
   if (!ctx) return;
   try { if (ctx.cdp) ctx.cdp.close(); } catch (_) {}
-  try { if (ctx.chromeProcess) ctx.chromeProcess.kill('SIGTERM'); } catch (_) {}
-  try { if (ctx.tempDir) fs.rmSync(ctx.tempDir, { recursive: true, force: true }); } catch (_) {}
+  killAndRemove(ctx.chromeProcess, ctx.tempDir);
 }
 
 /**
