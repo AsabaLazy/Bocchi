@@ -89,51 +89,6 @@
           "header": "Sec-GPC",
           "operation": "set",
           "value": "1"
-        },
-        {
-          "header": "Accept-Language",
-          "operation": "set",
-          "value": "en-US,en;q=0.9"
-        },
-        {
-          "header": "Sec-CH-UA-Platform",
-          "operation": "set",
-          "value": "\"Linux\""
-        },
-        {
-          "header": "Sec-CH-UA-Platform-Version",
-          "operation": "set",
-          "value": "\"\""
-        },
-        {
-          "header": "Sec-CH-UA-Mobile",
-          "operation": "set",
-          "value": "?0"
-        },
-        {
-          "header": "Sec-CH-UA",
-          "operation": "set",
-          "value": "\"Chromium\";v=\"153\", \"Not_A Brand\";v=\"8\""
-        },
-        {
-          "header": "Sec-CH-UA-Full-Version-List",
-          "operation": "set",
-          "value": "\"Chromium\";v=\"153.0.0.0\", \"Not_A Brand\";v=\"8.0.0.0\""
-        },
-        {
-          "header": "Sec-CH-UA-Arch",
-          "operation": "set",
-          "value": "\"x86\""
-        },
-        {
-          "header": "Sec-CH-UA-Bitness",
-          "operation": "set",
-          "value": "\"64\""
-        },
-        {
-          "header": "User-Agent",
-          "operation": "set",
-          "value": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
         }
       ]
     },
