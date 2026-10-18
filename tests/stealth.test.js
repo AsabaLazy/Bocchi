@@ -359,6 +359,20 @@ function expectedFarbledWebglPixels(host) {
 function expectedAudioDelta(host) {
   return ((djb2Hash(host + ':' + TEST_SESSION_SALT + ':audio') % 50) * 2 + 1) * 1e-7;
 }
+// GPU persona pool (mirrors the engine's GPU_PROFILES): renderer + the Dawn
+// architecture spelling paired with it. Selection is
+// GPU_PROFILES[seeds.webgl % 5], i.e. djb2(host:salt:webgl) % 5 — the same
+// seed already replicated above for the readPixels farbling delta.
+const GPU_PROFILES_REF = [
+  { renderer: 'Mesa Intel(R) UHD Graphics (CML GT2)', wgpuArch: 'gen-9' },
+  { renderer: 'Mesa Intel(R) Iris(R) Xe Graphics (TGL GT2)', wgpuArch: 'gen-12lp' },
+  { renderer: 'Mesa Intel(R) UHD Graphics 620 (KBL GT2)', wgpuArch: 'gen-9' },
+  { renderer: 'Mesa Intel(R) HD Graphics 530 (SKL GT2)', wgpuArch: 'gen-9' },
+  { renderer: 'Mesa Intel(R) Iris(R) Plus Graphics (ICL GT2)', wgpuArch: 'gen-11' }
+];
+function expectedGpuProfile(host) {
+  return GPU_PROFILES_REF[djb2Hash(host + ':' + TEST_SESSION_SALT + ':webgl') % GPU_PROFILES_REF.length];
+}
 
 function createMockWindow(hostname, platform = 'Linux x86_64') {
   const win = {};
@@ -1282,10 +1296,16 @@ console.log('✓ Function disguise conforms to native signatures.\n');
 
 console.log('Testing WebGL spoofing and platform detection...');
 const gl = new winCYT.WebGLRenderingContext();
-// Uniform Intel UHD (CML GT2) / Mesa persona, applied unconditionally while
-// hardwareProtection is active (main thread and worker share the profile).
+const expectedGpuCYT = expectedGpuProfile('coveryourtracks.eff.org');
+// Pooled Intel/Mesa persona: vendor stays constant (hardware-driven), while the
+// renderer is one of the five GPU_PROFILES entries picked by seeds.webgl. Assert
+// pool membership (1) and the exact entry the seed selects (2); the WebGPU
+// architecture pairing (3) is asserted in the apivoid realm below, where both
+// WebGPU and WebGL are read from the same realm.
 assert.strictEqual(gl.getParameter(37445), 'Google Inc. (Intel)', 'UNMASKED_VENDOR_WEBGL must be spoofed to Google Inc. (Intel)');
-assert.strictEqual(gl.getParameter(37446), 'Mesa Intel(R) UHD Graphics (CML GT2)', 'UNMASKED_RENDERER_WEBGL must be spoofed to Mesa Intel(R) UHD Graphics (CML GT2)');
+const cyTzRenderers = GPU_PROFILES_REF.map(p => p.renderer);
+assert(cyTzRenderers.includes(gl.getParameter(37446)), 'UNMASKED_RENDERER_WEBGL must be one of the GPU profile pool renderers');
+assert.strictEqual(gl.getParameter(37446), expectedGpuCYT.renderer, 'UNMASKED_RENDERER_WEBGL must be the pooled profile selected by djb2(host:salt:webgl) % 5');
 assert.strictEqual(gl.getParameter(0x1F00), 'WebKit', 'gl.VENDOR must be WebKit');
 assert.strictEqual(gl.getParameter(0x1F01), 'WebKit WebGL', 'gl.RENDERER must be WebKit WebGL');
 assert.strictEqual(gl.getParameter(0x1F02), 'WebGL 1.0 (OpenGL ES 2.0 Chromium)', 'WebGL1 VERSION must be the real Chromium string');
@@ -1298,7 +1318,7 @@ assert.strictEqual(gl.getParameter(0x8B4D), 16, 'MAX_COMBINED_TEXTURE_IMAGE_UNIT
 const ext = gl.getExtension('WEBGL_debug_renderer_info');
 assert(ext && ext.UNMASKED_VENDOR_WEBGL === 37445);
 assert(gl.getSupportedExtensions().includes('WEBGL_debug_renderer_info'), 'getSupportedExtensions must include WEBGL_debug_renderer_info');
-console.log('✓ WebGL Vendor/Renderer correctly spoofed with the Intel UHD persona.\n');
+console.log('✓ WebGL Vendor/Renderer correctly spoofed from the pooled Intel/Mesa persona.\n');
 
 console.log('Testing WebRTC SDP sanitization and IP suppression...');
 const pc = new winCYT.RTCPeerConnection();
@@ -1381,9 +1401,17 @@ console.log('✓ DOMRect geometric identities and integer font dimensions verifi
 
 console.log('Testing Navigator, Language, and Privacy Properties...');
 assert.strictEqual(winCYT.navigator.webdriver, false, 'navigator.webdriver must be false');
-assert.strictEqual(winCYT.navigator.doNotTrack, '1', 'navigator.doNotTrack must be "1"');
+// doNotTrack injection removed: DNT is expressed at the network layer (DNR
+// header) and navigator.doNotTrack must pass through the mock's native value
+// (null here) untouched — overriding it is itself a spoofing signal.
+assert.strictEqual(winCYT.navigator.doNotTrack, null, 'navigator.doNotTrack must pass through natively (mock native value, no engine override)');
 assert.strictEqual(winCYT.navigator.globalPrivacyControl, true, 'navigator.globalPrivacyControl must be true');
 assert.strictEqual(winCYT.doNotTrack, undefined, 'window.doNotTrack must NOT exist (avoids obsolete IE9 pollution)');
+// Passthrough must not be "always null": a native truthy value survives verbatim.
+const winDntNative = createMockWindow('dnt-native.test', 'Linux x86_64');
+winDntNative.navigator.doNotTrack = '1';
+vm.runInContext(stealthCode, vm.createContext(winDntNative));
+assert.strictEqual(winDntNative.navigator.doNotTrack, '1', 'A native doNotTrack value must pass through unchanged (no engine override in either direction)');
 
 // Browser Platform, UA, and Language: personas removed — everything passes
 // through natively (mock provides the values, engine must not touch them).
@@ -1440,11 +1468,15 @@ console.log('Testing Timezone Dynamic Auto-sync and Date Hooks...');
 assert.strictEqual(dtf.resolvedOptions().timeZone, 'America/Los_Angeles', 'Default detected timezone must be America/Los_Angeles');
 
 const testDateSummer = new winCYT.Date('2026-09-29T12:00:00Z');
+const nativeDateSummer = new Date('2026-09-29T12:00:00Z');
 // In Los Angeles (PDT): offset is 420 minutes (UTC-7)
 assert.strictEqual(testDateSummer.getTimezoneOffset(), 420, 'getTimezoneOffset in Summer (PDT) must be 420');
 assert(testDateSummer.toString().includes('GMT-0700'), 'Date.toString must include GMT-0700');
-assert(testDateSummer.toString().includes('Pacific Daylight Time'), 'Date.toString must include Pacific Daylight Time');
-assert(testDateSummer.toTimeString().includes('GMT-0700 (Pacific Daylight Time)'), 'toTimeString must include GMT-0700 (Pacific Daylight Time)');
+// Target zone == host real zone, so tzSpoofNeeded is false and every Date
+// method must be byte-identical to the untouched native (no re-formatted
+// English zone name — the host locale supplies whatever native produces).
+assert.strictEqual(testDateSummer.toString(), nativeDateSummer.toString(), 'Date.toString must match the native string when the target zone equals the real zone');
+assert.strictEqual(testDateSummer.toTimeString(), nativeDateSummer.toTimeString(), 'toTimeString must match the native string when the target zone equals the real zone');
 assert.strictEqual(testDateSummer.toDateString(), 'Tue Sep 29 2026', 'toDateString must match Tue Sep 29 2026');
 assert.strictEqual(testDateSummer.getHours(), 5, 'getHours in LA for 12:00 UTC must be 5 (12 - 7)');
 assert(testDateSummer.toLocaleString().includes('2026'), 'toLocaleString must format in the native default locale (year present)');
@@ -1487,10 +1519,12 @@ assert.strictEqual(dtfDyn.resolvedOptions().timeZone, 'Europe/London', 'Default 
 setTestTimezone(winCYT, 'America/Los_Angeles');
 
 const testDateWinter = new winCYT.Date('2026-01-15T12:00:00Z');
+const nativeDateWinter = new Date('2026-01-15T12:00:00Z');
 // In Los Angeles (PST): offset is 480 minutes (UTC-8)
 assert.strictEqual(testDateWinter.getTimezoneOffset(), 480, 'getTimezoneOffset in Winter (PST) must be 480');
 assert(testDateWinter.toString().includes('GMT-0800'), 'Date.toString must include GMT-0800');
-assert(testDateWinter.toString().includes('Pacific Standard Time'), 'Date.toString must include Pacific Standard Time');
+// Zone-name suffix is native (host locale), not an engine-formatted English name.
+assert.strictEqual(testDateWinter.toString(), nativeDateWinter.toString(), 'Winter Date.toString must match the native string (target zone == real zone)');
 assert.strictEqual(testDateWinter.getHours(), 4, 'getHours in LA for 12:00 UTC in Winter must be 4 (12 - 8)');
 assert.strictEqual(testDateWinter.getMinutes(), 0, 'getMinutes must be 0');
 assert.strictEqual(testDateWinter.getSeconds(), 0, 'getSeconds must be 0');
@@ -1534,6 +1568,45 @@ assert.strictEqual(testDateUTC.getUTCHours(), 12, 'getUTCHours must return 12 in
 
 // Custom explicit timeZone in toLocaleString must be respected
 assert(testDateUTC.toLocaleString('en-GB', { timeZone: 'UTC' }).includes('12:00:00'), 'Explicit timeZone in toLocaleString must be respected');
+
+// tzSpoofNeeded: when the target zone IS the host's real zone (the common
+// "no VPN / matching exit IP" case) the engine must fall back to full native
+// passthrough — Date/Intl must be indistinguishable from the unwrapped natives.
+// The real zone is read from the environment rather than hardcoded so the test
+// stays valid on any host TZ.
+const HOST_REAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const winSameTz = createMockWindow('same-tz-passthrough.test', 'Linux x86_64');
+vm.runInContext(stealthCode, vm.createContext(winSameTz));
+driveConfig(winSameTz, { tz: HOST_REAL_TZ });
+assert.strictEqual(new winSameTz.Intl.DateTimeFormat().resolvedOptions().timeZone, HOST_REAL_TZ, 'Target == real zone must resolve to the real zone');
+assert.strictEqual(new winSameTz.Intl.DateTimeFormat('en-US', { timeZoneName: 'long' }).resolvedOptions().timeZone, HOST_REAL_TZ, 'Explicit-formatter resolvedOptions must stay native when target == real');
+const sameTzProbe = '2026-09-29T12:00:00Z';
+assert.strictEqual(new winSameTz.Date(sameTzProbe).getHours(), new Date(sameTzProbe).getHours(), 'getHours must equal the native value when target == real zone');
+assert.strictEqual(new winSameTz.Date(sameTzProbe).getTimezoneOffset(), new Date(sameTzProbe).getTimezoneOffset(), 'getTimezoneOffset must equal the native value when target == real zone');
+assert.strictEqual(new winSameTz.Date(sameTzProbe).toString(), new Date(sameTzProbe).toString(), 'Date.toString must equal the native string when target == real zone');
+assert.strictEqual(new winSameTz.Date(sameTzProbe).getMinutes(), new Date(sameTzProbe).getMinutes(), 'getMinutes must equal the native value (no sub-minute offset shifts)');
+console.log('✓ Timezone passthrough confirmed when the target zone equals the host real zone.\n');
+
+// DST rollback hour and non-hour offsets: the conversion path must agree with
+// what a native realm in that zone reports (the engine fixed the repeated
+// 02:00-03:00 rollback hour and sub-minute offsets). 2026-10-25 is Paris's
+// fall-back: 00:30Z is the first (CEST) pass, 01:30Z the second (CET) pass —
+// both must render 02:30 local, with different offsets.
+setTestTimezone(winSameTz, 'Europe/Paris');
+const parisRollbackFirst = new winSameTz.Date('2026-10-25T00:30:00Z');
+const parisRollbackSecond = new winSameTz.Date('2026-10-25T01:30:00Z');
+assert.strictEqual(parisRollbackFirst.getHours(), 2, 'First pass through the rollback hour must be 02:xx local');
+assert.strictEqual(parisRollbackFirst.getMinutes(), 30, 'Rollback-hour minutes must not shift (no sub-minute drift)');
+assert.strictEqual(parisRollbackFirst.getTimezoneOffset(), -120, 'First rollback pass must report CEST (+0200)');
+assert.strictEqual(parisRollbackSecond.getHours(), 2, 'Second pass through the rollback hour must also be 02:xx local');
+assert.strictEqual(parisRollbackSecond.getTimezoneOffset(), -60, 'Second rollback pass must report CET (+0100)');
+setTestTimezone(winSameTz, 'Asia/Kolkata');
+const kolkataDate = new winSameTz.Date('2026-09-29T12:00:00Z');
+assert.strictEqual(kolkataDate.getTimezoneOffset(), -330, 'Half-hour zone (Kolkata, UTC+5:30) offset must be -330');
+assert.strictEqual(kolkataDate.getHours(), 17, 'Kolkata hours must be 17 for 12:00 UTC');
+assert.strictEqual(kolkataDate.getMinutes(), 30, 'Kolkata minutes must be 30 (half-hour offset preserved exactly)');
+assert(kolkataDate.toString().includes('GMT+0530'), 'Kolkata Date.toString must include GMT+0530');
+console.log('✓ DST rollback hour and half-hour offset semantics match native behaviour.\n');
 
 // Chinese locale in toLocaleString must be sanitized to English
 assert(!testDateUTC.toLocaleString('zh-CN').includes('上午') && !testDateUTC.toLocaleString('zh-CN').includes('下午'), 'Chinese locale in toLocaleString must default to English format');
@@ -1726,6 +1799,13 @@ assert(workerBlob.content.includes('chosenConcurrency = 8'), 'Worker bootstrap m
 assert(workerBlob.content.includes('deviceMemory'), 'Worker bootstrap must hook deviceMemory to 8');
 assert(!workerBlob.content.includes('Linux x86_64'), 'Worker bootstrap must NOT spoof a platform persona (native passthrough)');
 assert(!/navigator\.(language|platform|userAgent)/.test(workerBlob.content), 'Worker bootstrap must NOT spoof UA-family values (native passthrough)');
+// Cross-context GPU consistency: the worker bootstrap interpolates the same
+// pooled profile the main thread serves for this host — a worker reporting a
+// different renderer than its page is itself a detection signal.
+assert(workerBlob.content.includes(expectedGpuCYT.renderer), 'Worker bootstrap must shadow the same pooled GPU renderer as the main thread');
+const workerRendererMatch = /if \(pname === 37446\) return '([^']*)';/.exec(workerBlob.content);
+assert(workerRendererMatch, 'Worker bootstrap must hook WebGL UNMASKED_RENDERER_WEBGL');
+assert.strictEqual(workerRendererMatch[1], gl.getParameter(37446), 'Worker renderer must be byte-identical to the main-thread renderer (cross-context consistency)');
 assert(workerBlob.content.includes('DateTimeFormat'), 'Worker bootstrap must spoof Intl.DateTimeFormat timezone');
 assert(workerBlob.content.includes('getTimezoneOffset'), 'Worker bootstrap must spoof Date timezone offset');
 
@@ -1887,12 +1967,14 @@ vm.runInContext(stealthCode, vm.createContext(winNonPromise));
 const pcNonPromise = new winNonPromise.RTCPeerConnection();
 assert.strictEqual(pcNonPromise.createOffer(), undefined, 'createOffer must safely handle non-promise / undefined returns');
 
-// WebGL renderer spoofing (uniform Intel UHD persona on every Linux realm)
+// WebGL renderer spoofing (pooled Intel/Mesa persona on every Linux realm)
 const winMac = createMockWindow('mac-test.com', 'Linux x86_64');
 vm.runInContext(stealthCode, vm.createContext(winMac));
 const glMac = new winMac.WebGLRenderingContext();
-assert.strictEqual(glMac.getParameter(37446), 'Mesa Intel(R) UHD Graphics (CML GT2)', 'Linux platform must spoof the Mesa Intel UHD renderer persona');
-console.log('✓ WebGL correctly provides the uniform Linux Intel renderer persona.');
+const expectedGpuMac = expectedGpuProfile('mac-test.com');
+assert(GPU_PROFILES_REF.map(p => p.renderer).includes(glMac.getParameter(37446)), 'Linux platform must draw its WebGL renderer from the GPU profile pool');
+assert.strictEqual(glMac.getParameter(37446), expectedGpuMac.renderer, 'Linux platform renderer must be the pool entry selected by djb2(host:salt:webgl) % 5');
+console.log('✓ WebGL correctly provides the pooled Linux Intel renderer persona.');
 
 // Transparent Canvas toDataURL and toBlob non-clamping farbling
 const canvasZero = new winCYT.HTMLCanvasElement();
@@ -1920,23 +2002,29 @@ const winBot = createMockWindow('apivoid.com', 'Linux x86_64');
 vm.runInContext(stealthCode, vm.createContext(winBot));
 
 // 7.1 WebGPU Adapter Spoofing (real Linux Chrome values for an Intel iGPU:
-// short vendor token, Chrome's architecture spelling, empty device/description)
+// short vendor token, Chrome's architecture spelling, empty device/description).
+// The architecture is paired with the WebGL renderer of the same pool entry:
+// both are read from the GPU_PROFILES item selected for this host.
+const expectedGpuBot = expectedGpuProfile('apivoid.com');
 winBot.navigator.gpu.requestAdapter().then(adapter => {
   assert(adapter && adapter.info, 'WebGPU adapter must have info');
   assert.strictEqual(adapter.info.vendor, 'intel', 'WebGPU vendor must be spoofed to intel');
-  assert.strictEqual(adapter.info.architecture, 'gen-12lp', 'WebGPU architecture must be gen-12lp (Intel persona)');
+  assert.strictEqual(adapter.info.architecture, expectedGpuBot.wgpuArch, 'WebGPU architecture must be the arch paired with the pooled renderer for this host');
   assert.strictEqual(adapter.info.device, '', 'WebGPU device must be empty for the Intel persona');
   assert.strictEqual(adapter.info.description, '', 'WebGPU description must be empty for the Intel persona');
 
   adapter.requestAdapterInfo().then(async info => {
     assert.strictEqual(info.vendor, 'intel', 'WebGPU requestAdapterInfo must return the Intel persona vendor');
-    assert.strictEqual(info.architecture, 'gen-12lp', 'WebGPU requestAdapterInfo must return gen-12lp');
-    console.log('✓ WebGPU adapter correctly spoofed with the Intel gen-12lp persona.');
+    assert.strictEqual(info.architecture, expectedGpuBot.wgpuArch, 'WebGPU requestAdapterInfo must return the paired pooled architecture');
+    console.log('✓ WebGPU adapter correctly spoofed with the pooled Intel persona.');
 
     // 7.2 WebGL Standard Parameters
     const gl = new winBot.WebGLRenderingContext();
     assert.strictEqual(gl.getParameter(0x1F00), 'WebKit', 'gl.VENDOR must be WebKit');
     assert.strictEqual(gl.getParameter(0x1F01), 'WebKit WebGL', 'gl.RENDERER must be WebKit WebGL');
+    // Cross-API pairing: the WebGL unmasked renderer must be the renderer of
+    // the very pool entry whose architecture WebGPU reports above.
+    assert.strictEqual(gl.getParameter(37446), expectedGpuBot.renderer, 'WebGL renderer must be the pooled entry paired with the reported WebGPU architecture');
     assert.strictEqual(gl.getParameter(0x8B8C), 'WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)', 'gl.SHADING_LANGUAGE_VERSION must be standard Chrome');
     console.log('✓ WebGL standard parameters (VENDOR, RENDERER, SHADING_LANGUAGE_VERSION) verified.');
 
