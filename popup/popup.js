@@ -3,7 +3,6 @@
 // DOM Elements
 const $globalShieldEnabled = document.getElementById('globalShieldEnabled');
 const $statusBadge = document.getElementById('statusBadge');
-const $statusDot = document.getElementById('statusDot');
 const $statusText = document.getElementById('statusText');
 
 const $siteDomain = document.getElementById('siteDomain');

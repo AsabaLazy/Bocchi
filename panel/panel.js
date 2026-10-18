@@ -39,10 +39,6 @@ function getFontCategory(name) {
   return 'latin';
 }
 
-function isFontCjk(name) {
-  return CHINESE_FONTS_REGEX.test(name);
-}
-
 function isFontChecked(name) {
   const lower = name.toLowerCase();
   if (fontMode === 'blacklist') {
