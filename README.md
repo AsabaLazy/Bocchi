@@ -4,34 +4,50 @@ A Manifest V3 Chromium extension engineered for advanced browser fingerprint def
 
 ## Key Features
 
-- **Anti-Fingerprinting Defense**:
-  - **Canvas 2D & WebGL**: Sub-pixel normalization and seed-based farbling that defeats canvas/WebGL fingerprinting while preserving visual fidelity.
-  - **AudioBuffer Alignment**: Calibrated WebAudio dynamics compressor reduction and channel data summation to match standard Blink expectations (passing CreepJS with 0 lies and 0 bold fails).
-  - **Font Masking**: Hides non-standard and localized Chinese/host fonts from canvas measurement and `@font-face` probes, exposing only universal standard system fonts.
-  - **Dynamic Timezone & Locale Alignment**: Auto-syncs browser timezone (`Date`, `Intl.DateTimeFormat`) and locale (`Intl.NumberFormat`, `PluralRules`, `RelativeTimeFormat`, `Collator`) to match the network egress IP, eliminating timezone/IP discrepancies.
-  - **Worker & SharedWorker Isolation**: Injects cross-context spoofing into dedicated Web Workers and SharedWorkers via blob URL instrumentation.
+- **High-Entropy Vector Randomization**: Canvas 2D, WebGL, and audio fingerprints are randomized per session on every site. Values stay stable within a site for the session yet differ across sites and sessions, so trackers cannot correlate visits into a persistent cross-site profile. Low-entropy signals (user agent, platform, languages) are left native.
+- **Font Minimization & Filtering**: Hides locale-revealing and non-standard fonts from canvas measurement and `@font-face` probes, exposing only a minimal set of universal fonts, with per-site allow/block lists.
+- **Automatic Timezone Alignment**: Syncs the browser timezone (`Date`, `Intl.DateTimeFormat`) to match the network egress IP, eliminating timezone/IP discrepancies.
 - **WebRTC Leak Prevention**:
   - Enforces `disable_non_proxied_udp` policy via `chrome.privacy.network.webRTCIPHandlingPolicy`.
   - Sanitizes local/host IP candidates in SDP offers/answers (`RTCPeerConnection.prototype.createOffer`, `setLocalDescription`, `localDescription`).
 - **Network Privacy**:
-  - DeclarativeNetRequest rules to block intrusive tracking domains (`trackersimulator.org`, `eviltracker.net`, etc.).
-  - Enforces `DNT: 1`, `Sec-GPC: 1`, and `Accept-Language: en-US,en;q=0.9` network headers.
+  - DeclarativeNetRequest rules block intrusive tracking domains (`trackersimulator.org`, `eviltracker.net`, etc.).
+  - Enforces `DNT: 1` and `Sec-GPC: 1` privacy signal headers.
+- **LibreWolf-Style Reductions**: Clamps timer precision and degrades high-resolution device enumeration (media devices, hardware concurrency, device memory).
+- **Worker & SharedWorker Isolation**: Injects cross-context protections into dedicated Web Workers and SharedWorkers via blob URL instrumentation.
+- **Secure Cross-World Config Sync**: ISOLATED↔MAIN world configuration synchronization uses a secured channel with a one-time token handshake (randomized event names + token validation), so page scripts cannot forge or eavesdrop on shield configuration.
 
 ## Directory Structure
 
 ```text
 ├── manifest.json              # Extension Manifest V3 configuration
 ├── background/
-│   └── service_worker.js     # Background worker (IP timezone detection & WebRTC policy)
+│   └── service_worker.js      # Background service worker (WebRTC policy, GeoIP timezone sync, periodic alarms)
 ├── content/
-│   ├── bridge.js             # ISOLATED world bridge for timezone synchronization
-│   └── stealth_engine.js     # MAIN world script executing all prototype protections
+│   ├── bridge.js              # ISOLATED world bridge for timezone synchronization
+│   └── stealth_engine.js      # MAIN world script executing all prototype protections
+├── icons/
+│   ├── icon-16.png            # 16×16 toolbar icon
+│   ├── icon-48.png            # 48×48 extension management icon
+│   └── icon-128.png           # 128×128 Chrome Web Store icon
+├── popup/
+│   ├── popup.css              # Toolbar popup styles
+│   ├── popup.html             # Toolbar popup markup (shield status & quick toggles)
+│   └── popup.js               # Toolbar popup logic (global & per-site shield toggles)
+├── panel/
+│   ├── panel.css              # Font privacy panel styles
+│   ├── panel.html             # Font privacy panel markup
+│   └── panel.js               # Font privacy panel logic (font enumeration & masking preferences)
 ├── rules/
-│   └── cyt_rules.json        # DeclarativeNetRequest network rules
+│   └── cyt_rules.json         # DeclarativeNetRequest network rules
 ├── tests/
-│   ├── stealth.test.js       # Core unit & integration test suite
-│   └── live_creep_verify.js  # CDP automated live verification against CreepJS
-└── package-extension.sh      # Extension zip packager
+│   ├── stealth.test.js        # Core unit & integration test suite
+│   ├── live_creep_verify.js   # CDP automated live verification against CreepJS
+│   ├── check_apivoid_live.js  # CDP live check against APIVoid bot-detection test page
+│   ├── diagnose_apivoid.js    # CDP diagnostics for APIVoid detection results
+│   └── test_apivoid_tamper.js # CDP tamper-resistance test on APIVoid bot-detection page
+├── CHROMEWEBSTORE.md          # Chrome Web Store listing, permissions & review notes
+└── package-extension.sh       # Extension zip packager
 ```
 
 ## Installation & Development
@@ -61,3 +77,5 @@ node tests/stealth.test.js
 # Run live CreepJS audit (requires Chromium installed)
 node tests/live_creep_verify.js
 ```
+
+The live verification scripts (`live_creep_verify.js`, `check_apivoid_live.js`, `diagnose_apivoid.js`, `test_apivoid_tamper.js`) drive a real browser over the Chrome DevTools Protocol and therefore require a local Chromium / Google Chrome installation (override the binary via the `CHROME_BIN` environment variable). The unit test suite runs under plain Node.js with no browser required.
