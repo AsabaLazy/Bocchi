@@ -72,18 +72,25 @@ async function main() {
   const extPath = path.resolve(__dirname, '..');
   const port = 9333;
   const chromeBin = process.env.CHROME_BIN || 'chromium';
+  // HEADED=1 runs a real desktop window (real GPU rendering, no headless
+  // tells) — the most realistic deployment environment. Headless remains the
+  // default for CI-style runs.
+  const headed = process.env.HEADED === '1';
 
-  console.log(`Starting Chromium with extension from: ${extPath}`);
-  const chromeProcess = spawn(chromeBin, [
-    '--headless=new',
+  const launchArgs = [
     '--no-sandbox',
-    '--disable-gpu',
     `--user-data-dir=${tempDir}`,
     `--remote-debugging-port=${port}`,
     `--load-extension=${extPath}`,
     `--disable-extensions-except=${extPath}`,
     'about:blank'
-  ], {
+  ];
+  if (!headed) {
+    launchArgs.unshift('--headless=new', '--disable-gpu');
+  }
+
+  console.log(`Starting ${headed ? 'headed' : 'headless'} Chromium with extension from: ${extPath}`);
+  const chromeProcess = spawn(chromeBin, launchArgs, {
     stdio: 'ignore'
   });
 
@@ -251,6 +258,29 @@ async function main() {
       console.log(`[#${idx + 1}]`, JSON.stringify(e, null, 2));
     });
     console.log('====================================================\n');
+
+    // Engine sanity check: verify the extension actually applied. A bare
+    // browser (extension failed to load — e.g. branded Chrome ignores
+    // --load-extension) produces plausible-looking "good" numbers that are
+    // actually meaningless; fail loudly instead of letting them pass.
+    const sanityRes = await cdp.send('Runtime.evaluate', {
+      expression: `(() => {
+        let gpu = 'n/a';
+        try {
+          const gl = document.createElement('canvas').getContext('webgl');
+          const ext = gl.getExtension('WEBGL_debug_renderer_info');
+          gpu = gl.getParameter(ext.UNMASKED_RENDERER_WEBGL);
+        } catch (e) {}
+        return { marks: typeof window[Symbol.for('__bpc_pm_7e4b1c92')], gpu: gpu };
+      })()`,
+      returnByValue: true
+    });
+    const sanity = (sanityRes.result && sanityRes.result.value) || {};
+    console.log('ENGINE SANITY:', JSON.stringify(sanity));
+    if (sanity.marks !== 'object') {
+      console.log('!!!!! EXTENSION DID NOT APPLY — everything below is a BARE BROWSER, not the extension. !!!!!');
+      console.log('!!!!! Check that CHROME_BIN is Chromium / Chrome for Testing (branded Chrome 137+ ignores --load-extension). !!!!!');
+    }
 
     const val = auditRes.result?.value || {};
     console.log('================ AUDIT SUMMARY ================');
