@@ -1,80 +1,39 @@
-const { spawn } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const http = require('http');
+const h = require('./lib/live_harness');
 
-async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-function httpGet(url) {
-  return new Promise((resolve, reject) => {
-    http.get(url, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => resolve(JSON.parse(data)));
-    }).on('error', reject);
-  });
-}
-
-class CDPClient {
-  constructor(wsUrl) {
-    this.ws = new WebSocket(wsUrl);
-    this.id = 1;
-    this.callbacks = new Map();
-    this.ready = new Promise((resolve, reject) => {
-      this.ws.onopen = resolve;
-      this.ws.onerror = reject;
-    });
-    this.ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      if (msg.id && this.callbacks.has(msg.id)) {
-        const { resolve, reject } = this.callbacks.get(msg.id);
-        this.callbacks.delete(msg.id);
-        if (msg.error) reject(msg.error);
-        else resolve(msg.result);
-      }
-    };
-  }
-  send(method, params = {}) {
-    return new Promise((resolve, reject) => {
-      const msgId = this.id++;
-      this.callbacks.set(msgId, { resolve, reject });
-      this.ws.send(JSON.stringify({ id: msgId, method, params }));
-    });
-  }
-  close() { this.ws.close(); }
-}
-
-async function main() {
-  const tempDir = fs.mkdtempSync(path.join('/tmp', 'apivoid-diag-'));
-  const extPath = path.resolve('.');
-  const port = 9570;
-  const chrome = spawn(process.env.CHROME_BIN || 'chromium', [
-    '--headless=new',
-    '--no-sandbox',
-    '--disable-gpu',
-    `--user-data-dir=${tempDir}`,
-    `--remote-debugging-port=${port}`,
-    `--load-extension=${extPath}`,
-    `--disable-extensions-except=${extPath}`,
-    'about:blank'
-  ], { stdio: 'ignore' });
-
-  try {
-    let targets = null;
-    for (let i = 0; i < 30; i++) {
-      try {
-        targets = await httpGet(`http://127.0.0.1:${port}/json/list`);
-        if (Array.isArray(targets) && targets.length > 0) break;
-      } catch (e) {}
-      await sleep(200);
-    }
-    const pageTarget = targets.find(t => t.type === 'page');
-    const cdp = new CDPClient(pageTarget.webSocketDebuggerUrl);
-    await cdp.ready;
+h.runWithRetry('apivoid-diagnose', { headed: process.env.HEADED === '1' }, async (ctx) => {
+    const cdp = ctx.cdp;
     await cdp.send('Page.enable');
     await cdp.send('Runtime.enable');
 
     await cdp.send('Page.navigate', { url: 'https://www.apivoid.com/tools/bot-detection-test/' });
-    await sleep(4000);
+    await h.sleep(4000);
+
+    // Bare-browser guard: the extension engine must be present before probing.
+    await h.ensureEngine(ctx.cdp);
+
+    // Site precondition: the probes below mutate window.BotDetector payloads.
+    // APIVoid redesigned the bot-detection-test page (2026-10) and
+    // window.BotDetector is gone; base-payload collection would return
+    // garbage and every mutation probe would cascade undefined results.
+    // Fail loudly instead — rewrite against the new page flow (or drop this
+    // script from the live chain) to bring it back to life.
+    const pre = await cdp.send('Runtime.evaluate', {
+      expression: `typeof window.BotDetector !== 'undefined' && typeof window.BotDetector.collect === 'function'`,
+      returnByValue: true
+    });
+    if (!pre.result?.value) {
+      console.log('!!!!! SITE PRECONDITION FAILED: window.BotDetector is gone from the page.');
+      console.log('!!!!! APIVoid redesigned the bot-detection-test page; these probes target a dead API.');
+      console.log('!!!!! Rewrite against the new page flow, or remove this script from the live chain.');
+      h.saveReport('apivoid-diagnose', {
+        name: 'apivoid-diagnose',
+        timestamp: new Date().toISOString(),
+        target: 'https://www.apivoid.com/tools/bot-detection-test/',
+        sitePrecondition: 'BotDetector missing — page redesigned, probes not run'
+      });
+      process.exitCode = 1;
+      return;
+    }
 
     // Grab base payload
     const basePayloadRes = await cdp.send('Runtime.evaluate', {
@@ -114,14 +73,15 @@ async function main() {
       const d = data.derived || {};
       const g = (data.groups || []).map(x => `${x.id}:${x.status}(${x.ruleCount})`).join(' ');
       console.log(`[${label.padEnd(30)}] score=${v.score} | tampered=${v.tampered} (signals: ${v.tamperSignals}) | rules=${v.ruleCount} | inferredBrowser=${d.inferredBrowser} | ${g}`);
-      await sleep(1000);
+      await h.sleep(1000);
       return data;
     }
 
     console.log('--- Probing APIVoid Heuristics ---');
-    await probe('0. BASE PAYLOAD', p => {});
+    const probes = {};
+    probes['0. BASE PAYLOAD'] = await probe('0. BASE PAYLOAD', p => {});
 
-    await probe('1. Fix Worker Intl Timezone', p => {
+    probes['1. Fix Worker Intl Timezone'] = await probe('1. Fix Worker Intl Timezone', p => {
       if (p.worker?.data?.intl) {
         p.worker.data.intl.offsetNow = 420;
         p.worker.data.intl.offsetJan = 480;
@@ -130,13 +90,13 @@ async function main() {
       }
     });
 
-    await probe('2. Fix Worker HighEntropy', p => {
+    probes['2. Fix Worker HighEntropy'] = await probe('2. Fix Worker HighEntropy', p => {
       if (p.worker?.data?.highEntropy) {
         p.worker.data.highEntropy.fullVersionList = "Google Chrome 153.0.0.0, Chromium 153.0.0.0, Not_A Brand 8.0.0.0";
       }
     });
 
-    await probe('3. Fix ClientHints FullVerList', p => {
+    probes['3. Fix ClientHints FullVerList'] = await probe('3. Fix ClientHints FullVerList', p => {
       if (p.clientHints?.fullVersionList) {
         p.clientHints.fullVersionList = [
           { brand: 'Google Chrome', version: '153.0.0.0' },
@@ -147,7 +107,7 @@ async function main() {
       }
     });
 
-    await probe('4. Fix 1 + 2 + 3 combined', p => {
+    probes['4. Fix 1 + 2 + 3 combined'] = await probe('4. Fix 1 + 2 + 3 combined', p => {
       if (p.worker?.data?.intl) {
         p.worker.data.intl.offsetNow = 420;
         p.worker.data.intl.offsetJan = 480;
@@ -167,11 +127,12 @@ async function main() {
       }
     });
 
-    cdp.close();
-  } finally {
-    chrome.kill();
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-}
-
-main().catch(console.error);
+    const report = {
+      target: 'https://www.apivoid.com/tools/bot-detection-test/',
+      headed: ctx.headed,
+      basePayload,
+      probes
+    };
+    const reportPath = await h.saveReport('apivoid-diagnose', report);
+    console.log('Report saved to:', reportPath);
+}).catch(console.error);

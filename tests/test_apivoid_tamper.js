@@ -1,118 +1,26 @@
-const { spawn } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const http = require('http');
+const h = require('./lib/live_harness');
 
-async function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+h.runWithRetry('apivoid-tamper', { headed: process.env.HEADED === '1' }, async (ctx) => {
+  const { cdp } = ctx;
 
-function httpGet(url) {
-  return new Promise((resolve, reject) => {
-    http.get(url, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch (e) {
-          resolve(data);
-        }
-      });
-    }).on('error', reject);
-  });
-}
+  console.log('Connected to CDP');
 
-class CDPClient {
-  constructor(wsUrl) {
-    this.ws = new WebSocket(wsUrl);
-    this.id = 1;
-    this.callbacks = new Map();
-    this.events = new Map();
+  await cdp.send('Page.enable');
+  await cdp.send('Runtime.enable');
 
-    this.ready = new Promise((resolve, reject) => {
-      this.ws.onopen = resolve;
-      this.ws.onerror = reject;
-    });
+  console.log('Navigating to https://www.apivoid.com/tools/bot-detection-test/ ...');
+  await cdp.send('Page.navigate', { url: 'https://www.apivoid.com/tools/bot-detection-test/' });
 
-    this.ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      if (msg.id && this.callbacks.has(msg.id)) {
-        const { resolve, reject } = this.callbacks.get(msg.id);
-        this.callbacks.delete(msg.id);
-        if (msg.error) reject(msg.error);
-        else resolve(msg.result);
-      } else if (msg.method) {
-        const handlers = this.events.get(msg.method) || [];
-        handlers.forEach(h => h(msg.params));
-      }
-    };
-  }
+  // Wait a few seconds for page and extension injection
+  await h.sleep(4000);
 
-  send(method, params = {}) {
-    return new Promise((resolve, reject) => {
-      const msgId = this.id++;
-      this.callbacks.set(msgId, { resolve, reject });
-      this.ws.send(JSON.stringify({ id: msgId, method, params }));
-    });
-  }
+  // Bare-browser guard: without the engine injected, the tamper probe would
+  // emit plausible-but-misleading pristine values, so fail loudly instead.
+  await h.ensureEngine(cdp);
 
-  close() {
-    this.ws.close();
-  }
-}
-
-async function main() {
-  const tempDir = fs.mkdtempSync(path.join('/tmp', 'apivoid-test-'));
-  const extPath = path.resolve(__dirname, '..');
-  const port = 9444;
-  const chromeBin = process.env.CHROME_BIN || 'chromium';
-
-  console.log(`Starting Chromium with extension from: ${extPath}`);
-  const chromeProcess = spawn(chromeBin, [
-    '--headless=new',
-    '--no-sandbox',
-    '--disable-gpu',
-    `--user-data-dir=${tempDir}`,
-    `--remote-debugging-port=${port}`,
-    `--load-extension=${extPath}`,
-    `--disable-extensions-except=${extPath}`,
-    'about:blank'
-  ], {
-    stdio: 'ignore'
-  });
-
-  try {
-    let targets = null;
-    for (let i = 0; i < 30; i++) {
-      try {
-        targets = await httpGet(`http://127.0.0.1:${port}/json/list`);
-        if (Array.isArray(targets) && targets.length > 0) break;
-      } catch (e) {}
-      await sleep(200);
-    }
-
-    if (!targets || targets.length === 0) {
-      throw new Error('Failed to connect to Chromium CDP port');
-    }
-
-    const pageTarget = targets.find(t => t.type === 'page');
-    const cdp = new CDPClient(pageTarget.webSocketDebuggerUrl);
-    await cdp.ready;
-    console.log('Connected to CDP');
-
-    await cdp.send('Page.enable');
-    await cdp.send('Runtime.enable');
-
-    console.log('Navigating to https://www.apivoid.com/tools/bot-detection-test/ ...');
-    await cdp.send('Page.navigate', { url: 'https://www.apivoid.com/tools/bot-detection-test/' });
-
-    // Wait a few seconds for page and extension injection
-    await sleep(4000);
-
-    // Run APIVoid test logic in page context
-    const testResult = await cdp.send('Runtime.evaluate', {
-      expression: `(() => {
+  // Run APIVoid test logic in page context
+  const testResult = await cdp.send('Runtime.evaluate', {
+    expression: `(() => {
         var INTEGRITY_ACCESSORS = [
           'webdriver', 'platform', 'vendor', 'vendorSub', 'language', 'languages',
           'hardwareConcurrency', 'deviceMemory', 'maxTouchPoints', 'userAgent',
@@ -216,20 +124,22 @@ async function main() {
         if (frame && frame.parentNode) frame.parentNode.removeChild(frame);
         return out;
       })()`,
-      returnByValue: true
-    });
+    returnByValue: true
+  });
 
-    console.log('\n=== APIVoid Prototype Integrity Test Result ===');
-    console.log(JSON.stringify(testResult.result?.value, null, 2));
+  console.log('\n=== APIVoid Prototype Integrity Test Result ===');
+  console.log(JSON.stringify(testResult.result?.value, null, 2));
 
-    cdp.close();
-  } finally {
-    chromeProcess.kill();
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-}
+  const report = {
+    scenarios: {
+      prototypeIntegrity: testResult.result?.value
+    }
+  };
+  const reportPath = await h.saveReport('apivoid-tamper', report);
+  console.log(`Report saved to: ${reportPath}`);
 
-main().catch(err => {
+  cdp.close();
+}).catch(err => {
   console.error(err);
   process.exit(1);
 });
