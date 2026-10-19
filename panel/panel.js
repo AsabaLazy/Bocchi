@@ -30,8 +30,8 @@ const $nHid = document.getElementById('nHid');
 const EYE_ON = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>';
 const EYE_OFF = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><path d="M4 4l16 16"/></svg>';
 
-// 语系徽章:字形即分类
-const CAT_GLYPH = { cjk: '字', latin: 'Aa', other: 'أ' };
+// 语系徽章:分类识别用文字(图标适合动作,分类需要词汇)
+const CAT_LABEL = { cjk: '中文', latin: '西文', other: '小语种' };
 const CAT_TITLE = { cjk: '中文字体', latin: '西文字体', other: '其他语系' };
 
 // State
@@ -250,8 +250,8 @@ function renderList() {
     const hidden = engineActive && isFontHidden(f);
     const cat = getFontCategory(f);
 
-    const badgeClass = cat === 'latin' ? ' glyph-badge lat' : ' glyph-badge';
-    const badgeHtml = `<span class="${badgeClass.trim()}" title="${CAT_TITLE[cat]}">${CAT_GLYPH[cat]}</span>`;
+    const badgeClass = 'glyph-badge';
+    const badgeHtml = `<span class="${badgeClass}" title="${CAT_TITLE[cat]}">${CAT_LABEL[cat]}</span>`;
 
     // 眼睛按钮的语义随模式翻转,但对用户永远只有"可见/隐藏"两种呈现
     const eyeTooltip = !engineActive

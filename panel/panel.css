@@ -211,16 +211,17 @@ body.off .eye:hover { background: transparent; }
 .font-row.is-hidden .font-title { opacity: var(--specimen-dim); }
 body.off .font-title { opacity: .55; }
 
-/* 语系徽章:字形即分类 */
+/* 语系徽章:文字分类,安静胶囊,对比度满足 AA */
 .glyph-badge {
   justify-self: end;
-  min-width: 34px; height: 26px; padding: 0 8px;
+  height: 24px; padding: 0 9px;
   display: grid; place-items: center;
   border-radius: 999px;
   background: var(--surface-2);
-  font-size: 13px; line-height: 1; color: var(--muted);
+  font-size: 12px; line-height: 1; color: #a8a6b0;
+  letter-spacing: .04em;
+  white-space: nowrap;
 }
-.glyph-badge.lat { font-family: Georgia, serif; font-size: 12px; }
 
 .no-result { padding: 44px 0 30px; text-align: center; color: var(--muted); font-size: 13px; }
 
