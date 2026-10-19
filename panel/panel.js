@@ -32,6 +32,7 @@ const $btnInvert = document.getElementById('btnInvert');
 const $btnHideSel = document.getElementById('btnHideSel');
 const $btnShowSel = document.getElementById('btnShowSel');
 const $btnClearSel = document.getElementById('btnClearSel');
+const $btnResetDefaults = document.getElementById('btnResetDefaults');
 
 // 眼睛图标:可见=睁眼,隐藏=眼斜杠,无需读表头即可理解
 const EYE_ON = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>';
@@ -529,6 +530,41 @@ document.addEventListener('keydown', (e) => {
     $searchInput && $searchInput.focus();
   }
 });
+
+// 恢复默认:字体配置回到初始态(不动全局总开关)
+function restoreDefaults() {
+  fontMode = 'blacklist';
+  customHiddenFonts = [];
+  customAllowedFonts = [];
+  blockBuiltinChineseFonts = true;
+  blockOtherScripts = false;
+  selectedFonts = new Set();
+  if ($toggleOtherScripts) $toggleOtherScripts.checked = false;
+  saveState();
+  renderList();
+}
+
+// 恢复默认按钮:两步确认,防误触清空配置
+let resetConfirmTimer = null;
+function resetButtonIdle() {
+  if (!$btnResetDefaults) return;
+  $btnResetDefaults.classList.remove('confirm');
+  $btnResetDefaults.innerHTML = '<span aria-hidden="true">↺</span> 恢复默认';
+}
+if ($btnResetDefaults) {
+  $btnResetDefaults.addEventListener('click', () => {
+    if (!$btnResetDefaults.classList.contains('confirm')) {
+      $btnResetDefaults.classList.add('confirm');
+      $btnResetDefaults.textContent = '确认恢复？';
+      clearTimeout(resetConfirmTimer);
+      resetConfirmTimer = setTimeout(resetButtonIdle, 3000);
+      return;
+    }
+    clearTimeout(resetConfirmTimer);
+    resetButtonIdle();
+    restoreDefaults();
+  });
+}
 
 // 全局总开关:与 popup 共用 chrome.storage.local.globalShieldEnabled
 function applyShieldState(enabled) {

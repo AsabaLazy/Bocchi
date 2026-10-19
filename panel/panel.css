@@ -48,7 +48,7 @@ body.off .shield { color: var(--faint); }
 
 /* 状态胶囊 = 全局总开关:与 popup 共用 globalShieldEnabled */
 .status-pill {
-  margin-left: auto;
+  margin-left: 8px;
   display: flex; align-items: center; gap: 8px;
   font-size: 12px; color: var(--muted);
   padding: 5px 7px 5px 12px;
@@ -66,6 +66,21 @@ body.off .shield { color: var(--faint); }
 @keyframes breathe { 0%,100% { opacity:.45 } 50% { opacity:1 } }
 body.off .status-dot { background: var(--faint); animation: none; }
 body.off .status-text { color: var(--faint); }
+
+/* 恢复默认:两步确认(第一次点击变成"确认恢复？",3 秒内再点生效) */
+.reset-btn {
+  margin-left: auto;
+  font: inherit; font-size: 12px; color: var(--muted);
+  background: transparent; border: 1px solid var(--border);
+  border-radius: 999px; padding: 5px 12px; cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.reset-btn:hover { color: var(--text); border-color: var(--faint); }
+.reset-btn.confirm {
+  color: var(--accent); border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+.reset-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* 通用开关(总开关/语种chip共用) */
 .switch { position: relative; width: 30px; height: 17px; flex: none; display: inline-block; }
