@@ -29,17 +29,17 @@
       </label>
     </header>
 
-    <!-- 工具条:模式(点阵即语义) + 语种批处理(样字即内容) + 搜索 -->
+    <!-- 工具条:默认态(点阵即语义) + 语种批处理(样字即内容) + 搜索 -->
     <div class="toolbar">
-      <span class="ctl-label">模式</span>
-      <div class="mode-seg" id="modeControl" role="group" aria-label="可见性模式">
-        <button class="mode-btn" type="button" data-mode="blacklist" title="默认全部可见；只隐藏你点暗的字体">
+      <span class="ctl-label">默认</span>
+      <div class="mode-seg" id="modeControl" role="group" aria-label="字体默认状态">
+        <button class="mode-btn" type="button" data-mode="blacklist" title="默认全部可见；只有你隐藏的字体对网站探测不可见">
           <span class="mode-dots" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span>
-          黑名单
+          可见
         </button>
-        <button class="mode-btn" type="button" data-mode="whitelist" title="默认全部隐藏；只显示你点亮的字体">
+        <button class="mode-btn" type="button" data-mode="whitelist" title="默认全部隐藏；只有你放行的字体对网站可见">
           <span class="mode-dots" aria-hidden="true"><i></i><i></i><i></i><i></i><i class="on"></i><i class="on"></i></span>
-          白名单
+          隐藏
         </button>
       </div>
 
@@ -59,6 +59,19 @@
       <span class="font-count" id="fontCount"></span>
     </div>
 
+    <!-- 选择操作条:对勾选的行批量执行 -->
+    <div class="select-bar" id="selectBar">
+      <span class="sel-count" id="selCount">未选择</span>
+      <div class="sel-actions">
+        <button type="button" class="sel-btn" id="btnSelectAll">全选</button>
+        <button type="button" class="sel-btn" id="btnInvert">反选</button>
+        <span class="sel-sep" aria-hidden="true"></span>
+        <button type="button" class="sel-btn" id="btnHideSel" disabled>隐藏所选</button>
+        <button type="button" class="sel-btn" id="btnShowSel" disabled>显示所选</button>
+        <button type="button" class="sel-btn ghost" id="btnClearSel" disabled>清除</button>
+      </div>
+    </div>
+
     <!-- 比例条:可见/隐藏的统计视觉化 -->
     <div class="census" aria-live="polite">
       <div class="census-bar"><div class="census-vis" id="barVis"></div><div class="census-hid" id="barHid"></div></div>
@@ -71,6 +84,7 @@
     <!-- 列表 -->
     <main class="list-container">
       <div class="cols">
+        <div class="col col-select"><input type="checkbox" id="selectAllBox" aria-label="全选当前列表"></div>
         <div class="col sortable" id="headerToggle" role="button" tabindex="0" aria-sort="none" title="按状态排序">
           <span id="titleToggle">状态</span>
           <span class="sort-icon" id="iconToggle">↕</span>

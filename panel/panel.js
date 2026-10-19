@@ -25,6 +25,13 @@ const $barVis = document.getElementById('barVis');
 const $barHid = document.getElementById('barHid');
 const $nVis = document.getElementById('nVis');
 const $nHid = document.getElementById('nHid');
+const $selectAllBox = document.getElementById('selectAllBox');
+const $selCount = document.getElementById('selCount');
+const $btnSelectAll = document.getElementById('btnSelectAll');
+const $btnInvert = document.getElementById('btnInvert');
+const $btnHideSel = document.getElementById('btnHideSel');
+const $btnShowSel = document.getElementById('btnShowSel');
+const $btnClearSel = document.getElementById('btnClearSel');
 
 // 眼睛图标:可见=睁眼,隐藏=眼斜杠,无需读表头即可理解
 const EYE_ON = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>';
@@ -43,6 +50,7 @@ let blockOtherScripts = false;
 let fontMode = 'blacklist'; // 'blacklist' | 'whitelist'
 let searchQuery = '';
 let globalShieldEnabled = true; // 与 popup 共用的全局开关(chrome.storage.local.globalShieldEnabled)
+let selectedFonts = new Set(); // 选择集:仅用于批量操作,与每行的隐藏/可见状态互相独立
 
 // Sorting State
 let sortField = 'none'; // 'none' | 'toggle' | 'name' | 'category'
@@ -242,6 +250,7 @@ function renderList() {
 
   if (list.length === 0) {
     $fontRows.innerHTML = `<div class="no-result">${searchQuery ? '未找到匹配的字体' : '未检索到已安装字体'}</div>`;
+    updateSelectionUI();
     return;
   }
 
@@ -249,6 +258,7 @@ function renderList() {
     const checked = isFontChecked(f);
     const hidden = engineActive && isFontHidden(f);
     const cat = getFontCategory(f);
+    const selected = selectedFonts.has(f);
 
     const badgeClass = 'glyph-badge';
     const badgeHtml = `<span class="${badgeClass}" title="${CAT_TITLE[cat]}">${CAT_LABEL[cat]}</span>`;
@@ -258,10 +268,13 @@ function renderList() {
       ? '防护已全局关闭：当前没有任何字体被隐藏'
       : (hidden ? '已隐藏，点击恢复可见' : '网站可见，点击隐藏');
 
-    const rowAria = `${f}，${hidden ? '已对网站隐藏' : '网站可见'}，点击切换`;
+    const rowAria = `${f}，${hidden ? '已对网站隐藏' : '网站可见'}${selected ? '，已选中' : ''}，点击选择`;
 
     return `
-      <div class="font-row ${hidden ? 'is-hidden' : ''}" data-font="${escapeHtml(f)}" role="button" tabindex="0" aria-label="${rowAria}">
+      <div class="font-row ${hidden ? 'is-hidden' : ''} ${selected ? 'selected' : ''}" data-font="${escapeHtml(f)}" role="button" tabindex="0" aria-label="${rowAria}">
+        <div class="col-select">
+          <input type="checkbox" class="row-select" data-font="${escapeHtml(f)}" ${selected ? 'checked' : ''} aria-label="选择 ${escapeHtml(f)}">
+        </div>
         <button type="button" class="eye" data-font="${escapeHtml(f)}" title="${eyeTooltip}" aria-label="${eyeTooltip}">${hidden ? EYE_OFF : EYE_ON}</button>
         <div class="col-name">
           <span class="font-title" style="font-family: '${escapeHtml(f)}', sans-serif;">${escapeHtml(f)}</span>
@@ -272,6 +285,60 @@ function renderList() {
       </div>
     `;
   }).join('');
+
+  updateSelectionUI();
+}
+
+// 选择集 UI:计数、批量按钮可用性、表头全选/半选
+function updateSelectionUI() {
+  const n = selectedFonts.size;
+  if ($selCount) $selCount.textContent = n ? `已选 ${n} 项` : '未选择';
+  const actionsDisabled = n === 0 || !globalShieldEnabled;
+  if ($btnHideSel) $btnHideSel.disabled = actionsDisabled;
+  if ($btnShowSel) $btnShowSel.disabled = actionsDisabled;
+  if ($btnClearSel) $btnClearSel.disabled = n === 0;
+
+  const list = getProcessedFonts();
+  if ($selectAllBox) {
+    const selCount = list.filter(f => selectedFonts.has(f)).length;
+    $selectAllBox.disabled = list.length === 0 || !globalShieldEnabled;
+    $selectAllBox.checked = list.length > 0 && selCount === list.length;
+    $selectAllBox.indeterminate = selCount > 0 && selCount < list.length;
+  }
+}
+
+// 选择(不改变可见状态)
+function toggleSelection(fontName) {
+  if (!fontName) return;
+  if (selectedFonts.has(fontName)) selectedFonts.delete(fontName);
+  else selectedFonts.add(fontName);
+  // 就地更新,不重绘列表,保住键盘焦点
+  const row = [...$fontRows.querySelectorAll('.font-row')].find(r => r.dataset.font === fontName);
+  if (row) {
+    const cb = row.querySelector('.row-select');
+    const selected = selectedFonts.has(fontName);
+    row.classList.toggle('selected', selected);
+    if (cb) cb.checked = selected;
+  }
+  updateSelectionUI();
+}
+
+function selectAllFiltered() {
+  for (const f of getProcessedFonts()) selectedFonts.add(f);
+  renderList();
+}
+
+function invertFiltered() {
+  for (const f of getProcessedFonts()) {
+    if (selectedFonts.has(f)) selectedFonts.delete(f);
+    else selectedFonts.add(f);
+  }
+  renderList();
+}
+
+function clearSelection() {
+  selectedFonts = new Set();
+  renderList();
 }
 
 // Search input
@@ -294,6 +361,8 @@ if ($modeControl) {
     if (fontMode === 'whitelist' && customAllowedFonts.length === 0) {
       customAllowedFonts = allFonts.filter(f => !CHINESE_FONTS_REGEX.test(f));
     }
+    // 模式语义翻转后旧选择不再有意义,清空避免批量操作误伤
+    selectedFonts = new Set();
     saveState();
     renderList();
   });
@@ -358,22 +427,18 @@ document.querySelector('.cols').addEventListener('keydown', (e) => {
   col.click();
 });
 
-// Toggle font handler:整行或眼睛按钮均可点击(键盘 Enter/Space 同效),落库逻辑不变
-function toggleFont(fontName) {
-  if (!fontName || !globalShieldEnabled) return; // 全局关闭时不改配置,只读
-
+// 设置单个字体的真实可见状态(黑/白名单模式各自映射回原有存储语义)
+function setFontHidden(fontName, hidden) {
   const lower = fontName.toLowerCase();
-  const checked = !isFontChecked(fontName); // 点击 = 翻转当前状态
-
   if (fontMode === 'blacklist') {
-    if (checked) {
-      // Add to blacklist (hide)
+    if (hidden) {
+      // 加入黑名单(隐藏)
       if (!customHiddenFonts.some(f => f.toLowerCase() === lower)) {
         customHiddenFonts.push(fontName);
       }
       customAllowedFonts = customAllowedFonts.filter(f => f.toLowerCase() !== lower);
     } else {
-      // Remove from blacklist (allow)
+      // 移出黑名单(可见);被内建规则覆盖的需显式放行
       customHiddenFonts = customHiddenFonts.filter(f => f.toLowerCase() !== lower);
       if (CHINESE_FONTS_REGEX.test(fontName) || (blockOtherScripts && OTHER_SCRIPTS_REGEX.test(fontName))) {
         if (!customAllowedFonts.some(f => f.toLowerCase() === lower)) {
@@ -382,33 +447,71 @@ function toggleFont(fontName) {
       }
     }
   } else {
-    // Whitelist mode: checked = in whitelist (allowed)
-    if (checked) {
+    // 白名单模式: allowed 列表 = 可见集合
+    if (hidden) {
+      customAllowedFonts = customAllowedFonts.filter(f => f.toLowerCase() !== lower);
+    } else {
       if (!customAllowedFonts.some(f => f.toLowerCase() === lower)) {
         customAllowedFonts.push(fontName);
       }
-    } else {
-      customAllowedFonts = customAllowedFonts.filter(f => f.toLowerCase() !== lower);
     }
   }
+}
 
+// 单行眼睛:直接翻转可见状态
+function toggleFont(fontName) {
+  if (!fontName || !globalShieldEnabled) return; // 全局关闭时不改配置,只读
+  setFontHidden(fontName, !isFontHidden(fontName));
   saveState();
   renderList();
 }
 
+// 批量:隐藏/显示所选
+function applyToSelection(hidden) {
+  if (!globalShieldEnabled || selectedFonts.size === 0) return;
+  for (const fontName of selectedFonts) {
+    setFontHidden(fontName, hidden);
+  }
+  saveState();
+  renderList();
+}
+
+// 行内交互:眼睛=翻状态,其余区域=选择;复选框走 change
 $fontRows.addEventListener('click', (e) => {
+  if (e.target.closest('.row-select')) return; // 复选框由 change 处理
   const row = e.target.closest('.font-row');
   if (!row) return;
-  toggleFont(row.dataset.font);
+  if (e.target.closest('.eye')) toggleFont(row.dataset.font);
+  else toggleSelection(row.dataset.font);
+});
+
+$fontRows.addEventListener('change', (e) => {
+  const cb = e.target.closest('.row-select');
+  if (!cb) return;
+  toggleSelection(cb.dataset.font);
 });
 
 $fontRows.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' && e.key !== ' ') return;
+  if (e.target.closest('.eye, .row-select')) return; // 按钮/复选框自己处理按键
   const row = e.target.closest('.font-row');
   if (!row) return;
   e.preventDefault();
-  toggleFont(row.dataset.font);
+  toggleSelection(row.dataset.font);
 });
+
+// 选择操作条
+if ($btnSelectAll) $btnSelectAll.addEventListener('click', selectAllFiltered);
+if ($btnInvert) $btnInvert.addEventListener('click', invertFiltered);
+if ($btnHideSel) $btnHideSel.addEventListener('click', () => applyToSelection(true));
+if ($btnShowSel) $btnShowSel.addEventListener('click', () => applyToSelection(false));
+if ($btnClearSel) $btnClearSel.addEventListener('click', clearSelection);
+if ($selectAllBox) {
+  $selectAllBox.addEventListener('change', () => {
+    if ($selectAllBox.checked) selectAllFiltered();
+    else clearSelection();
+  });
+}
 
 // Toggle other minority scripts batch switch
 if ($toggleOtherScripts) {
