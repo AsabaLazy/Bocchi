@@ -74,6 +74,7 @@
   if (!Array.isArray(fontConfig.customAllowedFonts)) fontConfig.customAllowedFonts = [];
   if (typeof fontConfig.blockBuiltinChineseFonts !== 'boolean') fontConfig.blockBuiltinChineseFonts = true;
   if (typeof fontConfig.blockOtherScripts !== 'boolean') fontConfig.blockOtherScripts = false;
+  if (typeof fontConfig.blockSymbols !== 'boolean') fontConfig.blockSymbols = false;
   if (typeof fontConfig.fontMode !== 'string') fontConfig.fontMode = 'blacklist';
 
   /**
@@ -141,7 +142,10 @@
   const CHINESE_FONTS_REGEX = /(?:simsun|nsimsun|simhei|yahei|jhenghei|wenquanyi|pingfang|songti|kaiti|fangsong|dengxian|heiti|mingliu|pmingliu|st(?:heiti|kaiti|song|fangsong|xihei|zhongsong)|lisu|youyuan|biaukai|dfkai|source[ _-]?han|noto[ _-]?(?:sans|serif)?(?:[ _-]?mono)?[ _-]?(?:cjk|sc|tc|hk)|hiragino[ _-]?sans[ _-]?gb|misans|harmonyos|oppo|vivo|alipuhei|dingtalk|douyin|honor(?:[ _-]?sans)?|flyme|meizu|kingsoft|wps|micro[ _-]?hei|zen[ _-]?hei|fz[a-z0-9_-]*|founder|仓颉|华文|方正|汉仪|[\u4e00-\u9fa5])/i;
 
   // Other non-Latin world scripts regex (Arabic, Hebrew, Indic, Thai, ancient scripts, etc.)
-  const OTHER_SCRIPTS_REGEX = /(?:arabic|kufi|naskh|nastaliq|urdu|hebrew|amiri|aldhabi|scheherazade|devanagari|bengali|gurmukhi|gujarati|oriya|tamil|telugu|kannada|malayalam|sinhala|tibetan|thai|lao|khmer|myanmar|javanese|sundanese|balinese|batak|tagalog|ethiopic|adlam|bamum|bassa|coptic|tifinagh|vai|cuneiform|hieroglyph|runic|cherokee|ogham|canadian[ _-]?aboriginal|linear[ _-]?[ab]|math|symbol|emoji|d050000l|z003|standard[ _-]?symbols|syriac|thaana|georgian|armenian|glagolitic|samaritan|shavian|brahmi|kharoshthi|sharada|chakma|cham|grantha|kaithi|dogra|khojki|khudawadi|lepcha|mahajani|mandaic|manichaean|marchen|gondi|medefaidrin|meetei|mende|meroitic|miao|modi|mongolian|newa|phaistos|rejang|saurashtra|siddham|sompeng|syloti|tagbanwa|tai[ _-]?(?:le|viet|tham)|takri|wancho|tirhuta|ugaritic|warang|zanabazar)/i;
+  const OTHER_SCRIPTS_REGEX = /(?:arabic|kufi|naskh|nastaliq|urdu|hebrew|amiri|aldhabi|scheherazade|devanagari|bengali|gurmukhi|gujarati|oriya|tamil|telugu|kannada|malayalam|sinhala|tibetan|thai|lao|khmer|myanmar|javanese|sundanese|balinese|batak|tagalog|ethiopic|adlam|bamum|bassa|coptic|tifinagh|vai|cuneiform|hieroglyph|runic|cherokee|ogham|canadian[ _-]?aboriginal|linear[ _-]?[ab]|syriac|thaana|georgian|armenian|glagolitic|samaritan|shavian|brahmi|kharoshthi|sharada|chakma|cham|grantha|kaithi|dogra|khojki|khudawadi|lepcha|mahajani|mandaic|manichaean|marchen|gondi|medefaidrin|meetei|mende|meroitic|miao|modi|mongolian|newa|phaistos|rejang|saurashtra|siddham|sompeng|syloti|tagbanwa|tai[ _-]?(?:le|viet|tham)|takri|wancho|tirhuta|ugaritic|warang|zanabazar)/i;
+
+  // Symbol/dingbat fonts regex (its own category; no longer part of other-scripts)
+  const SYMBOLS_REGEX = /(?:math|symbol|emoji|d050000l|z003|standard[ _-]?symbols|wingdings|webdings|dingbats?)/i;
 
   const GENERIC_CSS_FAMILIES = new Set([
     'serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui',
@@ -196,6 +200,7 @@
       }
       if (fontConfig.blockBuiltinChineseFonts && CHINESE_FONTS_REGEX.test(fam)) return true;
       if (fontConfig.blockOtherScripts && OTHER_SCRIPTS_REGEX.test(fam)) return true;
+      if (fontConfig.blockSymbols && SYMBOLS_REGEX.test(fam)) return true;
       return false;
     });
   }
@@ -2026,6 +2031,7 @@
             cached.sig.blockBuiltin === fontConfig.blockBuiltinChineseFonts &&
             cached.sig.fontMode === fontConfig.fontMode &&
             cached.sig.blockOther === fontConfig.blockOtherScripts &&
+            cached.sig.blockSymbols === fontConfig.blockSymbols &&
             cached.sig.hiddenList === fontConfig.customHiddenFonts &&
             cached.sig.allowList === fontConfig.customAllowedFonts) {
           return cached.verdict;
@@ -2041,6 +2047,7 @@
             blockBuiltin: fontConfig.blockBuiltinChineseFonts,
             fontMode: fontConfig.fontMode,
             blockOther: fontConfig.blockOtherScripts,
+            blockSymbols: fontConfig.blockSymbols,
             hiddenList: fontConfig.customHiddenFonts,
             allowList: fontConfig.customAllowedFonts
           },
@@ -3130,6 +3137,9 @@
             if (typeof f.blockOtherScripts === 'boolean') {
               fontConfig.blockOtherScripts = f.blockOtherScripts;
             }
+            if (typeof f.blockSymbols === 'boolean') {
+              fontConfig.blockSymbols = f.blockSymbols;
+            }
             if (typeof f.fontProtection === 'boolean') {
               shieldConfig.fontProtection = f.fontProtection;
             }
@@ -3165,6 +3175,9 @@
             }
             if (typeof c.blockOtherScripts === 'boolean') {
               fontConfig.blockOtherScripts = c.blockOtherScripts;
+            }
+            if (typeof c.blockSymbols === 'boolean') {
+              fontConfig.blockSymbols = c.blockSymbols;
             }
           }
           // Bypass decisions may have changed; drop the per-window cache.

@@ -3,12 +3,17 @@
 // Shared regex for identifying CJK / domestic vendor fonts
 const CHINESE_FONTS_REGEX = /(?:simsun|nsimsun|simhei|yahei|jhenghei|wenquanyi|pingfang|songti|kaiti|fangsong|dengxian|heiti|mingliu|pmingliu|st(?:heiti|kaiti|song|fangsong|xihei|zhongsong)|lisu|youyuan|biaukai|dfkai|source[ _-]?han|noto[ _-]?(?:sans|serif)?(?:[ _-]?mono)?[ _-]?(?:cjk|sc|tc|hk)|hiragino[ _-]?sans[ _-]?gb|misans|harmonyos|oppo|vivo|alipuhei|dingtalk|douyin|honor(?:[ _-]?sans)?|flyme|meizu|kingsoft|wps|micro[ _-]?hei|zen[ _-]?hei|fz[a-z0-9_-]*|founder|仓颉|华文|方正|汉仪|[\u4e00-\u9fa5])/i;
 
-// Regex for identifying other non-Latin world scripts (Arabic, Hebrew, Indic, Thai, ancient scripts, symbols, etc.)
-const OTHER_SCRIPTS_REGEX = /(?:arabic|kufi|naskh|nastaliq|urdu|hebrew|amiri|aldhabi|scheherazade|devanagari|bengali|gurmukhi|gujarati|oriya|tamil|telugu|kannada|malayalam|sinhala|tibetan|thai|lao|khmer|myanmar|javanese|sundanese|balinese|batak|tagalog|ethiopic|adlam|bamum|bassa|coptic|tifinagh|vai|cuneiform|hieroglyph|runic|cherokee|ogham|canadian[ _-]?aboriginal|linear[ _-]?[ab]|math|symbol|emoji|d050000l|z003|standard[ _-]?symbols|syriac|thaana|georgian|armenian|glagolitic|samaritan|shavian|brahmi|kharoshthi|sharada|chakma|cham|grantha|kaithi|dogra|khojki|khudawadi|lepcha|mahajani|mandaic|manichaean|marchen|gondi|medefaidrin|meetei|mende|meroitic|miao|modi|mongolian|newa|phaistos|rejang|saurashtra|siddham|sompeng|syloti|tagbanwa|tai[ _-]?(?:le|viet|tham)|takri|wancho|tirhuta|ugaritic|warang|zanabazar)/i;
+// Regex for identifying other non-Latin world scripts (Arabic, Hebrew, Indic, Thai, ancient scripts, etc.)
+const OTHER_SCRIPTS_REGEX = /(?:arabic|kufi|naskh|nastaliq|urdu|hebrew|amiri|aldhabi|scheherazade|devanagari|bengali|gurmukhi|gujarati|oriya|tamil|telugu|kannada|malayalam|sinhala|tibetan|thai|lao|khmer|myanmar|javanese|sundanese|balinese|batak|tagalog|ethiopic|adlam|bamum|bassa|coptic|tifinagh|vai|cuneiform|hieroglyph|runic|cherokee|ogham|canadian[ _-]?aboriginal|linear[ _-]?[ab]|syriac|thaana|georgian|armenian|glagolitic|samaritan|shavian|brahmi|kharoshthi|sharada|chakma|cham|grantha|kaithi|dogra|khojki|khudawadi|lepcha|mahajani|mandaic|manichaean|marchen|gondi|medefaidrin|meetei|mende|meroitic|miao|modi|mongolian|newa|phaistos|rejang|saurashtra|siddham|sompeng|syloti|tagbanwa|tai[ _-]?(?:le|viet|tham)|takri|wancho|tirhuta|ugaritic|warang|zanabazar)/i;
+
+// Regex for identifying symbol/dingbat fonts (independent category)
+const SYMBOLS_REGEX = /(?:math|symbol|emoji|d050000l|z003|standard[ _-]?symbols|wingdings|webdings|dingbats?)/i;
 
 // DOM Elements
 const $modeControl = document.getElementById('modeControl');
 const $toggleOtherScripts = document.getElementById('toggleOtherScripts');
+const $toggleSymbols = document.getElementById('toggleSymbols');
+const $symbolChip = document.getElementById('symbolChip');
 const $scriptChip = document.getElementById('scriptChip');
 const $searchInput = document.getElementById('searchInput');
 const $fontCount = document.getElementById('fontCount');
@@ -39,8 +44,8 @@ const EYE_ON = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stro
 const EYE_OFF = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><path d="M4 4l16 16"/></svg>';
 
 // 语系徽章:分类识别用文字(图标适合动作,分类需要词汇)
-const CAT_LABEL = { cjk: '中文', latin: '西文', other: '小语种' };
-const CAT_TITLE = { cjk: '中文字体', latin: '西文字体', other: '其他语系' };
+const CAT_LABEL = { cjk: '中文', latin: '西文', other: '小语种', symbol: '符号' };
+const CAT_TITLE = { cjk: '中文字体', latin: '西文字体', other: '其他语系', symbol: '符号字体' };
 
 // State
 let allFonts = [];
@@ -48,6 +53,7 @@ let customHiddenFonts = [];
 let customAllowedFonts = [];
 let blockBuiltinChineseFonts = true;
 let blockOtherScripts = false;
+let blockSymbols = false;
 let fontMode = 'blacklist'; // 'blacklist' | 'whitelist'
 let searchQuery = '';
 let globalShieldEnabled = true; // 与 popup 共用的全局开关(chrome.storage.local.globalShieldEnabled)
@@ -59,6 +65,7 @@ let sortOrder = 'default';
 
 function getFontCategory(name) {
   if (CHINESE_FONTS_REGEX.test(name)) return 'cjk';
+  if (SYMBOLS_REGEX.test(name)) return 'symbol';
   if (OTHER_SCRIPTS_REGEX.test(name)) return 'other';
   return 'latin';
 }
@@ -82,6 +89,7 @@ function isFontChecked(name) {
     }
     if (blockBuiltinChineseFonts && CHINESE_FONTS_REGEX.test(name)) return true;
     if (blockOtherScripts && OTHER_SCRIPTS_REGEX.test(name)) return true;
+    if (blockSymbols && SYMBOLS_REGEX.test(name)) return true;
     return false;
   } else {
     // 白名单模式：勾选 = 加入白名单（仅放行勾选字体，不被隐藏）
@@ -104,7 +112,8 @@ function saveState() {
     customHiddenFonts,
     customAllowedFonts,
     blockBuiltinChineseFonts,
-    blockOtherScripts
+    blockOtherScripts,
+    blockSymbols
   });
 }
 
@@ -128,6 +137,7 @@ function getProcessedFonts() {
       if (searchQuery === '中文' && cat === 'cjk') return true;
       if (searchQuery === '西文' && cat === 'latin') return true;
       if ((searchQuery === '其他' || searchQuery === '其他语种' || searchQuery === '多语种' || searchQuery === '小语种' || searchQuery === '冷门') && cat === 'other') return true;
+      if ((searchQuery === '符号' || searchQuery === 'symbol' || searchQuery === 'symbols') && cat === 'symbol') return true;
       return false;
     });
   }
@@ -156,10 +166,11 @@ function getProcessedFonts() {
       const catA = getFontCategory(a);
       const catB = getFontCategory(b);
       const rank = {
-        'cjk-first': { cjk: 0, latin: 1, other: 2 },
-        'latin-first': { latin: 0, cjk: 1, other: 2 },
-        'other-first': { other: 0, cjk: 1, latin: 2 }
-      }[sortOrder] || { cjk: 0, latin: 1, other: 2 };
+        'cjk-first': { cjk: 0, latin: 1, other: 2, symbol: 3 },
+        'latin-first': { latin: 0, cjk: 1, other: 2, symbol: 3 },
+        'other-first': { other: 0, cjk: 1, latin: 2, symbol: 3 },
+        'symbol-first': { symbol: 0, cjk: 1, latin: 2, other: 3 }
+      }[sortOrder] || { cjk: 0, latin: 1, other: 2, symbol: 3 };
 
       const diff = rank[catA] - rank[catB];
       if (diff !== 0) return diff;
@@ -225,6 +236,9 @@ function renderList() {
   // 语种批处理 chip 状态
   if ($scriptChip) {
     $scriptChip.classList.toggle('on', blockOtherScripts);
+  }
+  if ($symbolChip) {
+    $symbolChip.classList.toggle('on', blockSymbols);
   }
 
   // 比例条:全库可见/隐藏统计(全局关闭时一切都是"可见"的诚实呈现)
@@ -411,6 +425,8 @@ if ($headerCategory) {
       sortOrder = 'latin-first';
     } else if (sortOrder === 'latin-first') {
       sortOrder = 'other-first';
+    } else if (sortOrder === 'other-first') {
+      sortOrder = 'symbol-first';
     } else {
       sortField = 'none';
       sortOrder = 'default';
@@ -523,6 +539,15 @@ if ($toggleOtherScripts) {
   });
 }
 
+// Toggle symbol fonts batch switch
+if ($toggleSymbols) {
+  $toggleSymbols.addEventListener('change', () => {
+    blockSymbols = $toggleSymbols.checked;
+    saveState();
+    renderList();
+  });
+}
+
 // '/' 聚焦搜索
 document.addEventListener('keydown', (e) => {
   if (e.key === '/' && document.activeElement !== $searchInput) {
@@ -538,8 +563,10 @@ function restoreDefaults() {
   customAllowedFonts = [];
   blockBuiltinChineseFonts = true;
   blockOtherScripts = false;
+  blockSymbols = false;
   selectedFonts = new Set();
   if ($toggleOtherScripts) $toggleOtherScripts.checked = false;
+  if ($toggleSymbols) $toggleSymbols.checked = false;
   saveState();
   renderList();
 }
@@ -614,6 +641,13 @@ chrome.storage.onChanged.addListener((changes, area) => {
       }
       changed = true;
     }
+    if (changes.blockSymbols) {
+      blockSymbols = typeof changes.blockSymbols.newValue === 'boolean' ? changes.blockSymbols.newValue : false;
+      if ($toggleSymbols) {
+        $toggleSymbols.checked = blockSymbols;
+      }
+      changed = true;
+    }
     if (changes.globalShieldEnabled) {
       applyShieldState(changes.globalShieldEnabled.newValue !== false);
       changed = true;
@@ -643,14 +677,18 @@ async function init() {
 
   allFonts.sort((a, b) => a.localeCompare(b));
 
-  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'fontMode', 'globalShieldEnabled'], (res) => {
+  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled'], (res) => {
     fontMode = res.fontMode === 'whitelist' ? 'whitelist' : 'blacklist';
     customHiddenFonts = Array.isArray(res.customHiddenFonts) ? res.customHiddenFonts : [];
     customAllowedFonts = Array.isArray(res.customAllowedFonts) ? res.customAllowedFonts : [];
     blockBuiltinChineseFonts = typeof res.blockBuiltinChineseFonts === 'boolean' ? res.blockBuiltinChineseFonts : true;
     blockOtherScripts = typeof res.blockOtherScripts === 'boolean' ? res.blockOtherScripts : false;
+    blockSymbols = typeof res.blockSymbols === 'boolean' ? res.blockSymbols : false;
     if ($toggleOtherScripts) {
       $toggleOtherScripts.checked = blockOtherScripts;
+    }
+    if ($toggleSymbols) {
+      $toggleSymbols.checked = blockSymbols;
     }
     applyShieldState(res.globalShieldEnabled !== false);
     renderList();

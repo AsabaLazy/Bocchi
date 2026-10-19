@@ -40,7 +40,7 @@
 
   const ALL_KEYS = [
     'timezone', 'targetTimezone',
-    'customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'fontMode', 'blockOtherScripts',
+    'customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'fontMode', 'blockOtherScripts', 'blockSymbols',
     'globalShieldEnabled', 'siteBypassList',
     'canvasProtection', 'webrtcProtection', 'audioProtection', 'timezoneProtection', 'hardwareProtection', 'fontProtection'
   ];
@@ -49,7 +49,7 @@
     'globalShieldEnabled', 'siteBypassList',
     'canvasProtection', 'webrtcProtection', 'audioProtection',
     'timezoneProtection', 'hardwareProtection', 'fontProtection',
-    'blockOtherScripts'
+    'blockOtherScripts', 'blockSymbols'
   ];
 
   function normalizeDomain(d) {
@@ -121,6 +121,7 @@
       blockBuiltin: res && typeof res.blockBuiltinChineseFonts === 'boolean' ? res.blockBuiltinChineseFonts : true,
       fontMode: res && typeof res.fontMode === 'string' ? res.fontMode : 'blacklist',
       blockOtherScripts: res && typeof res.blockOtherScripts === 'boolean' ? res.blockOtherScripts : false,
+      blockSymbols: res && typeof res.blockSymbols === 'boolean' ? res.blockSymbols : false,
       fontProtection: res && typeof res.fontProtection === 'boolean' ? res.fontProtection : true
     };
   }
@@ -137,7 +138,8 @@
       timezoneProtection: res ? res.timezoneProtection !== false : true,
       hardwareProtection: res ? res.hardwareProtection !== false : true,
       fontProtection: res ? res.fontProtection !== false : true,
-      blockOtherScripts: res ? !!res.blockOtherScripts : false
+      blockOtherScripts: res ? !!res.blockOtherScripts : false,
+      blockSymbols: res ? !!res.blockSymbols : false
     };
   }
 
@@ -210,8 +212,8 @@
           sendPayload({ tz: newTz });
         }
       }
-      if (changes.customHiddenFonts || changes.customAllowedFonts || changes.blockBuiltinChineseFonts || changes.fontMode || changes.blockOtherScripts || changes.fontProtection) {
-        chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'fontMode', 'blockOtherScripts', 'fontProtection'], (res) => {
+      if (changes.customHiddenFonts || changes.customAllowedFonts || changes.blockBuiltinChineseFonts || changes.fontMode || changes.blockOtherScripts || changes.blockSymbols || changes.fontProtection) {
+        chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'fontMode', 'blockOtherScripts', 'blockSymbols', 'fontProtection'], (res) => {
           sendPayload({ fonts: buildFontsDetail(res) });
         });
       }

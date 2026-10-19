@@ -2515,36 +2515,49 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     assert(!allFontsEnabled.some(f => f.family === 'SimSun'), 'With fontProtection=true, SimSun must be filtered from queryLocalFonts');
     console.log('✓ Independent feature toggles correctly control individual modules.');
 
-    // 9.4 Other Minority Scripts Batch Toggle (blockOtherScripts)
+    // 9.4 Other Minority Scripts & Symbol Fonts Batch Toggles (blockOtherScripts / blockSymbols)
     const winOther = createMockWindow('fonts-test.com', 'Linux x86_64');
     winOther.queryLocalFonts = function() {
       return Promise.resolve([
         { family: 'Arial', fullName: 'Arial Regular', postscriptName: 'ArialMT' },
         { family: 'Noto Sans Arabic', fullName: 'Noto Sans Arabic Regular', postscriptName: 'NotoSansArabic' },
         { family: 'Amiri', fullName: 'Amiri Regular', postscriptName: 'Amiri-Regular' },
+        { family: 'Symbola', fullName: 'Symbola', postscriptName: 'Symbola' },
+        { family: 'Noto Sans Symbols 2', fullName: 'Noto Sans Symbols 2', postscriptName: 'NotoSansSymbols2' },
         { family: 'SimSun', fullName: 'SimSun Regular', postscriptName: 'SimSun' }
       ]);
     };
     vm.runInContext(stealthCode, vm.createContext(winOther));
 
-    // Default: blockOtherScripts is false
+    // Default: both batch toggles are false
     const fontsDefault = await winOther.queryLocalFonts();
     assert(fontsDefault.some(f => f.family === 'Noto Sans Arabic'), 'By default, Noto Sans Arabic must NOT be filtered');
     assert(fontsDefault.some(f => f.family === 'Amiri'), 'By default, Amiri must NOT be filtered');
+    assert(fontsDefault.some(f => f.family === 'Symbola'), 'By default, Symbola must NOT be filtered');
     assert(!fontsDefault.some(f => f.family === 'SimSun'), 'SimSun must be filtered by default');
 
-    // Turn ON blockOtherScripts
+    // Turn ON blockOtherScripts only: scripts are hidden, symbols must NOT be
     driveConfig(winOther, { cfg: { blockOtherScripts: true } });
     const fontsBlocked = await winOther.queryLocalFonts();
     assert(!fontsBlocked.some(f => f.family === 'Noto Sans Arabic'), 'When blockOtherScripts=true, Noto Sans Arabic must be filtered');
     assert(!fontsBlocked.some(f => f.family === 'Amiri'), 'When blockOtherScripts=true, Amiri must be filtered');
+    assert(fontsBlocked.some(f => f.family === 'Symbola'), 'Symbols are an independent category: blockOtherScripts must NOT filter Symbola');
+    assert(fontsBlocked.some(f => f.family === 'Noto Sans Symbols 2'), 'Symbols are an independent category: blockOtherScripts must NOT filter Noto Sans Symbols 2');
     assert(fontsBlocked.some(f => f.family === 'Arial'), 'Standard Latin font Arial must still be retained');
 
-    // Turn OFF blockOtherScripts
-    driveConfig(winOther, { cfg: { blockOtherScripts: false } });
+    // Turn ON blockSymbols: symbol fonts are hidden independently
+    driveConfig(winOther, { cfg: { blockSymbols: true } });
+    const fontsSymbolsBlocked = await winOther.queryLocalFonts();
+    assert(!fontsSymbolsBlocked.some(f => f.family === 'Symbola'), 'When blockSymbols=true, Symbola must be filtered');
+    assert(!fontsSymbolsBlocked.some(f => f.family === 'Noto Sans Symbols 2'), 'When blockSymbols=true, Noto Sans Symbols 2 must be filtered');
+    assert(fontsSymbolsBlocked.some(f => f.family === 'Arial'), 'Standard Latin font Arial must still be retained');
+
+    // Turn both OFF: everything is restored
+    driveConfig(winOther, { cfg: { blockOtherScripts: false, blockSymbols: false } });
     const fontsRestored = await winOther.queryLocalFonts();
     assert(fontsRestored.some(f => f.family === 'Noto Sans Arabic'), 'When blockOtherScripts=false, Noto Sans Arabic must be restored');
-    console.log('✓ Batch minority scripts toggle (blockOtherScripts) successfully filters and restores non-Latin fonts.\n');
+    assert(fontsRestored.some(f => f.family === 'Symbola'), 'When blockSymbols=false, Symbola must be restored');
+    console.log('✓ Batch minority scripts and symbol toggles filter independently (blockOtherScripts does not hide symbols).\n');
 
     // 10. Regression: v1.0.1 security & correctness fixes
     console.log('[Test 10] Validating Regression: v1.0.1 security & correctness fixes...');
