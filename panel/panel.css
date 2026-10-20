@@ -37,6 +37,61 @@ body {
 
 .shell { max-width: 860px; margin: 0 auto; padding: 28px 24px 60px; }
 
+/* ───────────────── 设置页布局:侧栏 + 内容区 ───────────────── */
+
+.settings-shell { max-width: 1080px; }
+
+.settings-body {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 26px;
+  align-items: start;
+  margin-top: 6px;
+}
+
+.settings-nav {
+  position: sticky;
+  top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nav-item {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; text-align: left;
+  font: inherit; font-size: 13px; color: var(--muted);
+  background: transparent; border: 0; border-radius: var(--radius-s);
+  padding: 9px 12px; cursor: pointer;
+  transition: color .15s, background .15s;
+}
+.nav-item:hover { color: var(--text); background: var(--surface); }
+.nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.nav-item[aria-current="page"] {
+  color: var(--text); background: var(--surface);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.nav-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }
+.nav-dot.on { background: var(--accent); }
+
+.settings-content { min-width: 0; }
+
+.view-head {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 4px 0 18px;
+}
+.view-head h2 { font-size: 17px; font-weight: 650; letter-spacing: .005em; }
+.view-head p { font-size: 12.5px; color: var(--muted); margin-top: 4px; max-width: 58ch; }
+.view-head .switch { margin-left: 10px; margin-top: 3px; flex: none; }
+.view-head .reset-btn { margin-top: 1px; }
+.view-note { font-size: 12px; color: var(--faint); padding: 4px 0 10px; }
+
+@media (max-width: 760px) {
+  .settings-body { grid-template-columns: 1fr; gap: 12px; }
+  .settings-nav { position: static; flex-direction: row; overflow-x: auto; padding-bottom: 6px; }
+  .nav-item { width: auto; white-space: nowrap; }
+  .nav-item[aria-current="page"] { box-shadow: inset 0 -2px 0 var(--accent); }
+}
+
 /* ───────────────── 页头 ───────────────── */
 
 .masthead { display: flex; align-items: center; gap: 12px; padding-bottom: 18px; }
@@ -221,7 +276,7 @@ body.off input[type="checkbox"].row-select { opacity: .4; pointer-events: none; 
 .font-row {
   display: grid; grid-template-columns: 36px 48px 1fr 84px; gap: 8px;
   align-items: center;
-  padding: 8px 10px;
+  padding: 10px 10px;
   border-bottom: 1px solid var(--border-soft);
   cursor: pointer;
   transition: background .12s;

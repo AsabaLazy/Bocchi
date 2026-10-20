@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Bocchi · 字体可见性</title>
+  <title>Bocchi · 设置</title>
   <link rel="stylesheet" href="panel.css">
 </head>
 <body>
-  <div class="shell">
+  <div class="shell settings-shell">
 
     <!-- 页头:品牌锚点 + 全局总开关(与 popup 共用 globalShieldEnabled) -->
     <header class="masthead">
@@ -17,11 +17,8 @@
       </svg>
       <div class="brand">
         <div class="brand-name">Bocchi Privacy Shield</div>
-        <div class="brand-sub">字体可见性控制</div>
+        <div class="brand-sub">隐私防护设置</div>
       </div>
-      <button type="button" class="reset-btn" id="btnResetDefaults" title="恢复字体设置默认值：默认可见、隐藏内置中文字体、不隐藏冷门小语种和符号">
-        <span aria-hidden="true">↺</span> 恢复默认
-      </button>
       <label class="status-pill" id="statusPill" title="扩展全局开关：关闭后所有站点不再隐藏任何字体">
         <span class="status-dot" aria-hidden="true"></span>
         <span class="status-text" id="statusText">防护运行中</span>
@@ -32,87 +29,208 @@
       </label>
     </header>
 
-    <!-- 工具条:默认态(点阵即语义) + 语种批处理(样字即内容) + 搜索 -->
-    <div class="toolbar">
-      <span class="ctl-label">默认</span>
-      <div class="mode-seg" id="modeControl" role="group" aria-label="字体默认状态">
-        <button class="mode-btn" type="button" data-mode="blacklist" title="默认全部可见；只有你隐藏的字体对网站探测不可见">
-          <span class="mode-dots" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span>
-          可见
+    <div class="settings-body">
+      <!-- 左侧模块导航 -->
+      <nav class="settings-nav" aria-label="设置模块">
+        <button type="button" class="nav-item" data-view="fonts" aria-current="page">
+          <span class="nav-dot" data-key="fontProtection" aria-hidden="true"></span>字体
         </button>
-        <button class="mode-btn" type="button" data-mode="whitelist" title="默认全部隐藏；只有你放行的字体对网站可见">
-          <span class="mode-dots" aria-hidden="true"><i></i><i></i><i></i><i></i><i class="on"></i><i class="on"></i></span>
-          隐藏
+        <button type="button" class="nav-item" data-view="canvas">
+          <span class="nav-dot" data-key="canvasProtection" aria-hidden="true"></span>Canvas &amp; WebGL
         </button>
-      </div>
+        <button type="button" class="nav-item" data-view="audio">
+          <span class="nav-dot" data-key="audioProtection" aria-hidden="true"></span>音频
+        </button>
+        <button type="button" class="nav-item" data-view="webrtc">
+          <span class="nav-dot" data-key="webrtcProtection" aria-hidden="true"></span>WebRTC
+        </button>
+        <button type="button" class="nav-item" data-view="timezone">
+          <span class="nav-dot" data-key="timezoneProtection" aria-hidden="true"></span>时区
+        </button>
+        <button type="button" class="nav-item" data-view="hardware">
+          <span class="nav-dot" data-key="hardwareProtection" aria-hidden="true"></span>硬件指纹
+        </button>
+      </nav>
 
-      <label class="script-chip" id="scriptChip" title="一键隐藏阿拉伯文、天城文、泰文等冷门小语种字体（字体照常渲染，仅对网站的字体探测不可见）">
-        <span class="script-glyphs" aria-hidden="true"><i>أ</i><i>अ</i><i>ก</i></span>
-        <span class="switch">
-          <input type="checkbox" id="toggleOtherScripts" aria-label="冷门小语种隐藏">
-          <i></i>
-        </span>
-      </label>
+      <!-- 右侧内容区 -->
+      <main class="settings-content">
 
-      <label class="script-chip" id="symbolChip" title="一键隐藏数学、符号、emoji 等符号字体（字体照常渲染，仅对网站的字体探测不可见）">
-        <span class="script-glyphs" aria-hidden="true"><i>✳</i><i>☯</i><i>∑</i></span>
-        <span class="switch">
-          <input type="checkbox" id="toggleSymbols" aria-label="符号字体隐藏">
-          <i></i>
-        </span>
-      </label>
+        <!-- ═════════ 字体模块 ═════════ -->
+        <section class="view" id="view-fonts" data-view="fonts">
+          <div class="view-head">
+            <div>
+              <h2>字体</h2>
+              <p>隐藏指定字体对网站探测不可见。字体照常渲染，只影响枚举与测量。</p>
+            </div>
+            <button type="button" class="reset-btn" id="btnResetDefaults" title="恢复字体设置默认值：默认可见、隐藏内置中文字体、不隐藏冷门小语种和符号">
+              <span aria-hidden="true">↺</span> 恢复默认
+            </button>
+            <label class="switch" title="字体探测防御总开关">
+              <input type="checkbox" id="fontProtection" checked aria-label="字体探测防御">
+              <i></i>
+            </label>
+          </div>
 
-      <label class="search">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-        <input type="text" id="searchInput" class="search-input" placeholder="搜索字体…" spellcheck="false" autocomplete="off">
-        <span class="kbd">/</span>
-      </label>
-      <span class="font-count" id="fontCount"></span>
+          <!-- 工具条:默认态(点阵即语义) + 语种批处理(样字即内容) + 搜索 -->
+          <div class="toolbar">
+            <span class="ctl-label">默认</span>
+            <div class="mode-seg" id="modeControl" role="group" aria-label="字体默认状态">
+              <button class="mode-btn" type="button" data-mode="blacklist" title="默认全部可见；只有你隐藏的字体对网站探测不可见">
+                <span class="mode-dots" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span>
+                可见
+              </button>
+              <button class="mode-btn" type="button" data-mode="whitelist" title="默认全部隐藏；只有你放行的字体对网站可见">
+                <span class="mode-dots" aria-hidden="true"><i></i><i></i><i></i><i></i><i class="on"></i><i class="on"></i></span>
+                隐藏
+              </button>
+            </div>
+
+            <label class="script-chip" id="scriptChip" title="一键隐藏阿拉伯文、天城文、泰文等冷门小语种字体（字体照常渲染，仅对网站的字体探测不可见）">
+              <span class="script-glyphs" aria-hidden="true"><i>أ</i><i>अ</i><i>ก</i></span>
+              <span class="switch">
+                <input type="checkbox" id="toggleOtherScripts" aria-label="冷门小语种隐藏">
+                <i></i>
+              </span>
+            </label>
+
+            <label class="script-chip" id="symbolChip" title="一键隐藏数学、符号、emoji 等符号字体（字体照常渲染，仅对网站的字体探测不可见）">
+              <span class="script-glyphs" aria-hidden="true"><i>✳</i><i>☯</i><i>∑</i></span>
+              <span class="switch">
+                <input type="checkbox" id="toggleSymbols" aria-label="符号字体隐藏">
+                <i></i>
+              </span>
+            </label>
+
+            <label class="search">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+              <input type="text" id="searchInput" class="search-input" placeholder="搜索字体…" spellcheck="false" autocomplete="off">
+              <span class="kbd">/</span>
+            </label>
+            <span class="font-count" id="fontCount"></span>
+          </div>
+
+          <!-- 选择操作条 -->
+          <div class="select-bar" id="selectBar">
+            <span class="sel-count" id="selCount">未选择</span>
+            <div class="sel-actions">
+              <button type="button" class="sel-btn" id="btnSelectAll">全选</button>
+              <button type="button" class="sel-btn" id="btnInvert">反选</button>
+              <span class="sel-sep" aria-hidden="true"></span>
+              <button type="button" class="sel-btn" id="btnHideSel" disabled>隐藏所选</button>
+              <button type="button" class="sel-btn" id="btnShowSel" disabled>显示所选</button>
+              <button type="button" class="sel-btn ghost" id="btnClearSel" disabled>清除</button>
+            </div>
+          </div>
+
+          <!-- 比例条 -->
+          <div class="census" aria-live="polite">
+            <div class="census-bar"><div class="census-vis" id="barVis"></div><div class="census-hid" id="barHid"></div></div>
+            <div class="census-legend">
+              <span class="cell" id="nVisCell"><b id="nVis">0</b>&nbsp;可见</span>
+              <span class="cell hid" id="nHidCell"><b id="nHid">0</b>&nbsp;隐藏</span>
+            </div>
+          </div>
+
+          <!-- 列表 -->
+          <div class="list-container">
+            <div class="cols">
+              <div class="col col-select"><input type="checkbox" id="selectAllBox" aria-label="全选当前列表"></div>
+              <div class="col sortable" id="headerToggle" role="button" tabindex="0" aria-sort="none" title="按状态排序">
+                <span id="titleToggle">状态</span>
+                <span class="sort-icon" id="iconToggle">↕</span>
+              </div>
+              <div class="col sortable col-name" id="headerName" role="button" tabindex="0" aria-sort="none" title="按名称 A-Z 排序">
+                <span>名称</span>
+                <span class="sort-icon" id="iconName">↕</span>
+              </div>
+              <div class="col sortable col-badge" id="headerCategory" role="button" tabindex="0" aria-sort="none" title="按类型排序">
+                <span>类型</span>
+                <span class="sort-icon" id="iconCategory">↕</span>
+              </div>
+            </div>
+            <div id="fontRows" class="font-rows">
+              <div class="no-result">正在加载底层字体库…</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ═════════ Canvas & WebGL ═════════ -->
+        <section class="view" id="view-canvas" data-view="canvas" hidden>
+          <div class="view-head">
+            <div>
+              <h2>Canvas &amp; WebGL</h2>
+              <p>2D/3D 画布及 WebGPU 微扰动注入与动态降噪，让每个页面加载的指纹互不相同。</p>
+            </div>
+            <label class="switch" title="Canvas & WebGL 脱敏开关">
+              <input type="checkbox" id="canvasProtection" checked aria-label="Canvas & WebGL 脱敏">
+              <i></i>
+            </label>
+          </div>
+          <p class="view-note">此模块无需额外配置。关闭后画布将返回真实像素，可能被用于跨站关联。</p>
+        </section>
+
+        <!-- ═════════ 音频 ═════════ -->
+        <section class="view" id="view-audio" data-view="audio" hidden>
+          <div class="view-head">
+            <div>
+              <h2>音频</h2>
+              <p>频域分析防探针与动态振幅微扰脱敏，干扰 AudioContext 指纹采集。</p>
+            </div>
+            <label class="switch" title="音频脱敏开关">
+              <input type="checkbox" id="audioProtection" checked aria-label="音频脱敏">
+              <i></i>
+            </label>
+          </div>
+          <p class="view-note">此模块无需额外配置。关闭后音频指纹将恢复原始值。</p>
+        </section>
+
+        <!-- ═════════ WebRTC ═════════ -->
+        <section class="view" id="view-webrtc" data-view="webrtc" hidden>
+          <div class="view-head">
+            <div>
+              <h2>WebRTC</h2>
+              <p>代理 UDP 流量并抑制私网 IPv4/mDNS 泄漏，防止真实网络拓扑暴露。</p>
+            </div>
+            <label class="switch" title="WebRTC 隐私隔离开关">
+              <input type="checkbox" id="webrtcProtection" checked aria-label="WebRTC 隐私隔离">
+              <i></i>
+            </label>
+          </div>
+          <p class="view-note">此模块无需额外配置。关闭后 WebRTC 将按浏览器默认策略工作。</p>
+        </section>
+
+        <!-- ═════════ 时区 ═════════ -->
+        <section class="view" id="view-timezone" data-view="timezone" hidden>
+          <div class="view-head">
+            <div>
+              <h2>时区</h2>
+              <p>按出站 IP 自动对齐 Date / Intl 本地化参数，消除时区与网络出口的矛盾。</p>
+            </div>
+            <label class="switch" title="动态时区对齐开关">
+              <input type="checkbox" id="timezoneProtection" checked aria-label="动态时区对齐">
+              <i></i>
+            </label>
+          </div>
+          <p class="view-note" id="tzInfo">当前生效时区：读取中…</p>
+        </section>
+
+        <!-- ═════════ 硬件指纹 ═════════ -->
+        <section class="view" id="view-hardware" data-view="hardware" hidden>
+          <div class="view-head">
+            <div>
+              <h2>硬件指纹</h2>
+              <p>规范化 CPU、内存、并发规格与 GPU 画像，降低设备唯一性。</p>
+            </div>
+            <label class="switch" title="硬件指纹混淆开关">
+              <input type="checkbox" id="hardwareProtection" checked aria-label="硬件指纹混淆">
+              <i></i>
+            </label>
+          </div>
+          <p class="view-note">此模块无需额外配置。关闭后硬件信息将返回真实值。</p>
+        </section>
+
+      </main>
     </div>
-
-    <!-- 选择操作条:对勾选的行批量执行 -->
-    <div class="select-bar" id="selectBar">
-      <span class="sel-count" id="selCount">未选择</span>
-      <div class="sel-actions">
-        <button type="button" class="sel-btn" id="btnSelectAll">全选</button>
-        <button type="button" class="sel-btn" id="btnInvert">反选</button>
-        <span class="sel-sep" aria-hidden="true"></span>
-        <button type="button" class="sel-btn" id="btnHideSel" disabled>隐藏所选</button>
-        <button type="button" class="sel-btn" id="btnShowSel" disabled>显示所选</button>
-        <button type="button" class="sel-btn ghost" id="btnClearSel" disabled>清除</button>
-      </div>
-    </div>
-
-    <!-- 比例条:可见/隐藏的统计视觉化 -->
-    <div class="census" aria-live="polite">
-      <div class="census-bar"><div class="census-vis" id="barVis"></div><div class="census-hid" id="barHid"></div></div>
-      <div class="census-legend">
-        <span class="cell" id="nVisCell"><b id="nVis">0</b>&nbsp;可见</span>
-        <span class="cell hid" id="nHidCell"><b id="nHid">0</b>&nbsp;隐藏</span>
-      </div>
-    </div>
-
-    <!-- 列表 -->
-    <main class="list-container">
-      <div class="cols">
-        <div class="col col-select"><input type="checkbox" id="selectAllBox" aria-label="全选当前列表"></div>
-        <div class="col sortable" id="headerToggle" role="button" tabindex="0" aria-sort="none" title="按状态排序">
-          <span id="titleToggle">状态</span>
-          <span class="sort-icon" id="iconToggle">↕</span>
-        </div>
-        <div class="col sortable col-name" id="headerName" role="button" tabindex="0" aria-sort="none" title="按名称 A-Z 排序">
-          <span>名称</span>
-          <span class="sort-icon" id="iconName">↕</span>
-        </div>
-        <div class="col sortable col-badge" id="headerCategory" role="button" tabindex="0" aria-sort="none" title="按类型排序">
-          <span>类型</span>
-          <span class="sort-icon" id="iconCategory">↕</span>
-        </div>
-      </div>
-      <div id="fontRows" class="font-rows">
-        <div class="no-result">正在加载底层字体库…</div>
-      </div>
-    </main>
   </div>
 
   <script src="panel.js"></script>

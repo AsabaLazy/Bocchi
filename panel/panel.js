@@ -652,9 +652,74 @@ chrome.storage.onChanged.addListener((changes, area) => {
       applyShieldState(changes.globalShieldEnabled.newValue !== false);
       changed = true;
     }
+    // 模块开关跨上下文同步(popup ↔ 设置页)
+    let moduleChanged = false;
+    for (const key of MODULE_KEYS) {
+      if (changes[key]) {
+        const val = changes[key].newValue !== false;
+        if (moduleInputs[key]) moduleInputs[key].checked = val;
+        moduleChanged = true;
+      }
+    }
+    if (moduleChanged) syncNavDotsFromInputs();
+    if (changes.timezone || changes.targetTimezone) {
+      chrome.storage.local.get(['timezone', 'targetTimezone'], updateTzInfo);
+    }
     if (changed) renderList();
   }
 });
+
+// ── 设置页:模块开关 / 侧栏导航 / 时区信息 ──
+const MODULE_KEYS = ['canvasProtection', 'webrtcProtection', 'audioProtection', 'timezoneProtection', 'hardwareProtection', 'fontProtection'];
+const moduleInputs = {};
+for (const key of MODULE_KEYS) {
+  const el = document.getElementById(key);
+  if (el) moduleInputs[key] = el;
+}
+
+function syncNavDotsFromInputs() {
+  document.querySelectorAll('.nav-dot').forEach(dot => {
+    const input = moduleInputs[dot.dataset.key];
+    dot.classList.toggle('on', !!(input && input.checked));
+  });
+}
+
+for (const [key, el] of Object.entries(moduleInputs)) {
+  el.addEventListener('change', () => {
+    chrome.storage.local.set({ [key]: el.checked });
+    syncNavDotsFromInputs();
+  });
+}
+
+// 视图路由:侧栏切换 + hash 深链(默认字体)
+function showView(name) {
+  let found = false;
+  document.querySelectorAll('.view').forEach(v => {
+    const match = v.dataset.view === name;
+    v.hidden = !match;
+    if (match) found = true;
+  });
+  if (!found) name = 'fonts';
+  document.querySelectorAll('.nav-item').forEach(b => {
+    b.setAttribute('aria-current', b.dataset.view === name ? 'page' : 'false');
+  });
+  if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+}
+
+document.querySelectorAll('.nav-item').forEach(btn => {
+  btn.addEventListener('click', () => showView(btn.dataset.view));
+});
+window.addEventListener('hashchange', () => showView((location.hash || '#fonts').slice(1)));
+
+// 时区模块:展示当前生效时区(由出口 IP 自动对齐,无手动配置)
+function updateTzInfo(res) {
+  const el = document.getElementById('tzInfo');
+  if (!el) return;
+  const tz = res && (res.timezone || res.targetTimezone);
+  el.textContent = tz
+    ? `当前生效时区：${tz}（随出口 IP 自动对齐）`
+    : '当前生效时区：尚未对齐（随出口 IP 自动更新）';
+}
 
 // Initialize
 async function init() {
@@ -677,7 +742,7 @@ async function init() {
 
   allFonts.sort((a, b) => a.localeCompare(b));
 
-  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled'], (res) => {
+  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', ...MODULE_KEYS], (res) => {
     fontMode = res.fontMode === 'whitelist' ? 'whitelist' : 'blacklist';
     customHiddenFonts = Array.isArray(res.customHiddenFonts) ? res.customHiddenFonts : [];
     customAllowedFonts = Array.isArray(res.customAllowedFonts) ? res.customAllowedFonts : [];
@@ -690,7 +755,14 @@ async function init() {
     if ($toggleSymbols) {
       $toggleSymbols.checked = blockSymbols;
     }
+    // 模块开关默认全部开启
+    for (const key of MODULE_KEYS) {
+      if (moduleInputs[key]) moduleInputs[key].checked = res[key] !== false;
+    }
+    syncNavDotsFromInputs();
+    updateTzInfo(res);
     applyShieldState(res.globalShieldEnabled !== false);
+    showView((location.hash || '#fonts').slice(1));
     renderList();
   });
 }
