@@ -19,6 +19,7 @@
         <div class="brand-name">Bocchi Privacy Shield</div>
         <div class="brand-sub">隐私防护设置</div>
       </div>
+      <button type="button" class="icon-btn" id="themeToggle" aria-label="切换主题"></button>
       <label class="status-pill" id="statusPill" title="扩展全局开关：关闭后所有站点不再隐藏任何字体">
         <span class="status-dot" aria-hidden="true"></span>
         <span class="status-text" id="statusText">防护运行中</span>
@@ -49,9 +50,6 @@
         </button>
         <button type="button" class="nav-item" data-view="hardware">
           <span class="nav-dot" data-key="hardwareProtection" aria-hidden="true"></span>硬件指纹
-        </button>
-        <button type="button" class="nav-item" data-view="appearance">
-          外观
         </button>
       </nav>
 
@@ -214,27 +212,6 @@
             </label>
           </div>
           <p class="view-note">此模块无需额外配置。关闭后硬件信息将返回真实值。</p>
-        </section>
-
-        <!-- ═════════ 外观 ═════════ -->
-        <section class="view" id="view-appearance" data-view="appearance" hidden>
-          <div class="view-head">
-            <div>
-              <h2>外观</h2>
-              <p>选择界面配色。跟随系统会随操作系统的深浅色设置自动切换。</p>
-            </div>
-          </div>
-          <div class="theme-seg" role="group" aria-label="主题">
-            <button type="button" class="theme-btn" data-theme-choice="system" aria-pressed="true">
-              <span class="theme-swatch system" aria-hidden="true"></span>跟随系统
-            </button>
-            <button type="button" class="theme-btn" data-theme-choice="dark" aria-pressed="false">
-              <span class="theme-swatch dark" aria-hidden="true"></span>深色
-            </button>
-            <button type="button" class="theme-btn" data-theme-choice="light" aria-pressed="false">
-              <span class="theme-swatch light" aria-hidden="true"></span>浅色
-            </button>
-          </div>
         </section>
 
       </main>

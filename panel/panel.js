@@ -36,8 +36,8 @@ const $btnClearSel = document.getElementById('btnClearSel');
 const $btnResetDefaults = document.getElementById('btnResetDefaults');
 
 // 眼睛图标:可见=睁眼,隐藏=眼斜杠,无需读表头即可理解
-const EYE_ON = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>';
-const EYE_OFF = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><path d="M4 4l16 16"/></svg>';
+const EYE_ON = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>';
+const EYE_OFF = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><path d="M4 4l16 16"/></svg>';
 
 // 语系徽章:分类识别用文字(图标适合动作,分类需要词汇)
 const CAT_LABEL = { cjk: '中文', latin: '西文', other: '小语种', symbol: '符号' };
@@ -686,9 +686,18 @@ function updateTzInfo(res) {
     : '当前生效时区：尚未对齐（随出口 IP 自动更新）';
 }
 
-// 主题:跟随系统 / 深色 / 浅色(存储键 theme,默认 system)
+// 主题:右上角图标循环切换 跟随系统 → 深色 → 浅色(存储键 theme,默认 system)
 const themeMedia = window.matchMedia('(prefers-color-scheme: light)');
+const $themeToggle = document.getElementById('themeToggle');
 let themePref = 'system';
+
+const THEME_ICONS = {
+  system: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/><path d="M12 16v4"/></svg>',
+  dark: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>',
+  light: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>'
+};
+const THEME_LABELS = { system: '跟随系统', dark: '深色', light: '浅色' };
+const THEME_CYCLE = ['system', 'dark', 'light'];
 
 function resolvedTheme(pref) {
   if (pref === 'light') return 'light';
@@ -699,17 +708,21 @@ function resolvedTheme(pref) {
 function applyTheme(pref) {
   themePref = ['dark', 'light', 'system'].includes(pref) ? pref : 'system';
   document.documentElement.dataset.theme = resolvedTheme(themePref);
-  document.querySelectorAll('.theme-btn').forEach(btn => {
-    btn.setAttribute('aria-pressed', btn.dataset.themeChoice === themePref ? 'true' : 'false');
-  });
+  if ($themeToggle) {
+    $themeToggle.innerHTML = THEME_ICONS[themePref];
+    const label = `主题：${THEME_LABELS[themePref]}（点击切换）`;
+    $themeToggle.title = label;
+    $themeToggle.setAttribute('aria-label', label);
+  }
 }
 
-document.querySelectorAll('.theme-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    chrome.storage.local.set({ theme: btn.dataset.themeChoice });
-    applyTheme(btn.dataset.themeChoice);
+if ($themeToggle) {
+  $themeToggle.addEventListener('click', () => {
+    const next = THEME_CYCLE[(THEME_CYCLE.indexOf(themePref) + 1) % THEME_CYCLE.length];
+    chrome.storage.local.set({ theme: next });
+    applyTheme(next);
   });
-});
+}
 
 // 系统配色变化时,跟随模式实时切换
 themeMedia.addEventListener('change', () => {
