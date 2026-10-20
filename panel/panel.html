@@ -46,10 +46,7 @@
           <span class="nav-dot" data-key="webrtcProtection" aria-hidden="true"></span>WebRTC
         </button>
         <button type="button" class="nav-item" data-view="timezone">
-          <span class="nav-dot" data-key="timezoneProtection" aria-hidden="true"></span>时区
-        </button>
-        <button type="button" class="nav-item" data-view="geolocation">
-          <span class="nav-dot" data-key="geolocationProtection" aria-hidden="true"></span>位置
+          <span class="nav-dot" data-key="timezoneProtection" data-key-any="geolocationProtection" aria-hidden="true"></span>时间与位置
         </button>
         <button type="button" class="nav-item" data-view="hardware">
           <span class="nav-dot" data-key="hardwareProtection" aria-hidden="true"></span>硬件指纹
@@ -187,66 +184,65 @@
           <p class="view-note">此模块无需额外配置。关闭后 WebRTC 将按浏览器默认策略工作。</p>
         </section>
 
-        <!-- ═════════ 时区 ═════════ -->
+        <!-- ═════════ 时间与位置 ═════════ -->
         <section class="view" id="view-timezone" data-view="timezone" hidden>
           <div class="view-head">
             <div>
-              <h2>时区</h2>
-              <p>对齐 Date / Intl 本地化参数。自动模式跟随出口 IP，手动模式固定为你选择的时区。</p>
+              <h2>时间与位置</h2>
+              <p>对齐 Date / Intl 时区与 navigator.geolocation 坐标。地图选点可同时设置两者，也可分开设置。</p>
             </div>
-            <label class="switch" title="动态时区对齐开关">
-              <input type="checkbox" id="timezoneProtection" checked aria-label="动态时区对齐">
-              <i></i>
-            </label>
           </div>
-          <div class="tz-mode-seg" role="group" aria-label="时区来源">
-            <button type="button" class="tz-mode-btn" data-tz-mode="auto" aria-pressed="true">自动（出口 IP）</button>
-            <button type="button" class="tz-mode-btn" data-tz-mode="manual" aria-pressed="false">手动</button>
-          </div>
-          <div class="tz-manual" id="tzManual" hidden>
-            <label class="tz-label" for="tzSelect">时区</label>
-            <select id="tzSelect" class="tz-select"></select>
-          </div>
-          <div class="geo-map-wrap">
-            <svg id="tzMap" viewBox="0 0 720 360" role="img" aria-label="点击地图选择时区">
-              <rect width="720" height="360" class="geo-ocean"></rect>
-              <path id="tzPath" class="geo-land" d=""></path>
-              <g id="tzMarker" class="geo-marker" hidden>
-                <circle r="9" class="geo-marker-ring"></circle>
-                <circle r="4" class="geo-marker-dot"></circle>
-              </g>
-            </svg>
-            <div class="geo-readout" id="tzMapReadout">点击地图选择时区</div>
-          </div>
-          <label class="link-row" title="开启后，在地图选点会同时设置时区与位置">
-            <span class="switch"><input type="checkbox" class="geo-link-toggle" checked aria-label="联动选择时区与位置"><i></i></span>
-            <span>联动：选点同时设置时区与位置</span>
-          </label>
-          <p class="view-note" id="tzInfo">当前生效时区：读取中…</p>
-        </section>
 
-        <!-- ═════════ 位置(经纬度) ═════════ -->
-        <section class="view" id="view-geolocation" data-view="geolocation" hidden>
-          <div class="view-head">
-            <div>
-              <h2>位置</h2>
-              <p>向网站报告指定的经纬度，而不是真实定位。建议与时区模块保持一致。</p>
+          <div class="tp-row" id="tzRow">
+            <div class="tp-row-head">
+              <span class="tp-row-title">时区</span>
+              <label class="switch" title="动态时区对齐开关">
+                <input type="checkbox" id="timezoneProtection" checked aria-label="动态时区对齐">
+                <i></i>
+              </label>
             </div>
-            <label class="switch" title="地理位置伪装开关">
-              <input type="checkbox" id="geolocationProtection" aria-label="地理位置伪装">
-              <i></i>
-            </label>
+            <div class="tp-row-body">
+              <div class="tz-mode-seg" role="group" aria-label="时区来源">
+                <button type="button" class="tz-mode-btn" data-tz-mode="auto" aria-pressed="true">自动（出口 IP）</button>
+                <button type="button" class="tz-mode-btn" data-tz-mode="manual" aria-pressed="false">手动</button>
+              </div>
+              <div class="tz-manual" id="tzManual" hidden>
+                <select id="tzSelect" class="tz-select" aria-label="选择时区"></select>
+              </div>
+            </div>
           </div>
-          <div class="geo-controls">
-            <label class="geo-field">纬度
-              <input type="number" id="geoLat" step="0.0001" min="-90" max="90" placeholder="34.0522" inputmode="decimal">
-            </label>
-            <label class="geo-field">经度
-              <input type="number" id="geoLng" step="0.0001" min="-180" max="180" placeholder="-118.2437" inputmode="decimal">
-            </label>
+
+          <div class="tp-row" id="geoRow">
+            <div class="tp-row-head">
+              <span class="tp-row-title">位置</span>
+              <label class="switch" title="地理位置伪装开关">
+                <input type="checkbox" id="geolocationProtection" aria-label="地理位置伪装">
+                <i></i>
+              </label>
+            </div>
+            <div class="tp-row-body">
+              <div class="geo-controls">
+                <label class="geo-field">纬度
+                  <input type="number" id="geoLat" step="0.0001" min="-90" max="90" placeholder="34.0522" inputmode="decimal">
+                </label>
+                <label class="geo-field">经度
+                  <input type="number" id="geoLng" step="0.0001" min="-180" max="180" placeholder="-118.2437" inputmode="decimal">
+                </label>
+              </div>
+            </div>
           </div>
+
+          <div class="map-pick-bar">
+            <span class="ctl-label">地图选点</span>
+            <div class="map-pick-seg" role="group" aria-label="地图选点目标">
+              <button type="button" class="map-pick-btn" data-pick-mode="both" aria-pressed="true">时区 + 位置</button>
+              <button type="button" class="map-pick-btn" data-pick-mode="timezone" aria-pressed="false">仅时区</button>
+              <button type="button" class="map-pick-btn" data-pick-mode="location" aria-pressed="false">仅位置</button>
+            </div>
+          </div>
+
           <div class="geo-map-wrap">
-            <svg id="worldMap" viewBox="0 0 720 360" role="img" aria-label="点击地图选择位置">
+            <svg id="worldMap" viewBox="0 0 720 360" role="img" aria-label="点击地图选择时区或位置">
               <rect width="720" height="360" class="geo-ocean"></rect>
               <path id="worldPath" class="geo-land" d=""></path>
               <g id="geoMarker" class="geo-marker" hidden>
@@ -254,13 +250,9 @@
                 <circle r="4" class="geo-marker-dot"></circle>
               </g>
             </svg>
-            <div class="geo-readout" id="geoReadout">点击地图选择位置</div>
+            <div class="geo-readout" id="geoReadout">点击地图选择时区或位置</div>
           </div>
-          <label class="link-row" title="开启后，在地图选点会同时设置时区与位置">
-            <span class="switch"><input type="checkbox" class="geo-link-toggle" checked aria-label="联动选择时区与位置"><i></i></span>
-            <span>联动：选点同时设置时区与位置</span>
-          </label>
-          <p class="view-note">经纬度会原样返回给网站的 <code>navigator.geolocation</code>。地图为离线内置（Natural Earth 110m，公有领域）。</p>
+
         </section>
 
         <!-- ═════════ 硬件指纹 ═════════ -->
