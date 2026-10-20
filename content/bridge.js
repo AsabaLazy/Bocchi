@@ -39,7 +39,7 @@
   let configEventName = null;  // CE: random config event name from the engine
 
   const ALL_KEYS = [
-    'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone',
+    'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone',
     'geolocationProtection', 'geolocationLatitude', 'geolocationLongitude',
     'customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'fontMode', 'blockOtherScripts', 'blockSymbols',
     'globalShieldEnabled', 'siteBypassList',
@@ -172,6 +172,22 @@
     // config push from the handshake handler, so nothing is lost.
   }
 
+  // Resolve the effective zone for the three modes. 'geo' uses the zone the
+  // panel derived from the spoofed coordinates (geoTimezone), falling back to
+  // the egress-IP cache until the panel has derived one.
+  function resolveTimezone(res) {
+    const mode = res && res.timezoneMode === 'manual' ? 'manual' : (res && res.timezoneMode === 'geo' ? 'geo' : 'auto');
+    const manual = res && typeof res.manualTimezone === 'string' ? res.manualTimezone : '';
+    const ipTz = (res && (res.timezone || res.targetTimezone)) || '';
+    if (mode === 'manual') return manual;
+    if (mode === 'geo') {
+      // 位置模块关闭时与面板一致:回退出口 IP,不跟随一个并未生效的位置
+      const geoOn = res && res.geolocationProtection === true;
+      return (geoOn && typeof res.geoTimezone === 'string' && res.geoTimezone) || ipTz;
+    }
+    return ipTz;
+  }
+
   // ------------------------------------------------------------------
   // Initial sync: read all keys, fetch timezone via runtime message as a
   // fallback, then send one full tz+fonts+cfg payload.
@@ -183,9 +199,7 @@
         return;
       }
       chrome.storage.local.get(ALL_KEYS, (res) => {
-        const mode = res && res.timezoneMode === 'manual' ? 'manual' : 'auto';
-        const manual = res && typeof res.manualTimezone === 'string' ? res.manualTimezone : '';
-        let tz = mode === 'manual' ? manual : (res && (res.timezone || res.targetTimezone));
+        const tz = resolveTimezone(res);
         if (!tz && typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
           try {
             chrome.runtime.sendMessage({ type: 'GET_TIMEZONE' }, (response) => {
@@ -217,11 +231,9 @@
         return;
       }
 
-      if (changes.timezone || changes.targetTimezone || changes.timezoneMode || changes.manualTimezone) {
-        chrome.storage.local.get(['timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone'], (res) => {
-          const mode = res && res.timezoneMode === 'manual' ? 'manual' : 'auto';
-          const manual = res && typeof res.manualTimezone === 'string' ? res.manualTimezone : '';
-          const newTz = mode === 'manual' ? manual : ((res && (res.timezone || res.targetTimezone)) || '');
+      if (changes.timezone || changes.targetTimezone || changes.timezoneMode || changes.manualTimezone || changes.geoTimezone || changes.geolocationProtection) {
+        chrome.storage.local.get(['timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone', 'geolocationProtection'], (res) => {
+          const newTz = resolveTimezone(res);
           if (newTz) {
             sendPayload({ tz: newTz });
           }

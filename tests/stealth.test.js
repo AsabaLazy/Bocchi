@@ -304,6 +304,39 @@ if (bridgeStorageChangedListener) {
   assert.strictEqual(latestTz.detail.tz, 'Asia/Tokyo');
   assert.strictEqual(latestTz.detail.t, BRIDGE_TOKEN, 'incremental tz payload must keep the token');
 
+  // Geo-follow mode: the zone comes from geoTimezone, not the egress IP.
+  bridgeStorageData.timezoneMode = 'geo';
+  bridgeStorageData.geolocationProtection = true;
+  bridgeStorageData.geoTimezone = 'Europe/Berlin';
+  bridgeStorageChangedListener({ timezoneMode: { newValue: 'geo' } }, 'local');
+  const latestGeo = dispatchedBridgeEvents[dispatchedBridgeEvents.length - 1];
+  assert.strictEqual(latestGeo.detail.tz, 'Europe/Berlin',
+    'geo mode must use the zone derived from the spoofed coordinates');
+  assert.strictEqual(latestGeo.detail.t, BRIDGE_TOKEN, 'geo tz payload must keep the token');
+
+  // With the location module off, follow mode must fall back to the IP cache
+  // exactly like the panel readout does.
+  bridgeStorageData.geolocationProtection = false;
+  bridgeStorageChangedListener({ geolocationProtection: { newValue: false } }, 'local');
+  // The same change also emits a geo payload, so pick the latest tz payload.
+  const latestGeoOff = dispatchedBridgeEvents.filter(e => e.detail && typeof e.detail.tz === 'string').pop();
+  assert.strictEqual(latestGeoOff.detail.tz, 'Asia/Tokyo',
+    'geo mode with the location module off must fall back to the IP cache');
+  bridgeStorageData.geolocationProtection = true;
+
+  // Geo mode without a derived zone yet falls back to the egress-IP cache.
+  delete bridgeStorageData.geoTimezone;
+  bridgeStorageData.geolocationProtection = true;
+  bridgeStorageChangedListener({ geoTimezone: { newValue: undefined } }, 'local');
+  const latestGeoFallback = dispatchedBridgeEvents[dispatchedBridgeEvents.length - 1];
+  assert.strictEqual(latestGeoFallback.detail.tz, 'Asia/Tokyo',
+    'geo mode must fall back to the IP cache until the panel derives a zone');
+
+  // Restore auto mode for the remaining bridge assertions.
+  bridgeStorageData.timezoneMode = 'auto';
+  bridgeStorageData.targetTimezone = 'America/New_York';
+  bridgeStorageChangedListener({ timezoneMode: { newValue: 'auto' } }, 'local');
+
   // Font keys -> incremental {fonts} payload (reads back the new list from storage).
   bridgeStorageData.customHiddenFonts = ['CustomFont'];
   bridgeStorageChangedListener({ customHiddenFonts: { newValue: ['CustomFont'] } }, 'local');

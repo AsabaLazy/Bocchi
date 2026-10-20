@@ -189,7 +189,7 @@
           <div class="view-head">
             <div>
               <h2>时间与位置</h2>
-              <p>对齐 Date / Intl 时区与 navigator.geolocation 坐标。地图选点可同时设置两者，也可分开设置。</p>
+              <p>对齐 Date / Intl 时区与 navigator.geolocation 坐标。时区跟随出口 IP、所选位置或手动指定；地图选点可同时设置两者，也可分开设置。</p>
             </div>
           </div>
 
@@ -204,6 +204,7 @@
             <div class="tp-row-body">
               <div class="tz-mode-seg" role="group" aria-label="时区来源">
                 <button type="button" class="tz-mode-btn" data-tz-mode="auto" aria-pressed="true">自动（出口 IP）</button>
+                <button type="button" class="tz-mode-btn" data-tz-mode="geo" aria-pressed="false">跟随位置</button>
                 <button type="button" class="tz-mode-btn" data-tz-mode="manual" aria-pressed="false">手动</button>
               </div>
               <div class="tz-manual" id="tzManual" hidden>
