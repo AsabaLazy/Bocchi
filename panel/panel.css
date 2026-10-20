@@ -185,25 +185,6 @@ body.off .switch input:checked + i::after { background: var(--faint); }
 .mode-dots i.on { background: var(--eye); }
 .mode-btn.active .mode-dots i.on { background: var(--accent); }
 
-.script-chip {
-  display: flex; align-items: center; gap: 9px;
-  padding: 5px 7px 5px 11px;
-  border: 1px solid var(--border); border-radius: var(--radius-s);
-  background: var(--bg);
-  font: inherit; color: var(--text);
-  cursor: pointer; user-select: none;
-  transition: border-color .15s, background .15s;
-}
-.script-chip:hover { border-color: var(--faint); }
-.script-chip.on { background: var(--accent-soft); border-color: var(--accent-border); }
-.script-glyphs {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 13.5px; line-height: 1.5;
-  font-family: "Noto Sans Arabic", "Noto Sans Devanagari", "Noto Sans Thai", "Noto Sans CJK SC", sans-serif;
-}
-.script-glyphs i { font-style: normal; }
-.script-chip.on .script-glyphs { color: var(--accent); }
-
 .search {
   flex: 1; min-width: 170px;
   display: flex; align-items: center; gap: 8px;
@@ -322,7 +303,7 @@ body.off .font-title { opacity: .55; }
 .no-result { padding: 44px 0 30px; text-align: center; color: var(--muted); font-size: 13px; }
 
 /* 全局关闭:工具条降权 */
-body.off .mode-seg, body.off .script-chip { opacity: .45; pointer-events: none; }
+body.off .mode-seg { opacity: .45; pointer-events: none; }
 
 @media (max-width: 620px) {
   .shell { padding: 18px 14px 40px; }

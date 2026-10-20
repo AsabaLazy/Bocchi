@@ -11,10 +11,6 @@ const SYMBOLS_REGEX = /(?:math|symbol|emoji|d050000l|z003|standard[ _-]?symbols|
 
 // DOM Elements
 const $modeControl = document.getElementById('modeControl');
-const $toggleOtherScripts = document.getElementById('toggleOtherScripts');
-const $toggleSymbols = document.getElementById('toggleSymbols');
-const $symbolChip = document.getElementById('symbolChip');
-const $scriptChip = document.getElementById('scriptChip');
 const $searchInput = document.getElementById('searchInput');
 const $fontCount = document.getElementById('fontCount');
 const $headerToggle = document.getElementById('headerToggle');
@@ -232,14 +228,6 @@ function renderList() {
   document.querySelectorAll('.mode-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.mode === fontMode);
   });
-
-  // 语种批处理 chip 状态
-  if ($scriptChip) {
-    $scriptChip.classList.toggle('on', blockOtherScripts);
-  }
-  if ($symbolChip) {
-    $symbolChip.classList.toggle('on', blockSymbols);
-  }
 
   // 比例条:全库可见/隐藏统计(全局关闭时一切都是"可见"的诚实呈现)
   const engineActive = globalShieldEnabled;
@@ -530,24 +518,6 @@ if ($selectAllBox) {
   });
 }
 
-// Toggle other minority scripts batch switch
-if ($toggleOtherScripts) {
-  $toggleOtherScripts.addEventListener('change', () => {
-    blockOtherScripts = $toggleOtherScripts.checked;
-    saveState();
-    renderList();
-  });
-}
-
-// Toggle symbol fonts batch switch
-if ($toggleSymbols) {
-  $toggleSymbols.addEventListener('change', () => {
-    blockSymbols = $toggleSymbols.checked;
-    saveState();
-    renderList();
-  });
-}
-
 // '/' 聚焦搜索
 document.addEventListener('keydown', (e) => {
   if (e.key === '/' && document.activeElement !== $searchInput) {
@@ -565,8 +535,6 @@ function restoreDefaults() {
   blockOtherScripts = false;
   blockSymbols = false;
   selectedFonts = new Set();
-  if ($toggleOtherScripts) $toggleOtherScripts.checked = false;
-  if ($toggleSymbols) $toggleSymbols.checked = false;
   saveState();
   renderList();
 }
@@ -636,16 +604,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
     }
     if (changes.blockOtherScripts) {
       blockOtherScripts = typeof changes.blockOtherScripts.newValue === 'boolean' ? changes.blockOtherScripts.newValue : false;
-      if ($toggleOtherScripts) {
-        $toggleOtherScripts.checked = blockOtherScripts;
-      }
       changed = true;
     }
     if (changes.blockSymbols) {
       blockSymbols = typeof changes.blockSymbols.newValue === 'boolean' ? changes.blockSymbols.newValue : false;
-      if ($toggleSymbols) {
-        $toggleSymbols.checked = blockSymbols;
-      }
       changed = true;
     }
     if (changes.globalShieldEnabled) {
@@ -749,12 +711,6 @@ async function init() {
     blockBuiltinChineseFonts = typeof res.blockBuiltinChineseFonts === 'boolean' ? res.blockBuiltinChineseFonts : true;
     blockOtherScripts = typeof res.blockOtherScripts === 'boolean' ? res.blockOtherScripts : false;
     blockSymbols = typeof res.blockSymbols === 'boolean' ? res.blockSymbols : false;
-    if ($toggleOtherScripts) {
-      $toggleOtherScripts.checked = blockOtherScripts;
-    }
-    if ($toggleSymbols) {
-      $toggleSymbols.checked = blockSymbols;
-    }
     // 模块开关默认全部开启
     for (const key of MODULE_KEYS) {
       if (moduleInputs[key]) moduleInputs[key].checked = res[key] !== false;
