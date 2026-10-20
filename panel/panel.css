@@ -118,7 +118,8 @@ body {
   border-radius: var(--radius); padding: 12px 14px; margin-bottom: 12px;
 }
 .tp-row-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-.tp-row.is-off .tp-row-body { opacity: .45; }
+.tp-row.is-off .tp-row-body { opacity: .4; }
+.tp-row.is-off .tp-row-title { color: var(--muted); }
 .tp-row-title { font-size: 13px; font-weight: 600; }
 .map-pick-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .map-pick-seg {
@@ -160,7 +161,7 @@ body {
 .geo-controls { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
 .geo-field { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 .geo-field input {
-  width: 130px; font: inherit; font-size: 13px; color: var(--text);
+  width: 150px; font: inherit; font-size: 13px; color: var(--text);
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius-s); padding: 7px 10px;
   font-variant-numeric: tabular-nums;
@@ -171,6 +172,8 @@ body {
   overflow: hidden; background: var(--surface); margin-bottom: 8px;
 }
 #worldMap { display: block; width: 100%; height: auto; cursor: crosshair; }
+#worldMap.inert { cursor: default; }
+.map-pick-btn:disabled { opacity: .28; cursor: default; }
 .geo-ocean { fill: var(--surface); }
 .geo-land { fill: var(--surface-2); stroke: var(--border); stroke-width: .5; }
 .geo-marker-ring { fill: none; stroke: var(--accent); stroke-width: 2; opacity: .55; }

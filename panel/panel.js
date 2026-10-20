@@ -625,7 +625,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     }
     if (moduleChanged) {
       syncNavDotsFromInputs();
-      renderSharedMap();
+      applyMapPickUI();
     }
     if (changes.timezone || changes.targetTimezone || changes.timezoneMode || changes.manualTimezone) {
       chrome.storage.local.get(['timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone'], applyTzUI);
@@ -664,7 +664,7 @@ for (const [key, el] of Object.entries(moduleInputs)) {
   el.addEventListener('change', () => {
     chrome.storage.local.set({ [key]: el.checked });
     syncNavDotsFromInputs();
-    renderSharedMap();
+    applyMapPickUI();
   });
 }
 
@@ -749,7 +749,7 @@ function applyTzUI(res) {
 
   const autoTz = res && (res.timezone || res.targetTimezone);
   autoTzValue = autoTz || '';
-  renderSharedMap();
+  applyMapPickUI();
 }
 
 document.querySelectorAll('.tz-mode-btn').forEach(btn => {
@@ -845,16 +845,25 @@ function effectiveTz() {
 function renderSharedMap() {
   const tz = effectiveTz();
   const tzOn = !!(moduleInputs['timezoneProtection'] && moduleInputs['timezoneProtection'].checked);
-  const geoOn = !!(moduleInputs['geolocationProtection'] && moduleInputs['geolocationProtection'].checked);
+  const geoOn = geoModuleOn();
+  const eff = effectivePickMode();
 
   const tzRow = document.getElementById('tzRow');
   const geoRow = document.getElementById('geoRow');
-  if (tzRow) tzRow.classList.toggle('is-off', !tzOn);
-  if (geoRow) geoRow.classList.toggle('is-off', !geoOn);
+  if (tzRow) {
+    tzRow.classList.toggle('is-off', !tzOn);
+    tzRow.querySelectorAll('.tp-row-body button, .tp-row-body select').forEach(el => { el.disabled = !tzOn; });
+  }
+  if (geoRow) {
+    geoRow.classList.toggle('is-off', !geoOn);
+    geoRow.querySelectorAll('.tp-row-body input').forEach(el => { el.disabled = !geoOn; });
+  }
 
+  // 标记:有时间目标时显示时区代表点,否则显示配置坐标;两者都不可选时
+  // 仍显示时区代表点作为信息展示。
   let markerLat = NaN;
   let markerLng = NaN;
-  if (mapPickMode === 'timezone') {
+  if (eff === 'timezone' || eff === null) {
     const rep = tzRepPoint(tz);
     if (rep) {
       markerLat = rep.lat;
@@ -866,28 +875,65 @@ function renderSharedMap() {
   }
   placeMarker($geoMarker, markerLat, markerLng);
 
+  const worldMap = document.getElementById('worldMap');
+  if (worldMap) {
+    worldMap.classList.toggle('inert', !eff);
+    worldMap.title = !eff
+      ? '切换时区为手动或开启位置模块后可在图上选点'
+      : (eff === 'both' ? '点击地图同时选择时区与位置' : (eff === 'timezone' ? '点击地图选择时区' : '点击地图选择位置'));
+  }
+
   if ($geoReadout) {
+    const displayMode = eff || 'both';
     const parts = [];
-    if (mapPickMode !== 'location') {
+    if (displayMode !== 'location') {
       const offset = tz ? tzOffsetLabel(tz) : '';
       const src = tzMode === 'manual' ? '手动' : '自动';
       parts.push('时区 ' + (tz || '未对齐') + (offset ? '（' + offset + '）' : '') + ' · ' + src + (tzOn ? '' : ' · 已停用'));
     }
-    if (mapPickMode !== 'timezone') {
-      const coordsText = Number.isFinite(geoLat) ? geoLat.toFixed(4) + ', ' + geoLng.toFixed(4) : '未设置';
-      parts.push('位置 ' + coordsText + (geoOn ? '' : ' · 已停用'));
+    if (displayMode !== 'timezone') {
+      if (!geoOn) {
+        parts.push('位置 · 已停用');
+      } else {
+        const coordsText = Number.isFinite(geoLat) ? geoLat.toFixed(4) + ', ' + geoLng.toFixed(4) : '未设置';
+        parts.push('位置 ' + coordsText);
+      }
     }
     $geoReadout.textContent = parts.join('  ·  ') || '点击地图选择';
   }
 }
 
 // 地图选点目标:时区 + 位置 / 仅时区 / 仅位置(存储键 mapPickMode,默认 both)
+// 可用性规则:时区仅手动模式下可选;位置仅在模块开启时可选。
+// 存储保留用户偏好;当前不可用时按可用目标降级,恢复后自动还原。
 let mapPickMode = 'both';
 
+function geoModuleOn() {
+  return !!(moduleInputs['geolocationProtection'] && moduleInputs['geolocationProtection'].checked);
+}
+
+function effectivePickMode() {
+  const tzAvail = tzMode === 'manual';
+  const geoAvail = geoModuleOn();
+  if (mapPickMode === 'both') return tzAvail && geoAvail ? 'both' : (geoAvail ? 'location' : (tzAvail ? 'timezone' : null));
+  if (mapPickMode === 'timezone') return tzAvail ? 'timezone' : (geoAvail ? 'location' : null);
+  if (mapPickMode === 'location') return geoAvail ? 'location' : (tzAvail ? 'timezone' : null);
+  return null;
+}
+
 function applyMapPickUI(mode) {
-  mapPickMode = ['both', 'timezone', 'location'].includes(mode) ? mode : 'both';
+  if (mode !== undefined) {
+    mapPickMode = ['both', 'timezone', 'location'].includes(mode) ? mode : 'both';
+  }
+  const tzAvail = tzMode === 'manual';
+  const geoAvail = geoModuleOn();
+  const eff = effectivePickMode();
   document.querySelectorAll('.map-pick-btn').forEach(btn => {
-    btn.setAttribute('aria-pressed', btn.dataset.pickMode === mapPickMode ? 'true' : 'false');
+    const m = btn.dataset.pickMode;
+    const avail = m === 'both' ? (tzAvail && geoAvail) : (m === 'timezone' ? tzAvail : geoAvail);
+    btn.disabled = !avail;
+    btn.setAttribute('aria-pressed', m === eff ? 'true' : 'false');
+    btn.title = avail ? '' : (m === 'location' ? '开启位置模块后可用' : '切换到手动时区后可用');
   });
   renderSharedMap();
 }
@@ -945,15 +991,17 @@ if ($geoLat) $geoLat.addEventListener('change', applyGeoFromInputs);
 if ($geoLng) $geoLng.addEventListener('change', applyGeoFromInputs);
 
 bindMapPicker('worldMap', 'worldPath', 'geoMarker', (lat, lng) => {
+  const eff = effectivePickMode();
+  if (!eff) return; // 无可选目标:地图为只读展示
   const updates = {};
-  if (mapPickMode !== 'location') {
+  if (eff !== 'location') {
     const tz = nearestTz(lat, lng);
     if (tz) {
       updates.manualTimezone = tz;
       updates.timezoneMode = 'manual';
     }
   }
-  if (mapPickMode !== 'timezone') {
+  if (eff !== 'timezone') {
     geoLat = lat;
     geoLng = lng;
     if ($geoLat) $geoLat.value = geoLat.toFixed(4);
