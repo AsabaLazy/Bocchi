@@ -1137,23 +1137,27 @@ function renderConsole() {
   if (ipRef) {
     const ipP = toXY(ipRef.lat, ipRef.lng);
     const near = Math.hypot(ipP.x - pinP.x, ipP.y - pinP.y) <= 8;
-    const ring = $ipMarker.querySelector('.tp-ip-ring');
-    const label = $ipMarker.querySelector('.tp-ip-label');
-    $ipMarker.classList.remove('off');
-    $ipMarker.classList.toggle('near', near);
-    $ipMarker.setAttribute('transform', `translate(${ipP.x.toFixed(2)} ${ipP.y.toFixed(2)})`);
-    if (ring) ring.setAttribute('r', near ? 12 : 7);
-    if (label) {
-      label.textContent = ipExact ? '出口 IP' : '出口 IP（估算）';
-      label.setAttribute('y', near ? 18 : -13);
+    // 粉点已经落在出口 IP 上时，不再叠加虚线圈、标签和连线。
+    if (near) {
+      $ipMarker.classList.add('off');
+      $ipArc.setAttribute('hidden', '');
+    } else {
+      const ring = $ipMarker.querySelector('.tp-ip-ring');
+      const label = $ipMarker.querySelector('.tp-ip-label');
+      $ipMarker.classList.remove('off');
+      $ipMarker.setAttribute('transform', `translate(${ipP.x.toFixed(2)} ${ipP.y.toFixed(2)})`);
+      if (ring) ring.setAttribute('r', 7);
+      if (label) {
+        label.textContent = ipExact ? '出口 IP' : '出口 IP（估算）';
+        label.setAttribute('y', -13);
+      }
+      if ($ipTitle) {
+        $ipTitle.textContent = ipExact
+          ? '当前出口 IP 的大致位置' + (ipCity ? ' · ' + ipCity : '') + ` · ${ipLat.toFixed(2)}, ${ipLng.toFixed(2)}`
+          : '按出口 IP 的时区估算 · ' + autoTzValue;
+      }
+      drawArc({ lat: geoLat, lng: geoLng }, ipRef);
     }
-    if ($ipTitle) {
-      $ipTitle.textContent = ipExact
-        ? '当前出口 IP 的大致位置' + (ipCity ? ' · ' + ipCity : '') + ` · ${ipLat.toFixed(2)}, ${ipLng.toFixed(2)}`
-        : '按出口 IP 的时区估算 · ' + autoTzValue;
-    }
-    if (!near) drawArc({ lat: geoLat, lng: geoLng }, ipRef);
-    else $ipArc.setAttribute('hidden', '');
   } else {
     $ipMarker.classList.add('off');
     $ipArc.setAttribute('hidden', '');
