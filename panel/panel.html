@@ -189,71 +189,140 @@
           <div class="view-head">
             <div>
               <h2>时间与位置</h2>
-              <p>对齐 Date / Intl 时区与 navigator.geolocation 坐标。时区跟随出口 IP、所选位置或手动指定；地图选点可同时设置两者，也可分开设置。</p>
+              <p>拖动粉点，网站看到的时间与坐标会跟着你走。</p>
             </div>
           </div>
 
-          <div class="tp-row" id="tzRow">
-            <div class="tp-row-head">
-              <span class="tp-row-title">时区</span>
-              <label class="switch" title="动态时区对齐开关">
-                <input type="checkbox" id="timezoneProtection" checked aria-label="动态时区对齐">
-                <i></i>
-              </label>
-            </div>
-            <div class="tp-row-body">
-              <div class="tz-mode-seg" role="group" aria-label="时区来源">
-                <button type="button" class="tz-mode-btn" data-tz-mode="auto" aria-pressed="true">自动（出口 IP）</button>
-                <button type="button" class="tz-mode-btn" data-tz-mode="geo" aria-pressed="false">跟随位置</button>
-                <button type="button" class="tz-mode-btn" data-tz-mode="manual" aria-pressed="false">手动</button>
-              </div>
-              <div class="tz-manual" id="tzManual" hidden>
-                <select id="tzSelect" class="tz-select" aria-label="选择时区"></select>
-              </div>
-            </div>
-          </div>
+          <div class="tp-console">
+            <div class="tp-map-wrap" id="tpMapWrap">
+              <svg id="worldMap" viewBox="0 0 720 360" role="img" aria-label="拖动粉点设置虚拟位置">
+                <defs>
+                  <radialGradient id="tpOceanGrad" cx="50%" cy="46%" r="72%">
+                    <stop offset="0" style="stop-color:var(--map-ocean-a)"/>
+                    <stop offset=".62" style="stop-color:var(--map-ocean-b)"/>
+                    <stop offset="1" style="stop-color:var(--map-ocean-b)"/>
+                  </radialGradient>
+                  <radialGradient id="tpSunGrad">
+                    <stop offset="0" style="stop-color:var(--map-sun)" stop-opacity="1"/>
+                    <stop offset=".55" style="stop-color:var(--map-sun)" stop-opacity=".35"/>
+                    <stop offset="1" style="stop-color:var(--map-sun)" stop-opacity="0"/>
+                  </radialGradient>
+                </defs>
+                <rect class="tp-ocean" width="720" height="360"></rect>
+                <g id="tpGraticule" class="tp-graticule"></g>
+                <path id="worldPath" class="tp-land" d=""></path>
+                <circle id="tpSun" class="tp-sun" r="105" cx="-100" cy="-100"></circle>
+                <path id="tpNight" class="tp-night" d=""></path>
+                <path id="tpTermGlow" d=""></path>
+                <path id="tpTermLine" d=""></path>
+                <path id="tpLinkArc" d="" hidden></path>
+                <path id="tpFlightTrail" class="tp-flight-trail" d=""></path>
+                <g id="tpTzMarker" class="tp-tz-marker off">
+                  <circle class="tp-tz-ring" r="7"></circle>
+                  <text class="tp-tz-label" y="-13" text-anchor="middle">时区</text>
+                </g>
+                <g id="tpPin" class="tp-pin" tabindex="0" role="img" aria-label="拖动设置位置">
+                  <g class="tp-pin-shape">
+                    <circle class="tp-pin-halo" r="17"></circle>
+                    <circle class="tp-pin-pulse" r="7"></circle>
+                    <circle class="tp-pin-ring" r="7"></circle>
+                    <circle class="tp-pin-dot" r="2.6"></circle>
+                  </g>
+                  <text class="tp-pin-label" y="-13" text-anchor="middle">东京</text>
+                  <circle class="tp-pin-hit" r="17" fill="transparent" pointer-events="all"></circle>
+                </g>
+              </svg>
 
-          <div class="tp-row" id="geoRow">
-            <div class="tp-row-head">
-              <span class="tp-row-title">位置</span>
-              <label class="switch" title="地理位置伪装开关">
-                <input type="checkbox" id="geolocationProtection" aria-label="地理位置伪装">
-                <i></i>
-              </label>
-            </div>
-            <div class="tp-row-body">
-              <div class="geo-controls">
-                <label class="geo-field">纬度
-                  <input type="number" id="geoLat" step="0.0001" min="-90" max="90" placeholder="34.0522" inputmode="decimal">
+              <div class="tp-hud">
+                <div class="tp-hud-head">
+                  <div>
+                    <div class="tp-place" id="tpPlace">东京</div>
+                    <div class="tp-place-en" id="tpPlaceEn">Tokyo</div>
+                  </div>
+                  <div class="tp-clock" id="tpClock">--:--</div>
+                </div>
+                <div class="tp-hud-meta">
+                  <span class="tp-daynight" id="tpDaynight" aria-hidden="true">
+                    <svg class="tp-sun-icon" width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.2"/><path d="M8 1.4v1.6M8 13v1.6M1.4 8h1.6M13 8h1.6M3.3 3.3l1.1 1.1M11.6 11.6l1.1 1.1M12.7 3.3l-1.1 1.1M4.4 11.6l-1.1 1.1" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+                    <svg class="tp-moon-icon" width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M13.4 10.2A5.8 5.8 0 016.1 2.7a5.9 5.9 0 107.3 7.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+                  </span>
+                  <span id="tpDate">—</span>
+                </div>
+                <div class="tp-hud-zone" id="tpHudZone">
+                  <span class="tp-zone-name" id="tpZone">Asia/Tokyo</span>
+                  <span>·</span>
+                  <span id="tpOffset">GMT+9</span>
+                  <span class="tp-off-tag" id="tpTzOff" hidden>真实时区</span>
+                </div>
+                <button class="tp-coords" id="tpCoords" type="button" title="编辑精确坐标">
+                  <span id="tpCoordsText">35.6762, 139.6503</span>
+                  <span class="tp-inactive" id="tpCoordsOff" hidden>未生效</span>
+                </button>
+              </div>
+
+              <div class="tp-layers" role="group" aria-label="信号层">
+                <button type="button" class="tp-layer" data-layer="tz" aria-pressed="true" title="时区层">
+                  <svg class="tp-eye" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M1.4 8s2.4-4.3 6.6-4.3S14.6 8 14.6 8s-2.4 4.3-6.6 4.3S1.4 8 1.4 8Z" stroke="currentColor" stroke-width="1.2"/>
+                    <circle class="tp-pupil" cx="8" cy="8" r="1.9" fill="currentColor"/>
+                    <path class="tp-slash" d="M2.4 2.4l11.2 11.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                  </svg>
+                  <span>时区</span>
+                </button>
+                <button type="button" class="tp-layer" data-layer="geo" aria-pressed="false" title="位置层（开启后时区默认跟随位置）">
+                  <svg class="tp-eye" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M1.4 8s2.4-4.3 6.6-4.3S14.6 8 14.6 8s-2.4 4.3-6.6 4.3S1.4 8 1.4 8Z" stroke="currentColor" stroke-width="1.2"/>
+                    <circle class="tp-pupil" cx="8" cy="8" r="1.9" fill="currentColor"/>
+                    <path class="tp-slash" d="M2.4 2.4l11.2 11.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                  </svg>
+                  <span>位置</span>
+                </button>
+              </div>
+
+              <div class="tp-search-wrap">
+                <label class="tp-search">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <circle cx="7" cy="7" r="4.6" stroke="currentColor" stroke-width="1.2"/>
+                    <path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                  </svg>
+                  <input id="citySearch" type="text" placeholder="搜索城市" autocomplete="off" aria-label="搜索城市">
+                  <kbd>/</kbd>
                 </label>
-                <label class="geo-field">经度
-                  <input type="number" id="geoLng" step="0.0001" min="-180" max="180" placeholder="-118.2437" inputmode="decimal">
-                </label>
+                <div class="tp-results" id="cityResults" hidden></div>
               </div>
+
+              <div class="tp-cursor" id="cursorReadout"></div>
+              <input type="checkbox" id="timezoneProtection" checked hidden aria-label="动态时区对齐">
+              <input type="checkbox" id="geolocationProtection" hidden aria-label="地理位置伪装">
+            </div>
+
+            <div class="tp-dock">
+              <span class="tp-dock-label">时区来源</span>
+              <div class="tp-chips" role="group" aria-label="时区来源">
+                <button type="button" class="tp-chip" data-tz-source="geo" aria-pressed="false">跟随位置</button>
+                <button type="button" class="tp-chip" data-tz-source="auto" aria-pressed="true">跟随 IP</button>
+                <button type="button" class="tp-chip" data-tz-source="manual" aria-pressed="false">手动</button>
+              </div>
+              <select id="tzSelect" class="tp-zone-select" aria-label="选择时区" hidden></select>
+              <button type="button" class="tp-mismatch" id="tzMismatch" hidden>
+                <span class="tp-mismatch-dot"></span>
+                <span>时区与位置不一致</span>
+                <span class="tp-mismatch-action">对齐到位置</span>
+              </button>
+              <div class="tp-dock-note" id="tzNote"></div>
+            </div>
+
+            <div class="tp-coords-pop" id="coordsPop" hidden>
+              <label class="tp-coords-field">纬度
+                <input type="number" id="geoLat" step="0.0001" min="-90" max="90" placeholder="34.0522" inputmode="decimal">
+              </label>
+              <label class="tp-coords-field">经度
+                <input type="number" id="geoLng" step="0.0001" min="-180" max="180" placeholder="-118.2437" inputmode="decimal">
+              </label>
+              <button type="button" class="tp-coords-apply" id="coordsApply">应用</button>
+              <button type="button" class="tp-coords-close" id="coordsClose" aria-label="关闭坐标编辑">×</button>
             </div>
           </div>
-
-          <div class="map-pick-bar">
-            <span class="ctl-label">地图选点</span>
-            <div class="map-pick-seg" role="group" aria-label="地图选点目标">
-              <button type="button" class="map-pick-btn" data-pick-mode="both" aria-pressed="true">时区 + 位置</button>
-              <button type="button" class="map-pick-btn" data-pick-mode="timezone" aria-pressed="false">仅时区</button>
-              <button type="button" class="map-pick-btn" data-pick-mode="location" aria-pressed="false">仅位置</button>
-            </div>
-          </div>
-
-          <div class="geo-map-wrap">
-            <svg id="worldMap" viewBox="0 0 720 360" role="img" aria-label="点击地图选择时区或位置">
-              <rect width="720" height="360" class="geo-ocean"></rect>
-              <path id="worldPath" class="geo-land" d=""></path>
-              <g id="geoMarker" class="geo-marker" hidden>
-                <circle r="9" class="geo-marker-ring"></circle>
-                <circle r="4" class="geo-marker-dot"></circle>
-              </g>
-            </svg>
-            <div class="geo-readout" id="geoReadout">点击地图选择时区或位置</div>
-          </div>
-
         </section>
 
         <!-- ═════════ 硬件指纹 ═════════ -->
