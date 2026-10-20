@@ -141,6 +141,9 @@ body {
   transition: color .15s, background .15s;
 }
 .tz-mode-btn:hover, .map-pick-btn:hover { color: var(--text); }
+.tz-mode-btn:hover:not([aria-pressed="true"]), .map-pick-btn:hover:not([aria-pressed="true"]) {
+  background: var(--surface-2);
+}
 .tz-mode-btn:focus-visible, .map-pick-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .tz-mode-btn[aria-pressed="true"], .map-pick-btn[aria-pressed="true"] {
   background: var(--accent-soft); color: var(--text);
@@ -173,7 +176,6 @@ body {
 }
 #worldMap { display: block; width: 100%; height: auto; cursor: crosshair; }
 #worldMap.inert { cursor: default; }
-.map-pick-btn:disabled { opacity: .28; cursor: default; }
 .geo-ocean { fill: var(--surface); }
 .geo-land { fill: var(--surface-2); stroke: var(--border); stroke-width: .5; }
 .geo-marker-ring { fill: none; stroke: var(--accent); stroke-width: 2; opacity: .55; }

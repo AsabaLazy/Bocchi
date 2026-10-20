@@ -879,7 +879,7 @@ function renderSharedMap() {
   if (worldMap) {
     worldMap.classList.toggle('inert', !eff);
     worldMap.title = !eff
-      ? '切换时区为手动或开启位置模块后可在图上选点'
+      ? '选择上方任一选点目标后即可在图上选点（会自动启用所需模块）'
       : (eff === 'both' ? '点击地图同时选择时区与位置' : (eff === 'timezone' ? '点击地图选择时区' : '点击地图选择位置'));
   }
 
@@ -916,8 +916,8 @@ function effectivePickMode() {
   const tzAvail = tzMode === 'manual';
   const geoAvail = geoModuleOn();
   if (mapPickMode === 'both') return tzAvail && geoAvail ? 'both' : (geoAvail ? 'location' : (tzAvail ? 'timezone' : null));
-  if (mapPickMode === 'timezone') return tzAvail ? 'timezone' : (geoAvail ? 'location' : null);
-  if (mapPickMode === 'location') return geoAvail ? 'location' : (tzAvail ? 'timezone' : null);
+  if (mapPickMode === 'timezone') return tzAvail ? 'timezone' : null;
+  if (mapPickMode === 'location') return geoAvail ? 'location' : null;
   return null;
 }
 
@@ -925,23 +925,46 @@ function applyMapPickUI(mode) {
   if (mode !== undefined) {
     mapPickMode = ['both', 'timezone', 'location'].includes(mode) ? mode : 'both';
   }
+  const tzModuleOn = !!(moduleInputs['timezoneProtection'] && moduleInputs['timezoneProtection'].checked);
   const tzAvail = tzMode === 'manual';
   const geoAvail = geoModuleOn();
   const eff = effectivePickMode();
   document.querySelectorAll('.map-pick-btn').forEach(btn => {
     const m = btn.dataset.pickMode;
-    const avail = m === 'both' ? (tzAvail && geoAvail) : (m === 'timezone' ? tzAvail : geoAvail);
-    btn.disabled = !avail;
+    const needs = [];
+    if (m !== 'location') {
+      if (!tzModuleOn) needs.push('开启时区模块');
+      if (!tzAvail) needs.push('切换为手动时区');
+    }
+    if (m !== 'timezone' && !geoAvail) needs.push('开启位置模块');
     btn.setAttribute('aria-pressed', m === eff ? 'true' : 'false');
-    btn.title = avail ? '' : (m === 'location' ? '开启位置模块后可用' : '切换到手动时区后可用');
+    btn.title = needs.length ? '选择后将' + needs.join('、') : '';
   });
   renderSharedMap();
 }
 
 document.querySelectorAll('.map-pick-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    chrome.storage.local.set({ mapPickMode: btn.dataset.pickMode });
-    applyMapPickUI(btn.dataset.pickMode);
+    const m = btn.dataset.pickMode;
+    const patch = { mapPickMode: m };
+    if (m !== 'location') {
+      if (!(moduleInputs['timezoneProtection'] && moduleInputs['timezoneProtection'].checked)) {
+        patch.timezoneProtection = true;
+      }
+      if (tzMode !== 'manual') {
+        patch.timezoneMode = 'manual';
+        if (!tzManual) patch.manualTimezone = effectiveTz() || 'UTC';
+      }
+    }
+    if (m !== 'timezone' && !geoModuleOn()) patch.geolocationProtection = true;
+    chrome.storage.local.set(patch);
+    // 乐观更新,点击立即生效;存储回传后由 applyTzUI 再校准
+    if (patch.timezoneProtection) moduleInputs['timezoneProtection'].checked = true;
+    if (patch.geolocationProtection) moduleInputs['geolocationProtection'].checked = true;
+    if (patch.timezoneMode === 'manual') tzMode = 'manual';
+    if (patch.manualTimezone) tzManual = patch.manualTimezone;
+    syncNavDotsFromInputs();
+    applyMapPickUI(m);
   });
 });
 
