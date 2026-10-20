@@ -26,6 +26,31 @@
   --brand-border: rgba(242,164,184,.38);
 }
 
+/* 浅色模式:与设置页同源的浅色映射 */
+html[data-theme="light"] {
+  --background: #faf9fb;
+  --foreground: #1b1a1f;
+  --card: #ffffff;
+  --card-foreground: #1b1a1f;
+  --popover: #faf9fb;
+  --popover-foreground: #1b1a1f;
+  --primary: #1b1a1f;
+  --primary-foreground: #ffffff;
+  --secondary: #f0eef3;
+  --secondary-foreground: #1b1a1f;
+  --muted: #f0eef3;
+  --muted-foreground: #585561;
+  --accent: #f0eef3;
+  --accent-foreground: #1b1a1f;
+  --border: rgba(20,20,30,.20);
+  --input: #f0eef3;
+  --ring: #cf5a80;
+  --brand: #cf5a80;
+  --brand-soft: rgba(207,90,128,.12);
+  --brand-border: rgba(207,90,128,.35);
+  --status-disabled: #8f8c98;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;

@@ -24,6 +24,25 @@
   --radius-s: 7px;
 }
 
+/* 浅色模式:同一套 token 的浅色映射(深色为默认层) */
+html[data-theme="light"] {
+  --bg: #faf9fb;
+  --surface: #ffffff;
+  --surface-2: #f0eef3;
+  --border: rgba(20,20,30,.20);
+  --border-soft: rgba(20,20,30,.10);
+  --text: #1b1a1f;
+  --muted: #585561;
+  --faint: #6f6c78;
+  --accent: #cf5a80;
+  --accent-soft: rgba(207,90,128,.10);
+  --accent-border: rgba(207,90,128,.35);
+  --eye: #5d5a66;
+  --eye-off: #8f8c98;
+  --specimen-dim: .45;
+}
+html[data-theme="light"] { scrollbar-color: #c9c6d0 transparent; }
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html { scrollbar-color: #33313a transparent; }
 
@@ -92,6 +111,28 @@ body {
 .view-head .switch { margin-left: 10px; margin-top: 3px; flex: none; }
 .view-head .reset-btn { margin-top: 1px; }
 .view-note { font-size: 12px; color: var(--faint); padding: 4px 0 10px; }
+
+/* 主题选择:色板即语义 */
+.theme-seg { display: flex; gap: 8px; flex-wrap: wrap; }
+.theme-btn {
+  display: flex; align-items: center; gap: 8px;
+  font: inherit; font-size: 12.5px; color: var(--muted);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-s); padding: 8px 14px; cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.theme-btn:hover { color: var(--text); border-color: var(--faint); }
+.theme-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.theme-btn[aria-pressed="true"] {
+  color: var(--text); border-color: var(--accent-border); background: var(--accent-soft);
+}
+.theme-swatch {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 1px solid var(--border); flex: none;
+}
+.theme-swatch.dark { background: #131316; }
+.theme-swatch.light { background: #ffffff; }
+.theme-swatch.system { background: linear-gradient(90deg, #131316 50%, #ffffff 50%); }
 
 @media (max-width: 760px) {
   .settings-body { grid-template-columns: 1fr; gap: 12px; }
@@ -307,7 +348,7 @@ body.off .font-title { opacity: .55; }
   display: grid; place-items: center;
   border-radius: 999px;
   background: var(--surface-2);
-  font-size: 12px; line-height: 1; color: #a8a6b0;
+  font-size: 12px; line-height: 1; color: var(--muted);
   letter-spacing: .04em;
   white-space: nowrap;
 }

@@ -221,10 +221,30 @@ if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged)
       fontProtection = changes.fontProtection.newValue !== false;
       needsUpdate = true;
     }
+    if (changes.theme) {
+      applyTheme(changes.theme.newValue);
+    }
 
     if (needsUpdate) {
       updateUI();
     }
+  });
+}
+
+// 主题:与设置页共用 storage.theme(system/dark/light)
+const popupThemeMedia = typeof window !== 'undefined' && window.matchMedia
+  ? window.matchMedia('(prefers-color-scheme: light)') : null;
+let popupThemePref = 'system';
+
+function applyTheme(pref) {
+  popupThemePref = ['dark', 'light', 'system'].includes(pref) ? pref : 'system';
+  const effective = popupThemePref === 'light' ||
+    (popupThemePref === 'system' && popupThemeMedia && popupThemeMedia.matches) ? 'light' : 'dark';
+  document.documentElement.dataset.theme = effective;
+}
+if (popupThemeMedia && popupThemeMedia.addEventListener) {
+  popupThemeMedia.addEventListener('change', () => {
+    if (popupThemePref === 'system') applyTheme('system');
   });
 }
 
@@ -244,7 +264,8 @@ function init() {
       'audioProtection',
       'timezoneProtection',
       'hardwareProtection',
-      'fontProtection'
+      'fontProtection',
+      'theme'
     ];
 
     chrome.storage.local.get(keys, (res) => {
@@ -257,6 +278,7 @@ function init() {
         timezoneProtection = res.timezoneProtection !== false;
         hardwareProtection = res.hardwareProtection !== false;
         fontProtection = res.fontProtection !== false;
+        applyTheme(res.theme);
       }
       updateUI();
     });

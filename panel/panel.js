@@ -627,6 +627,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (changes.timezone || changes.targetTimezone) {
       chrome.storage.local.get(['timezone', 'targetTimezone'], updateTzInfo);
     }
+    if (changes.theme) {
+      applyTheme(changes.theme.newValue);
+    }
     if (changed) renderList();
   }
 });
@@ -683,6 +686,36 @@ function updateTzInfo(res) {
     : '当前生效时区：尚未对齐（随出口 IP 自动更新）';
 }
 
+// 主题:跟随系统 / 深色 / 浅色(存储键 theme,默认 system)
+const themeMedia = window.matchMedia('(prefers-color-scheme: light)');
+let themePref = 'system';
+
+function resolvedTheme(pref) {
+  if (pref === 'light') return 'light';
+  if (pref === 'dark') return 'dark';
+  return themeMedia.matches ? 'light' : 'dark';
+}
+
+function applyTheme(pref) {
+  themePref = ['dark', 'light', 'system'].includes(pref) ? pref : 'system';
+  document.documentElement.dataset.theme = resolvedTheme(themePref);
+  document.querySelectorAll('.theme-btn').forEach(btn => {
+    btn.setAttribute('aria-pressed', btn.dataset.themeChoice === themePref ? 'true' : 'false');
+  });
+}
+
+document.querySelectorAll('.theme-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    chrome.storage.local.set({ theme: btn.dataset.themeChoice });
+    applyTheme(btn.dataset.themeChoice);
+  });
+});
+
+// 系统配色变化时,跟随模式实时切换
+themeMedia.addEventListener('change', () => {
+  if (themePref === 'system') applyTheme('system');
+});
+
 // Initialize
 async function init() {
   try {
@@ -704,7 +737,7 @@ async function init() {
 
   allFonts.sort((a, b) => a.localeCompare(b));
 
-  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', ...MODULE_KEYS], (res) => {
+  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'theme', ...MODULE_KEYS], (res) => {
     fontMode = res.fontMode === 'whitelist' ? 'whitelist' : 'blacklist';
     customHiddenFonts = Array.isArray(res.customHiddenFonts) ? res.customHiddenFonts : [];
     customAllowedFonts = Array.isArray(res.customAllowedFonts) ? res.customAllowedFonts : [];
@@ -717,6 +750,7 @@ async function init() {
     }
     syncNavDotsFromInputs();
     updateTzInfo(res);
+    applyTheme(res.theme);
     applyShieldState(res.globalShieldEnabled !== false);
     showView((location.hash || '#fonts').slice(1));
     renderList();
