@@ -44,14 +44,14 @@
     'customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'fontMode', 'blockOtherScripts', 'blockSymbols',
     'globalShieldEnabled', 'siteBypassList',
     'canvasProtection', 'webrtcProtection', 'audioProtection', 'timezoneProtection', 'hardwareProtection', 'fontProtection',
-    'canvasMode', 'audioMode', 'hardwareMode'
+    'canvasStrength', 'audioStrength', 'hardwareStrength', 'webrtcDevices', 'webrtcLocalIp'
   ];
 
   const SHIELD_KEYS = [
     'globalShieldEnabled', 'siteBypassList',
     'canvasProtection', 'webrtcProtection', 'audioProtection',
     'timezoneProtection', 'hardwareProtection', 'fontProtection',
-    'canvasMode', 'audioMode', 'hardwareMode',
+    'canvasStrength', 'audioStrength', 'hardwareStrength', 'webrtcDevices', 'webrtcLocalIp',
     'blockOtherScripts', 'blockSymbols'
   ];
 
@@ -149,9 +149,11 @@
       timezoneProtection: res ? res.timezoneProtection !== false : true,
       hardwareProtection: res ? res.hardwareProtection !== false : true,
       fontProtection: res ? res.fontProtection !== false : true,
-      canvasMode: res && res.canvasMode === 'compat' ? 'compat' : 'standard',
-      audioMode: res && res.audioMode === 'compat' ? 'compat' : 'standard',
-      hardwareMode: res && res.hardwareMode === 'compat' ? 'compat' : 'standard',
+      canvasStrength: ['light', 'standard', 'strong'].includes(res && res.canvasStrength) ? res.canvasStrength : 'standard',
+      audioStrength: ['light', 'standard', 'strong'].includes(res && res.audioStrength) ? res.audioStrength : 'standard',
+      hardwareStrength: ['light', 'standard', 'strong'].includes(res && res.hardwareStrength) ? res.hardwareStrength : 'standard',
+      webrtcDevices: res ? res.webrtcDevices !== false : true,
+      webrtcLocalIp: res ? res.webrtcLocalIp !== false : true,
       blockOtherScripts: res ? !!res.blockOtherScripts : false,
       blockSymbols: res ? !!res.blockSymbols : false
     };

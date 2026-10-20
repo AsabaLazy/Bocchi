@@ -4,8 +4,8 @@
  * Bocchi Privacy Shield - Background Service Worker
  *
  * Responsibilities:
- *  - Enforce the WebRTC IP handling policy (strict: disable_non_proxied_udp;
- *    compat: default_public_interface_only) to prevent local IP leakage.
+ *  - Enforce the WebRTC IP handling policy from the independent UDP-block and
+ *    local-IP-cleaning switches.
  *  - Periodically resolve the egress IP's timezone via GeoIP endpoints and
  *    cache it in chrome.storage.local for content scripts.
  *  - Answer GET_TIMEZONE runtime messages.
@@ -19,29 +19,32 @@
 const DEFAULT_TIMEZONE = 'America/Los_Angeles';
 
 /**
- * Configure WebRTC IP Handling Policy.
- * - strict (default): disable_non_proxied_udp blocks local/public UDP leakage,
- *   but can break WebRTC video calls.
- * - compat: default_public_interface_only keeps video calls working while still
- *   hiding private interfaces; the public IP may be visible to the peer.
+ * Configure WebRTC IP Handling Policy from the three independent WebRTC
+ * options:
+ * - webrtcUdp on: disable_non_proxied_udp (strongest, can break video calls).
+ * - webrtcUdp off + webrtcLocalIp on: default_public_interface_only keeps
+ *   video calls working while hiding private interfaces (public IP may leak).
+ * - both off: browser default.
  */
 async function applyWebRTCPolicy(specifiedEnabled) {
   if (typeof chrome !== 'undefined' && chrome.privacy && chrome.privacy.network && chrome.privacy.network.webRTCIPHandlingPolicy) {
     try {
       let isEnabled = specifiedEnabled;
-      let mode = 'strict';
+      let udpBlock = true;
+      let localIpClean = true;
       if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
         // chrome.storage.local.get always resolves asynchronously in Chrome;
         // read it via a Promise and await the result.
         try {
           const res = await new Promise(resolve => {
-            chrome.storage.local.get(['globalShieldEnabled', 'webrtcProtection', 'webrtcMode'], resolve);
+            chrome.storage.local.get(['globalShieldEnabled', 'webrtcProtection', 'webrtcUdp', 'webrtcLocalIp'], resolve);
           });
           if (res) {
             if (isEnabled === undefined) {
               isEnabled = (res.globalShieldEnabled !== false) && (res.webrtcProtection !== false);
             }
-            mode = res.webrtcMode === 'compat' ? 'compat' : 'strict';
+            udpBlock = res.webrtcUdp !== false;
+            localIpClean = res.webrtcLocalIp !== false;
           }
         } catch (_) {}
       }
@@ -50,7 +53,7 @@ async function applyWebRTCPolicy(specifiedEnabled) {
       }
       const policyValue = !isEnabled
         ? 'default'
-        : (mode === 'compat' ? 'default_public_interface_only' : 'disable_non_proxied_udp');
+        : (udpBlock ? 'disable_non_proxied_udp' : (localIpClean ? 'default_public_interface_only' : 'default'));
       await chrome.privacy.network.webRTCIPHandlingPolicy.set({
         value: policyValue
       });
@@ -274,7 +277,7 @@ if (typeof chrome !== 'undefined' && chrome.runtime) {
 
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged && chrome.storage.onChanged.addListener) {
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area === 'local' && (changes.globalShieldEnabled || changes.webrtcProtection || changes.webrtcMode)) {
+      if (area === 'local' && (changes.globalShieldEnabled || changes.webrtcProtection || changes.webrtcUdp || changes.webrtcLocalIp)) {
         applyWebRTCPolicy();
       }
       if (area === 'local' && changes.siteBypassList) {

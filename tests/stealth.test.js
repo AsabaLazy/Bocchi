@@ -148,13 +148,19 @@ assert.strictEqual(startupListeners.length, 1, 'Service worker must register onS
 
   assert.strictEqual(policySet, 'disable_non_proxied_udp', 'Service worker must set webRTCIPHandlingPolicy to disable_non_proxied_udp');
 
-  // WebRTC compat video mode keeps public UDP while hiding private interfaces.
-  storageData.webrtcMode = 'compat';
+  // Turning off UDP blocking while keeping local-IP cleaning keeps video calls
+  // working and still hides private interfaces.
+  storageData.webrtcUdp = false;
+  storageData.webrtcLocalIp = true;
   await swModule.exports.applyWebRTCPolicy();
-  assert.strictEqual(policySet, 'default_public_interface_only', 'Compat mode must use default_public_interface_only');
-  storageData.webrtcMode = 'strict';
+  assert.strictEqual(policySet, 'default_public_interface_only', 'UDP off + local IP cleaning must use default_public_interface_only');
+  storageData.webrtcLocalIp = false;
   await swModule.exports.applyWebRTCPolicy();
-  assert.strictEqual(policySet, 'disable_non_proxied_udp', 'Strict mode must keep disable_non_proxied_udp');
+  assert.strictEqual(policySet, 'default', 'UDP off + local IP cleaning off must restore the browser default');
+  storageData.webrtcUdp = true;
+  storageData.webrtcLocalIp = true;
+  await swModule.exports.applyWebRTCPolicy();
+  assert.strictEqual(policySet, 'disable_non_proxied_udp', 'UDP blocking on must use disable_non_proxied_udp');
   storageData.webrtcProtection = false;
   await swModule.exports.applyWebRTCPolicy();
   assert.strictEqual(policySet, 'default', 'Disabled WebRTC protection must restore the browser default');
@@ -2516,6 +2522,22 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     const devicesRaw = await winFeat.navigator.mediaDevices.enumerateDevices();
     assert(devicesRaw.some(d => d.deviceId === 'mic-abc-123'), 'With webrtcProtection=false, enumerateDevices must return real deviceId');
 
+    // WebRTC sub-options: local-IP scrubbing and device masking are independent.
+    driveConfig(winFeat, { cfg: { webrtcProtection: true, webrtcLocalIp: false, webrtcDevices: false } });
+    const pcLocalOff = new winFeat.RTCPeerConnection();
+    const offerLocalOff = await pcLocalOff.createOffer();
+    assert(offerLocalOff.sdp.includes('192.168.1.100'), 'With webrtcLocalIp=false, SDP must retain the private IP');
+    const devicesLocalOff = await winFeat.navigator.mediaDevices.enumerateDevices();
+    assert(devicesLocalOff.some(d => d.deviceId === 'mic-abc-123'), 'With webrtcDevices=false, enumerateDevices must return real deviceId');
+    driveConfig(winFeat, { cfg: { webrtcProtection: true, webrtcLocalIp: true, webrtcDevices: true } });
+    const pcLocalOn = new winFeat.RTCPeerConnection();
+    const offerLocalOn = await pcLocalOn.createOffer();
+    assert(offerLocalOn.sdp.includes('0.0.0.0'), 'With webrtcLocalIp=true, SDP must rewrite the private IP');
+    const devicesMasked = await winFeat.navigator.mediaDevices.enumerateDevices();
+    assert(devicesMasked.every(d => d.deviceId === ''), 'With webrtcDevices=true, deviceId must be masked');
+    // Restore the disabled state expected by the ICE listener checks below.
+    driveConfig(winFeat, { cfg: { webrtcProtection: false } });
+
     // WebRTC addEventListener & removeEventListener test
     let receivedCandidate = null;
     const iceListener = (ev) => { receivedCandidate = ev.candidate; };
@@ -2953,6 +2975,29 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
       vm.runInContext(stealthCode, vm.createContext(winPerf));
       driveConfig(winPerf, { cfg: { hardwareProtection: false } });
       assert.strictEqual(winPerf.performance.now(), 123.456, 'With hardwareProtection=false, performance.now() returns the native value');
+
+      const winPerfStrength = createMockWindow('perf-strength.example', 'Linux x86_64');
+      vm.runInContext(stealthCode, vm.createContext(winPerfStrength));
+      driveConfig(winPerfStrength, { cfg: { hardwareStrength: 'strong' } });
+      assert.strictEqual(winPerfStrength.performance.now(), 120, 'Strong hardware strength must quantize performance.now() to 10ms');
+      driveConfig(winPerfStrength, { cfg: { hardwareStrength: 'light' } });
+      assert.strictEqual(winPerfStrength.performance.now(), 123.4, 'Light hardware strength must quantize performance.now() to 0.1ms');
+
+      const winStrength = createMockWindow('strength-test.example', 'Linux x86_64');
+      vm.runInContext(stealthCode, vm.createContext(winStrength));
+      const cStd = new winStrength.HTMLCanvasElement();
+      const ctxStd = cStd.getContext('2d');
+      ctxStd._pixels.set([0, 0, 0, 255]);
+      const stdCanvas = ctxStd.getImageData(0, 0, 1, 1).data[0];
+      const aStd = new winStrength.AudioBuffer(500).getChannelData(0)[0];
+      driveConfig(winStrength, { cfg: { canvasStrength: 'strong', audioStrength: 'strong' } });
+      const cStrong = new winStrength.HTMLCanvasElement();
+      const ctxStrong = cStrong.getContext('2d');
+      ctxStrong._pixels.set([0, 0, 0, 255]);
+      const strongCanvas = ctxStrong.getImageData(0, 0, 1, 1).data[0];
+      const aStrong = new winStrength.AudioBuffer(500).getChannelData(0)[0];
+      assert.notStrictEqual(strongCanvas, stdCanvas, 'Strong canvas strength must increase pixel perturbation');
+      assert.notStrictEqual(aStrong, aStd, 'Strong audio strength must increase AudioBuffer noise');
 
       const winGP = createMockWindow('gamepad-test.example', 'Linux x86_64');
       vm.runInContext(stealthCode, vm.createContext(winGP));

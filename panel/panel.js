@@ -643,8 +643,11 @@ chrome.storage.onChanged.addListener((changes, area) => {
       if ($cityNameLanguage) $cityNameLanguage.value = changes.cityNameLanguage.newValue || 'system';
       applyCityLanguage(changes.cityNameLanguage.newValue || 'system');
     }
-    for (const [name, cfg] of Object.entries(MODULE_MODE_CONFIG)) {
-      if (changes[cfg.key]) updateModuleModeUI(name, changes[cfg.key].newValue);
+    for (const [name, cfg] of Object.entries(MODULE_STRENGTH_CONFIG)) {
+      if (changes[cfg.key]) updateModuleStrengthUI(name, changes[cfg.key].newValue);
+    }
+    for (const key of WEBRTC_OPTION_KEYS) {
+      if (changes[key]) updateWebRTCOptionUI(key, changes[key].newValue);
     }
     if (changes.theme) {
       applyTheme(changes.theme.newValue);
@@ -677,61 +680,55 @@ for (const [key, el] of Object.entries(moduleInputs)) {
   });
 }
 
-const MODULE_MODE_CONFIG = {
+const MODULE_STRENGTH_CONFIG = {
   canvas: {
-    key: 'canvasMode',
-    control: 'canvasModeControl',
-    note: 'canvasModeNote',
-    values: ['standard', 'compat'],
+    key: 'canvasStrength',
+    control: 'canvasStrengthControl',
+    note: 'canvasStrengthNote',
+    values: ['light', 'standard', 'strong'],
     fallback: 'standard',
     notes: {
-      standard: '标准：2D 与 WebGL 导出都做逐页微扰。',
-      compat: '兼容：只保留 2D 导出微扰，跳过 WebGL 导出，减少地图/3D 站点兼容问题。'
+      light: '轻：像素扰动量减半，画布导出更接近原始值。',
+      standard: '标准：2D 与 WebGL 导出使用当前扰动量。',
+      strong: '强：像素扰动量加倍，降低关联性，可能影响图像校验。'
     }
   },
   audio: {
-    key: 'audioMode',
-    control: 'audioModeControl',
-    note: 'audioModeNote',
-    values: ['standard', 'compat'],
+    key: 'audioStrength',
+    control: 'audioStrengthControl',
+    note: 'audioStrengthNote',
+    values: ['light', 'standard', 'strong'],
     fallback: 'standard',
     notes: {
-      standard: '标准：AudioBuffer 指纹加入逐页噪声。',
-      compat: '兼容：不修改音频数据（等同关闭音频噪声），适合对音频敏感的站点。'
-    }
-  },
-  webrtc: {
-    key: 'webrtcMode',
-    control: 'webrtcModeControl',
-    note: 'webrtcModeNote',
-    values: ['strict', 'compat'],
-    fallback: 'strict',
-    notes: {
-      strict: '严格：阻断非代理 UDP，最防泄漏，但可能影响视频通话。',
-      compat: '兼容视频：仅使用公网接口，保留视频，公网 IP 可能暴露；本地 IP 仍会清洗。'
+      light: '轻：AudioBuffer 噪声幅度减半。',
+      standard: '标准：AudioBuffer 指纹使用当前噪声幅度。',
+      strong: '强：噪声幅度加倍，指纹更难关联，但音频数据偏差更大。'
     }
   },
   hardware: {
-    key: 'hardwareMode',
-    control: 'hardwareModeControl',
-    note: 'hardwareModeNote',
-    values: ['standard', 'compat'],
+    key: 'hardwareStrength',
+    control: 'hardwareStrengthControl',
+    note: 'hardwareStrengthNote',
+    values: ['light', 'standard', 'strong'],
     fallback: 'standard',
     notes: {
-      standard: '标准：GPU/WebGL/WebGPU 画像统一伪装。',
-      compat: '兼容：保留原生 GPU 画像，继续伪装屏幕/DPR/计时器/手柄，减少 3D/视频站点兼容问题。'
+      light: '轻：WebGL 读像素噪声减半，计时器精度 0.1ms。',
+      standard: '标准：当前 GPU/屏幕画像，计时器精度 1ms。',
+      strong: '强：WebGL 读像素噪声加倍，计时器精度 10ms。'
     }
   }
 };
 
-function updateModuleModeUI(name, value) {
-  const cfg = MODULE_MODE_CONFIG[name];
+const WEBRTC_OPTION_KEYS = ['webrtcDevices', 'webrtcLocalIp', 'webrtcUdp'];
+
+function updateModuleStrengthUI(name, value) {
+  const cfg = MODULE_STRENGTH_CONFIG[name];
   if (!cfg) return;
   const selected = cfg.values.includes(value) ? value : cfg.fallback;
   const control = document.getElementById(cfg.control);
   if (control) {
     control.querySelectorAll('.mode-btn').forEach(btn => {
-      const on = btn.dataset.mode === selected;
+      const on = btn.dataset.strength === selected;
       btn.classList.toggle('active', on);
       btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
@@ -740,21 +737,38 @@ function updateModuleModeUI(name, value) {
   if (note) note.textContent = cfg.notes[selected];
 }
 
-function setupModuleModes() {
-  for (const [name, cfg] of Object.entries(MODULE_MODE_CONFIG)) {
+function setupModuleStrengths() {
+  for (const [name, cfg] of Object.entries(MODULE_STRENGTH_CONFIG)) {
     const control = document.getElementById(cfg.control);
     if (!control) continue;
     control.querySelectorAll('.mode-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        const value = btn.dataset.mode;
+        const value = btn.dataset.strength;
         if (!cfg.values.includes(value)) return;
-        updateModuleModeUI(name, value);
+        updateModuleStrengthUI(name, value);
         chrome.storage.local.set({ [cfg.key]: value });
       });
     });
   }
 }
-setupModuleModes();
+
+function updateWebRTCOptionUI(key, value) {
+  const el = document.getElementById(key);
+  if (el) el.checked = value !== false;
+}
+
+function setupWebRTCOptions() {
+  for (const key of WEBRTC_OPTION_KEYS) {
+    const el = document.getElementById(key);
+    if (!el) continue;
+    el.addEventListener('change', () => {
+      chrome.storage.local.set({ [key]: el.checked });
+    });
+  }
+}
+
+setupModuleStrengths();
+setupWebRTCOptions();
 
 // 视图路由:侧栏切换 + hash 深链(默认字体)
 function showView(name) {
@@ -1705,7 +1719,7 @@ async function init() {
 
   allFonts.sort((a, b) => a.localeCompare(b));
 
-  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone', 'geolocationLatitude', 'geolocationLongitude', 'ipLatitude', 'ipLongitude', 'ipCity', 'cityNameLanguage', 'canvasMode', 'audioMode', 'webrtcMode', 'hardwareMode', 'theme', ...MODULE_KEYS], (res) => {
+  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone', 'geolocationLatitude', 'geolocationLongitude', 'ipLatitude', 'ipLongitude', 'ipCity', 'cityNameLanguage', 'canvasStrength', 'audioStrength', 'hardwareStrength', 'webrtcDevices', 'webrtcLocalIp', 'webrtcUdp', 'theme', ...MODULE_KEYS], (res) => {
     fontMode = res.fontMode === 'whitelist' ? 'whitelist' : 'blacklist';
     customHiddenFonts = Array.isArray(res.customHiddenFonts) ? res.customHiddenFonts : [];
     customAllowedFonts = Array.isArray(res.customAllowedFonts) ? res.customAllowedFonts : [];
@@ -1723,8 +1737,11 @@ async function init() {
     applyIpUI(res);
     if ($cityNameLanguage) $cityNameLanguage.value = res.cityNameLanguage || 'system';
     applyCityLanguage(res.cityNameLanguage || 'system');
-    for (const [name, cfg] of Object.entries(MODULE_MODE_CONFIG)) {
-      updateModuleModeUI(name, res[cfg.key]);
+    for (const [name, cfg] of Object.entries(MODULE_STRENGTH_CONFIG)) {
+      updateModuleStrengthUI(name, res[cfg.key]);
+    }
+    for (const key of WEBRTC_OPTION_KEYS) {
+      updateWebRTCOptionUI(key, res[key]);
     }
     if (!(typeof res.ipLatitude === 'number' && typeof res.ipLongitude === 'number') &&
         typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {

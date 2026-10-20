@@ -152,13 +152,14 @@
             </label>
           </div>
           <div class="view-options">
-            <span class="ctl-label">模式</span>
-            <div class="mode-seg" id="canvasModeControl" role="group" aria-label="Canvas 与 WebGL 模式">
-              <button type="button" class="mode-btn active" data-mode="standard" aria-pressed="true">标准</button>
-              <button type="button" class="mode-btn" data-mode="compat" aria-pressed="false">兼容</button>
+            <span class="ctl-label">强度</span>
+            <div class="mode-seg" id="canvasStrengthControl" role="group" aria-label="Canvas 扰动强度">
+              <button type="button" class="mode-btn" data-strength="light" aria-pressed="false">轻</button>
+              <button type="button" class="mode-btn active" data-strength="standard" aria-pressed="true">标准</button>
+              <button type="button" class="mode-btn" data-strength="strong" aria-pressed="false">强</button>
             </div>
           </div>
-          <p class="view-note" id="canvasModeNote">标准：2D 与 WebGL 导出都做逐页微扰。兼容：只保留 2D 导出微扰，跳过 WebGL 导出，减少地图/3D 站点兼容问题。</p>
+          <p class="view-note" id="canvasStrengthNote">标准：2D 与 WebGL 导出使用当前扰动量。轻/强降低或增大像素扰动。</p>
         </section>
 
         <!-- ═════════ 音频 ═════════ -->
@@ -174,13 +175,14 @@
             </label>
           </div>
           <div class="view-options">
-            <span class="ctl-label">模式</span>
-            <div class="mode-seg" id="audioModeControl" role="group" aria-label="音频模式">
-              <button type="button" class="mode-btn active" data-mode="standard" aria-pressed="true">标准</button>
-              <button type="button" class="mode-btn" data-mode="compat" aria-pressed="false">兼容</button>
+            <span class="ctl-label">强度</span>
+            <div class="mode-seg" id="audioStrengthControl" role="group" aria-label="音频扰动强度">
+              <button type="button" class="mode-btn" data-strength="light" aria-pressed="false">轻</button>
+              <button type="button" class="mode-btn active" data-strength="standard" aria-pressed="true">标准</button>
+              <button type="button" class="mode-btn" data-strength="strong" aria-pressed="false">强</button>
             </div>
           </div>
-          <p class="view-note" id="audioModeNote">标准：AudioBuffer 指纹加入逐页噪声。兼容：不修改音频数据（等同关闭音频噪声），适合对音频敏感的站点。</p>
+          <p class="view-note" id="audioStrengthNote">标准：AudioBuffer 指纹使用当前噪声幅度。轻/强降低或增大噪声。</p>
         </section>
 
         <!-- ═════════ WebRTC ═════════ -->
@@ -188,21 +190,37 @@
           <div class="view-head">
             <div>
               <h2>WebRTC</h2>
-              <p>抑制私网 IPv4/mDNS 泄漏；严格模式阻断非代理 UDP，兼容模式保留视频所需的公网 UDP。</p>
+              <p>设备列表、本地 IP 与非代理 UDP 可分别控制。</p>
             </div>
             <label class="switch" title="WebRTC 隐私隔离开关">
               <input type="checkbox" id="webrtcProtection" checked aria-label="WebRTC 隐私隔离">
               <i></i>
             </label>
           </div>
-          <div class="view-options">
-            <span class="ctl-label">模式</span>
-            <div class="mode-seg" id="webrtcModeControl" role="group" aria-label="WebRTC 模式">
-              <button type="button" class="mode-btn active" data-mode="strict" aria-pressed="true">严格</button>
-              <button type="button" class="mode-btn" data-mode="compat" aria-pressed="false">兼容视频</button>
-            </div>
+          <div class="view-options view-options-stack">
+            <label class="opt-row">
+              <span class="opt-copy">
+                <span class="opt-title">设备列表脱敏</span>
+                <span class="opt-desc">隐藏麦克风/摄像头设备 ID 与名称，防设备枚举。</span>
+              </span>
+              <span class="switch"><input type="checkbox" id="webrtcDevices" checked aria-label="设备列表脱敏"><i></i></span>
+            </label>
+            <label class="opt-row">
+              <span class="opt-copy">
+                <span class="opt-title">本地 IP 清洗</span>
+                <span class="opt-desc">从 SDP/ICE 候选中移除私网 IPv4/IPv6 地址。</span>
+              </span>
+              <span class="switch"><input type="checkbox" id="webrtcLocalIp" checked aria-label="本地 IP 清洗"><i></i></span>
+            </label>
+            <label class="opt-row">
+              <span class="opt-copy">
+                <span class="opt-title">阻断非代理 UDP</span>
+                <span class="opt-desc">最防泄漏；关闭后视频通话更兼容，但公网 IP 可能暴露。</span>
+              </span>
+              <span class="switch"><input type="checkbox" id="webrtcUdp" checked aria-label="阻断非代理 UDP"><i></i></span>
+            </label>
           </div>
-          <p class="view-note" id="webrtcModeNote">严格：阻断非代理 UDP，最防泄漏，但可能影响视频通话。兼容视频：仅使用公网接口，保留视频，公网 IP 可能暴露；本地 IP 仍会清洗。</p>
+          <p class="view-note" id="webrtcModeNote">设备列表与本地 IP 独立生效；开启“阻断非代理 UDP”时优先级最高。只关闭 UDP 阻断可优先保留视频通话，但公网 IP 可能暴露。</p>
         </section>
 
         <!-- ═════════ 时间与位置 ═════════ -->
@@ -373,13 +391,14 @@
             </label>
           </div>
           <div class="view-options">
-            <span class="ctl-label">模式</span>
-            <div class="mode-seg" id="hardwareModeControl" role="group" aria-label="硬件指纹模式">
-              <button type="button" class="mode-btn active" data-mode="standard" aria-pressed="true">标准</button>
-              <button type="button" class="mode-btn" data-mode="compat" aria-pressed="false">兼容</button>
+            <span class="ctl-label">强度</span>
+            <div class="mode-seg" id="hardwareStrengthControl" role="group" aria-label="硬件混淆强度">
+              <button type="button" class="mode-btn" data-strength="light" aria-pressed="false">轻</button>
+              <button type="button" class="mode-btn active" data-strength="standard" aria-pressed="true">标准</button>
+              <button type="button" class="mode-btn" data-strength="strong" aria-pressed="false">强</button>
             </div>
           </div>
-          <p class="view-note" id="hardwareModeNote">标准：GPU/WebGL/WebGPU 画像统一伪装。兼容：保留原生 GPU 画像，继续伪装屏幕/DPR/计时器/手柄，减少 3D/视频站点兼容问题。</p>
+          <p class="view-note" id="hardwareStrengthNote">标准：当前 GPU/屏幕画像，计时器精度 1ms。轻/强调整 WebGL 读像素噪声与计时器精度。</p>
         </section>
 
       </main>

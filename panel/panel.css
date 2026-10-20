@@ -121,6 +121,17 @@ body {
 .tp-lang-status { color: var(--faint); font-size: 10px; white-space: nowrap; }
 .view-options { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 2px 0 8px; }
 .view-options .mode-btn { padding: 5px 12px; font-size: 12px; }
+.view-options-stack { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+.opt-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 9px 12px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius-s);
+  cursor: pointer; transition: border-color .15s;
+}
+.opt-row:hover { border-color: var(--faint); }
+.opt-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.opt-title { font-size: 12.5px; color: var(--text); }
+.opt-desc { font-size: 11.5px; color: var(--muted); }
 .view-note { font-size: 12px; color: var(--faint); padding: 4px 0 10px; }
 
 /* 时间与位置：地图控制台 */
