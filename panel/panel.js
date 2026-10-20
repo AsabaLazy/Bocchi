@@ -636,6 +636,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (changes.ipLatitude || changes.ipLongitude || changes.ipCity) {
       chrome.storage.local.get(['ipLatitude', 'ipLongitude', 'ipCity'], applyIpUI);
     }
+    if (changes.cityNameLanguage) {
+      if ($cityNameLanguage) $cityNameLanguage.value = changes.cityNameLanguage.newValue || 'system';
+      applyCityLanguage(changes.cityNameLanguage.newValue || 'system');
+    }
     if (changes.theme) {
       applyTheme(changes.theme.newValue);
     }
@@ -709,51 +713,160 @@ let previewCity = null;
 let lastClockText = '';
 let clockInitialized = false;
 
-const TZ_POINTS = Array.isArray(window.BOCCHI_TZ_POINTS) ? window.BOCCHI_TZ_POINTS : [];
+let CITY_DATA = [];
+let cityNameLanguage = 'system';
+let onlineCityNames = {};
+let onlineCityNamesLang = '';
+let onlineNamesToken = 0;
+let onlineNamesLoading = false;
 
-// 搜索用的精选城市(时区推导仍用 818 个代表点)
-const CITIES = [
-  { zh: '东京', en: 'Tokyo', lat: 35.6762, lng: 139.6503, tz: 'Asia/Tokyo' },
-  { zh: '大阪', en: 'Osaka', lat: 34.6937, lng: 135.5023, tz: 'Asia/Tokyo' },
-  { zh: '首尔', en: 'Seoul', lat: 37.5665, lng: 126.9780, tz: 'Asia/Seoul' },
-  { zh: '北京', en: 'Beijing', lat: 39.9042, lng: 116.4074, tz: 'Asia/Shanghai' },
-  { zh: '上海', en: 'Shanghai', lat: 31.2304, lng: 121.4737, tz: 'Asia/Shanghai' },
-  { zh: '香港', en: 'Hong Kong', lat: 22.3193, lng: 114.1694, tz: 'Asia/Hong_Kong' },
-  { zh: '台北', en: 'Taipei', lat: 25.0330, lng: 121.5654, tz: 'Asia/Taipei' },
-  { zh: '新加坡', en: 'Singapore', lat: 1.3521, lng: 103.8198, tz: 'Asia/Singapore' },
-  { zh: '曼谷', en: 'Bangkok', lat: 13.7563, lng: 100.5018, tz: 'Asia/Bangkok' },
-  { zh: '雅加达', en: 'Jakarta', lat: -6.2088, lng: 106.8456, tz: 'Asia/Jakarta' },
-  { zh: '孟买', en: 'Mumbai', lat: 19.0760, lng: 72.8777, tz: 'Asia/Kolkata' },
-  { zh: '迪拜', en: 'Dubai', lat: 25.2048, lng: 55.2708, tz: 'Asia/Dubai' },
-  { zh: '莫斯科', en: 'Moscow', lat: 55.7558, lng: 37.6173, tz: 'Europe/Moscow' },
-  { zh: '伊斯坦布尔', en: 'Istanbul', lat: 41.0082, lng: 28.9784, tz: 'Europe/Istanbul' },
-  { zh: '柏林', en: 'Berlin', lat: 52.5200, lng: 13.4050, tz: 'Europe/Berlin' },
-  { zh: '巴黎', en: 'Paris', lat: 48.8566, lng: 2.3522, tz: 'Europe/Paris' },
-  { zh: '伦敦', en: 'London', lat: 51.5074, lng: -0.1278, tz: 'Europe/London' },
-  { zh: '阿姆斯特丹', en: 'Amsterdam', lat: 52.3676, lng: 4.9041, tz: 'Europe/Amsterdam' },
-  { zh: '马德里', en: 'Madrid', lat: 40.4168, lng: -3.7038, tz: 'Europe/Madrid' },
-  { zh: '罗马', en: 'Rome', lat: 41.9028, lng: 12.4964, tz: 'Europe/Rome' },
-  { zh: '纽约', en: 'New York', lat: 40.7128, lng: -74.0060, tz: 'America/New_York' },
-  { zh: '洛杉矶', en: 'Los Angeles', lat: 34.0522, lng: -118.2437, tz: 'America/Los_Angeles' },
-  { zh: '旧金山', en: 'San Francisco', lat: 37.7749, lng: -122.4194, tz: 'America/Los_Angeles' },
-  { zh: '西雅图', en: 'Seattle', lat: 47.6062, lng: -122.3321, tz: 'America/Los_Angeles' },
-  { zh: '芝加哥', en: 'Chicago', lat: 41.8781, lng: -87.6298, tz: 'America/Chicago' },
-  { zh: '多伦多', en: 'Toronto', lat: 43.6532, lng: -79.3832, tz: 'America/Toronto' },
-  { zh: '墨西哥城', en: 'Mexico City', lat: 19.4326, lng: -99.1332, tz: 'America/Mexico_City' },
-  { zh: '圣保罗', en: 'São Paulo', lat: -23.5505, lng: -46.6333, tz: 'America/Sao_Paulo' },
-  { zh: '布宜诺斯艾利斯', en: 'Buenos Aires', lat: -34.6037, lng: -58.3816, tz: 'America/Argentina/Buenos_Aires' },
-  { zh: '悉尼', en: 'Sydney', lat: -33.8688, lng: 151.2093, tz: 'Australia/Sydney' },
-  { zh: '墨尔本', en: 'Melbourne', lat: -37.8136, lng: 144.9631, tz: 'Australia/Melbourne' },
-  { zh: '布里斯班', en: 'Brisbane', lat: -27.4698, lng: 153.0251, tz: 'Australia/Brisbane' },
-  { zh: '奥克兰', en: 'Auckland', lat: -36.8509, lng: 174.7645, tz: 'Pacific/Auckland' },
-  { zh: '开普敦', en: 'Cape Town', lat: -33.9249, lng: 18.4241, tz: 'Africa/Johannesburg' },
-  { zh: '开罗', en: 'Cairo', lat: 30.0444, lng: 31.2357, tz: 'Africa/Cairo' },
-  { zh: '拉各斯', en: 'Lagos', lat: 6.5244, lng: 3.3792, tz: 'Africa/Lagos' },
-  { zh: '内罗毕', en: 'Nairobi', lat: -1.2921, lng: 36.8219, tz: 'Africa/Nairobi' },
-  { zh: '火奴鲁鲁', en: 'Honolulu', lat: 21.3069, lng: -157.8583, tz: 'Pacific/Honolulu' },
-  { zh: '安克雷奇', en: 'Anchorage', lat: 61.2181, lng: -149.9003, tz: 'America/Anchorage' },
-  { zh: '雷克雅未克', en: 'Reykjavík', lat: 64.1466, lng: -21.9426, tz: 'Atlantic/Reykjavik' }
-];
+async function loadCityData() {
+  try {
+    const url = (chrome.runtime && chrome.runtime.getURL)
+      ? chrome.runtime.getURL('panel/city-names.json')
+      : 'panel/city-names.json';
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (Array.isArray(data)) {
+      CITY_DATA = data
+        .filter(c => c && typeof c.lat === 'number' && typeof c.lng === 'number' && c.tz)
+        .sort((a, b) => (b.pop || 0) - (a.pop || 0));
+    }
+  } catch (_) {}
+}
+
+function resolveCityLocale() {
+  let lang = cityNameLanguage;
+  if (lang === 'system') {
+    try {
+      lang = (chrome.i18n && chrome.i18n.getUILanguage && chrome.i18n.getUILanguage()) || navigator.language || 'en';
+    } catch (_) {
+      lang = (navigator && navigator.language) || 'en';
+    }
+  }
+  lang = String(lang || 'en');
+  if (/^zh/i.test(lang)) return 'zh-CN';
+  if (/^en/i.test(lang)) return 'en';
+  return lang.split('-')[0].toLowerCase() || 'en';
+}
+
+function cityDisplayName(city) {
+  if (!city) return '';
+  const locale = resolveCityLocale();
+  if (locale === 'zh-CN') return city.zh || city.en || '';
+  if (locale === 'en') return city.en || city.zh || '';
+  return onlineCityNames[city.en] || city.en || city.zh || '';
+}
+
+function citySecondaryName(city) {
+  if (!city) return '';
+  const locale = resolveCityLocale();
+  if (locale === 'zh-CN') return city.en && city.en !== city.zh ? city.en : '';
+  if (locale === 'en') return '';
+  const local = onlineCityNames[city.en];
+  return local && city.en && local !== city.en ? city.en : '';
+}
+
+function updateCityNameStatus(text) {
+  const el = document.getElementById('cityNameStatus');
+  if (el) el.textContent = text || '';
+}
+
+function renderAllNames() {
+  renderConsole();
+  if ($cityResults && !$cityResults.hidden && $citySearch) renderCityResults($citySearch.value);
+}
+
+function applyCityLanguage(value) {
+  cityNameLanguage = value || 'system';
+  const locale = resolveCityLocale();
+  if (locale === 'zh-CN' || locale === 'en') {
+    onlineNamesToken++;
+    onlineCityNames = {};
+    onlineCityNamesLang = locale;
+    onlineNamesLoading = false;
+    updateCityNameStatus('');
+    renderAllNames();
+    return;
+  }
+  if (onlineNamesLoading && onlineCityNamesLang === locale) {
+    renderAllNames();
+    return;
+  }
+  if (onlineCityNamesLang === locale && Object.keys(onlineCityNames).length) {
+    renderAllNames();
+    return;
+  }
+  loadOnlineCityNames(locale);
+}
+
+function loadOnlineCityNames(lang) {
+  const token = ++onlineNamesToken;
+  onlineCityNamesLang = lang;
+  onlineNamesLoading = true;
+  updateCityNameStatus('在线获取中…');
+  chrome.storage.local.get(['cityNameCache'], (cached) => {
+    if (token !== onlineNamesToken) return;
+    const cache = (cached && cached.cityNameCache) || {};
+    if (cache[lang] && Object.keys(cache[lang]).length) {
+      onlineCityNames = cache[lang];
+      onlineNamesLoading = false;
+      const unique = new Set(CITY_DATA.map(c => c.en).filter(Boolean));
+      updateCityNameStatus(unique.size > Object.keys(onlineCityNames).length ? '部分回退英文' : '');
+      renderAllNames();
+      return;
+    }
+    fetchOnlineCityNames(lang, token);
+  });
+}
+
+async function fetchOnlineCityNames(lang, token) {
+  const names = [...new Set(CITY_DATA.map(c => c.en).filter(Boolean))];
+  const result = {};
+  let failed = false;
+  for (let i = 0; i < names.length; i += 50) {
+    if (token !== onlineNamesToken) return;
+    const batch = names.slice(i, i + 50);
+    const url = 'https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&prop=langlinks&redirects=1&lllimit=500&lllang=' +
+      encodeURIComponent(lang) + '&titles=' + encodeURIComponent(batch.join('|'));
+    try {
+      const res = await fetch(url);
+      if (!res.ok) { failed = true; continue; }
+      const data = await res.json();
+      if (!data.query || !data.query.pages) { failed = true; continue; }
+      const alias = {};
+      for (const n of (data.query && data.query.normalized) || []) alias[n.from] = n.to;
+      for (const r of (data.query && data.query.redirects) || []) alias[r.from] = r.to;
+      const byTitle = {};
+      for (const p of Object.values((data.query && data.query.pages) || {})) {
+        if (p && p.langlinks && p.langlinks[0] && p.langlinks[0]['*']) byTitle[p.title] = p.langlinks[0]['*'];
+      }
+      for (const name of batch) {
+        const title = alias[name] || name;
+        const local = byTitle[title];
+        if (local) result[name] = local;
+      }
+    } catch (_) {
+      failed = true;
+    }
+    await new Promise(r => setTimeout(r, 60));
+  }
+  if (token !== onlineNamesToken) return;
+  onlineCityNames = result;
+  onlineNamesLoading = false;
+  const count = Object.keys(result).length;
+  const missing = names.length - count;
+  updateCityNameStatus(count === 0 ? '在线获取失败，已回退英文' : (missing > 0 || failed ? '部分回退英文' : ''));
+  if (count) {
+    chrome.storage.local.get(['cityNameCache'], (cached) => {
+      const cache = (cached && cached.cityNameCache) || {};
+      cache[lang] = result;
+      chrome.storage.local.set({ cityNameCache: cache });
+    });
+  }
+  renderAllNames();
+}
 
 const $worldMap = document.getElementById('worldMap');
 const $worldPath = document.getElementById('worldPath');
@@ -766,6 +879,7 @@ const $geoLat = document.getElementById('geoLat');
 const $geoLng = document.getElementById('geoLng');
 const $tzSelect = document.getElementById('tzSelect');
 const $citySearch = document.getElementById('citySearch');
+const $cityNameLanguage = document.getElementById('cityNameLanguage');
 const $cityResults = document.getElementById('cityResults');
 const $cursorReadout = document.getElementById('cursorReadout');
 const $coordsPop = document.getElementById('coordsPop');
@@ -827,41 +941,25 @@ function zoneName(zone) {
   return String(zone || '').split('/').pop().replace(/_/g, ' ');
 }
 function nearestCity(lat, lng) {
-  let best = CITIES[0], bestD = Infinity;
+  let best = null;
+  let bestD = Infinity;
   const cosLat = Math.cos(lat * Math.PI / 180);
-  for (const c of CITIES) {
+  for (const c of CITY_DATA) {
     const dLat = lat - c.lat;
     const dLng = (lng - c.lng) * cosLat;
     const d = dLat * dLat + dLng * dLng;
     if (d < bestD) { bestD = d; best = c; }
   }
-  return { city: best, dist: Math.sqrt(bestD) };
-}
-function placeFor(lat, lng, zone) {
-  const near = nearestCity(lat, lng);
-  // 精选城市只覆盖主要城市;离得太远时用该时区的代表城市,避免出现
-  // “莫斯科 + Asia/Qyzylorda”这种相距上千公里的错位标签。
-  if (near.dist <= 8) return near.city;
-  return { zh: zoneName(zone), en: '' };
+  return best;
 }
 function nearestTz(lat, lng) {
-  let best = null;
-  let bestD = Infinity;
-  const cosLat = Math.cos(lat * Math.PI / 180);
-  for (const p of TZ_POINTS) {
-    const dLat = lat - p[0];
-    const dLng = (lng - p[1]) * cosLat;
-    const d = dLat * dLat + dLng * dLng;
-    if (d < bestD) { bestD = d; best = p[2]; }
-  }
-  return best;
+  const c = nearestCity(lat, lng);
+  return c ? c.tz : null;
 }
 function tzRepPoint(tz) {
   if (!tz) return null;
-  for (const p of TZ_POINTS) {
-    if (p[2] === tz) return { lat: p[0], lng: p[1] };
-  }
-  return null;
+  const c = CITY_DATA.find(x => x.tz === tz);
+  return c ? { lat: c.lat, lng: c.lng } : null;
 }
 function derivedZone() {
   return nearestTz(geoLat, geoLng);
@@ -1014,14 +1112,17 @@ function renderConsole() {
   const derived = derivedZone();
   const tzOn = tzLayerOn();
   const geoOn = geoLayerOn();
-  const place = previewCity || placeFor(geoLat, geoLng, derived || zone);
+  const fallbackName = zoneName(derived || zone);
+  const place = previewCity || nearestCity(geoLat, geoLng) || { en: fallbackName, zh: fallbackName };
+  const placeDisplay = cityDisplayName(place);
+  const placeSecondary = citySecondaryName(place);
   const pinP = toXY(geoLat, geoLng);
 
   $pin.setAttribute('transform', `translate(${pinP.x.toFixed(2)} ${pinP.y.toFixed(2)})`);
   $pin.classList.toggle('ghost', !geoOn);
-  $pin.setAttribute('aria-label', '拖动设置位置：' + place.zh + ' ' + formatCoords(geoLat, geoLng));
+  $pin.setAttribute('aria-label', '拖动设置位置：' + placeDisplay + ' ' + formatCoords(geoLat, geoLng));
   const pinLabel = $pin.querySelector('.tp-pin-label');
-  if (pinLabel) pinLabel.textContent = place.zh;
+  if (pinLabel) pinLabel.textContent = placeDisplay;
 
   // 虚线圆 = 当前出口 IP 的大致位置;粉点 = 伪装坐标。
   // 精确坐标缺失时,用出口 IP 的时区代表城市估算,保证这个参考始终可见。
@@ -1060,8 +1161,8 @@ function renderConsole() {
 
   const placeName = document.getElementById('tpPlace');
   const placeEn = document.getElementById('tpPlaceEn');
-  if (placeName) placeName.textContent = place.zh;
-  if (placeEn) placeEn.textContent = place.en || '';
+  if (placeName) placeName.textContent = placeDisplay;
+  if (placeEn) placeEn.textContent = placeSecondary;
   setClock(timeIn(zone));
   const dateLine = document.getElementById('tpDate');
   if (dateLine) dateLine.textContent = dateIn(zone);
@@ -1256,19 +1357,28 @@ if ($worldMap) {
 function renderCityResults(query) {
   if (!$cityResults) return;
   const q = String(query || '').trim().toLowerCase();
-  const matches = CITIES.filter(c =>
-    !q || c.zh.toLowerCase().includes(q) || c.en.toLowerCase().includes(q) || c.tz.toLowerCase().includes(q)
-  );
+  const matches = CITY_DATA.filter(c => {
+    if (!q) return true;
+    const online = onlineCityNames[c.en] || '';
+    return (c.zh || '').toLowerCase().includes(q) ||
+      (c.en || '').toLowerCase().includes(q) ||
+      (c.tz || '').toLowerCase().includes(q) ||
+      online.toLowerCase().includes(q);
+  });
   if (!matches.length) {
     $cityResults.innerHTML = '<div class="tp-results-empty">没有匹配的城市</div>';
     $cityResults.hidden = false;
     return;
   }
-  $cityResults.innerHTML = matches.map((c, i) => `
+  $cityResults.innerHTML = matches.map((c, i) => {
+    const primary = cityDisplayName(c);
+    const secondary = citySecondaryName(c);
+    return `
     <button type="button" class="tp-result" data-index="${i}">
-      <span class="tp-result-left"><span class="tp-result-zh">${c.zh}</span><span class="tp-result-en">${c.en}</span></span>
+      <span class="tp-result-left"><span class="tp-result-zh">${primary}</span>${secondary ? `<span class="tp-result-en">${secondary}</span>` : ''}</span>
       <span class="tp-result-right"><span class="tp-result-zone">${c.tz}</span><span class="tp-result-time">${timeIn(c.tz)}</span></span>
-    </button>`).join('');
+    </button>`;
+  }).join('');
   $cityResults.hidden = false;
   $cityResults.querySelectorAll('.tp-result').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1486,6 +1596,7 @@ themeMedia.addEventListener('change', () => {
 
 // Initialize
 async function init() {
+  await loadCityData();
   try {
     if (chrome.fontSettings && chrome.fontSettings.getFontList) {
       const list = await chrome.fontSettings.getFontList();
@@ -1505,7 +1616,7 @@ async function init() {
 
   allFonts.sort((a, b) => a.localeCompare(b));
 
-  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone', 'geolocationLatitude', 'geolocationLongitude', 'ipLatitude', 'ipLongitude', 'ipCity', 'theme', ...MODULE_KEYS], (res) => {
+  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone', 'geolocationLatitude', 'geolocationLongitude', 'ipLatitude', 'ipLongitude', 'ipCity', 'cityNameLanguage', 'theme', ...MODULE_KEYS], (res) => {
     fontMode = res.fontMode === 'whitelist' ? 'whitelist' : 'blacklist';
     customHiddenFonts = Array.isArray(res.customHiddenFonts) ? res.customHiddenFonts : [];
     customAllowedFonts = Array.isArray(res.customAllowedFonts) ? res.customAllowedFonts : [];
@@ -1521,6 +1632,8 @@ async function init() {
     applyTzUI(res);
     applyGeoUI(res);
     applyIpUI(res);
+    if ($cityNameLanguage) $cityNameLanguage.value = res.cityNameLanguage || 'system';
+    applyCityLanguage(res.cityNameLanguage || 'system');
     if (!(typeof res.ipLatitude === 'number' && typeof res.ipLongitude === 'number') &&
         typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
       try {
@@ -1531,6 +1644,13 @@ async function init() {
     applyShieldState(res.globalShieldEnabled !== false);
     showView((location.hash || '#fonts').slice(1));
     renderList();
+  });
+}
+
+if ($cityNameLanguage) {
+  $cityNameLanguage.addEventListener('change', () => {
+    chrome.storage.local.set({ cityNameLanguage: $cityNameLanguage.value });
+    applyCityLanguage($cityNameLanguage.value);
   });
 }
 

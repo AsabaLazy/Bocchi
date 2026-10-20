@@ -113,8 +113,9 @@ fi
 # Expected set (known-good store build bocchi-privacy-shield-v1.0.1.zip):
 #   manifest.json, background/service_worker.js, content/bridge.js,
 #   content/stealth_engine.js, icons/icon-{16,48,128}.png,
-#   panel/panel.{html,css,js}, popup/popup.{html,css,js}, rules/cyt_rules.json
-#   => 14 files. Update this constant only when the shipped set intentionally
+#   panel/panel.{html,css,js}, panel/world-map.js, panel/city-names.json,
+#   popup/popup.{html,css,js}, rules/cyt_rules.json
+#   => 16 files. Update this constant only when the shipped set intentionally
 #   changes.
 EXPECTED_FILE_COUNT=16
 if [ "$FILE_COUNT" -ne "$EXPECTED_FILE_COUNT" ]; then
