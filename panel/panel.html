@@ -194,6 +194,38 @@
           </div>
 
           <div class="tp-console">
+            <div class="tp-toolbar">
+              <div class="tp-search-wrap">
+                <label class="tp-search">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <circle cx="7" cy="7" r="4.6" stroke="currentColor" stroke-width="1.2"/>
+                    <path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                  </svg>
+                  <input id="citySearch" type="text" placeholder="搜索城市" autocomplete="off" aria-label="搜索城市">
+                  <kbd>/</kbd>
+                </label>
+                <div class="tp-results" id="cityResults" hidden></div>
+              </div>
+              <div class="tp-layers" role="group" aria-label="信号层">
+                <button type="button" class="tp-layer" data-layer="tz" aria-pressed="true" title="时区层">
+                  <svg class="tp-eye" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M1.4 8s2.4-4.3 6.6-4.3S14.6 8 14.6 8s-2.4 4.3-6.6 4.3S1.4 8 1.4 8Z" stroke="currentColor" stroke-width="1.2"/>
+                    <circle class="tp-pupil" cx="8" cy="8" r="1.9" fill="currentColor"/>
+                    <path class="tp-slash" d="M2.4 2.4l11.2 11.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                  </svg>
+                  <span>时区</span>
+                </button>
+                <button type="button" class="tp-layer" data-layer="geo" aria-pressed="false" title="位置层（开启后时区默认跟随位置）">
+                  <svg class="tp-eye" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M1.4 8s2.4-4.3 6.6-4.3S14.6 8 14.6 8s-2.4 4.3-6.6 4.3S1.4 8 1.4 8Z" stroke="currentColor" stroke-width="1.2"/>
+                    <circle class="tp-pupil" cx="8" cy="8" r="1.9" fill="currentColor"/>
+                    <path class="tp-slash" d="M2.4 2.4l11.2 11.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                  </svg>
+                  <span>位置</span>
+                </button>
+              </div>
+            </div>
+
             <div class="tp-map-wrap" id="tpMapWrap">
               <svg id="worldMap" viewBox="0 0 720 360" role="img" aria-label="拖动粉点设置虚拟位置">
                 <defs>
@@ -223,68 +255,34 @@
                   <circle class="tp-pin-hit" r="17" fill="transparent" pointer-events="all"></circle>
                 </g>
               </svg>
-
-              <div class="tp-hud">
-                <div class="tp-hud-head">
-                  <div>
-                    <div class="tp-place" id="tpPlace">东京</div>
-                    <div class="tp-place-en" id="tpPlaceEn">Tokyo</div>
-                  </div>
-                  <div class="tp-clock" id="tpClock">--:--</div>
-                </div>
-                <div class="tp-hud-meta">
-                  <span class="tp-daynight" id="tpDaynight" aria-hidden="true">
-                    <svg class="tp-sun-icon" width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.2"/><path d="M8 1.4v1.6M8 13v1.6M1.4 8h1.6M13 8h1.6M3.3 3.3l1.1 1.1M11.6 11.6l1.1 1.1M12.7 3.3l-1.1 1.1M4.4 11.6l-1.1 1.1" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
-                    <svg class="tp-moon-icon" width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M13.4 10.2A5.8 5.8 0 016.1 2.7a5.9 5.9 0 107.3 7.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
-                  </span>
-                  <span id="tpDate">—</span>
-                </div>
-                <div class="tp-hud-zone" id="tpHudZone">
-                  <span class="tp-zone-name" id="tpZone">Asia/Tokyo</span>
-                  <span>·</span>
-                  <span id="tpOffset">GMT+9</span>
-                  <span class="tp-off-tag" id="tpTzOff" hidden>真实时区</span>
-                </div>
-                <button class="tp-coords" id="tpCoords" type="button" title="编辑精确坐标">
-                  <span id="tpCoordsText">35.6762, 139.6503</span>
-                  <span class="tp-inactive" id="tpCoordsOff" hidden>未生效</span>
-                </button>
-              </div>
-
-              <div class="tp-layers" role="group" aria-label="信号层">
-                <button type="button" class="tp-layer" data-layer="tz" aria-pressed="true" title="时区层">
-                  <svg class="tp-eye" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <path d="M1.4 8s2.4-4.3 6.6-4.3S14.6 8 14.6 8s-2.4 4.3-6.6 4.3S1.4 8 1.4 8Z" stroke="currentColor" stroke-width="1.2"/>
-                    <circle class="tp-pupil" cx="8" cy="8" r="1.9" fill="currentColor"/>
-                    <path class="tp-slash" d="M2.4 2.4l11.2 11.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-                  </svg>
-                  <span>时区</span>
-                </button>
-                <button type="button" class="tp-layer" data-layer="geo" aria-pressed="false" title="位置层（开启后时区默认跟随位置）">
-                  <svg class="tp-eye" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <path d="M1.4 8s2.4-4.3 6.6-4.3S14.6 8 14.6 8s-2.4 4.3-6.6 4.3S1.4 8 1.4 8Z" stroke="currentColor" stroke-width="1.2"/>
-                    <circle class="tp-pupil" cx="8" cy="8" r="1.9" fill="currentColor"/>
-                    <path class="tp-slash" d="M2.4 2.4l11.2 11.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-                  </svg>
-                  <span>位置</span>
-                </button>
-              </div>
-
-              <div class="tp-search-wrap">
-                <label class="tp-search">
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <circle cx="7" cy="7" r="4.6" stroke="currentColor" stroke-width="1.2"/>
-                    <path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-                  </svg>
-                  <input id="citySearch" type="text" placeholder="搜索城市" autocomplete="off" aria-label="搜索城市">
-                  <kbd>/</kbd>
-                </label>
-                <div class="tp-results" id="cityResults" hidden></div>
-              </div>
-
               <div class="tp-cursor" id="cursorReadout"></div>
               <input type="checkbox" id="timezoneProtection" checked hidden aria-label="动态时区对齐">
               <input type="checkbox" id="geolocationProtection" hidden aria-label="地理位置伪装">
+            </div>
+
+            <div class="tp-hud">
+              <div class="tp-hud-place">
+                <span class="tp-place" id="tpPlace">东京</span>
+                <span class="tp-place-en" id="tpPlaceEn">Tokyo</span>
+              </div>
+              <div class="tp-clock" id="tpClock">--:--</div>
+              <div class="tp-hud-meta">
+                <span class="tp-daynight" id="tpDaynight" aria-hidden="true">
+                  <svg class="tp-sun-icon" width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.2"/><path d="M8 1.4v1.6M8 13v1.6M1.4 8h1.6M13 8h1.6M3.3 3.3l1.1 1.1M11.6 11.6l1.1 1.1M12.7 3.3l-1.1 1.1M4.4 11.6l-1.1 1.1" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+                  <svg class="tp-moon-icon" width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M13.4 10.2A5.8 5.8 0 016.1 2.7a5.9 5.9 0 107.3 7.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+                </span>
+                <span id="tpDate">—</span>
+              </div>
+              <div class="tp-hud-zone" id="tpHudZone">
+                <span class="tp-zone-name" id="tpZone">Asia/Tokyo</span>
+                <span>·</span>
+                <span id="tpOffset">GMT+9</span>
+                <span class="tp-off-tag" id="tpTzOff" hidden>真实时区</span>
+              </div>
+              <button class="tp-coords" id="tpCoords" type="button" title="编辑精确坐标">
+                <span id="tpCoordsText">35.6762, 139.6503</span>
+                <span class="tp-inactive" id="tpCoordsOff" hidden>未生效</span>
+              </button>
             </div>
 
             <div class="tp-dock">
