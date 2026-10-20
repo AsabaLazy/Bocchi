@@ -835,7 +835,9 @@ function nearestCity(lat, lng) {
 }
 function placeFor(lat, lng, zone) {
   const near = nearestCity(lat, lng);
-  if (near.dist <= 28) return near.city;
+  // 精选城市只覆盖主要城市;离得太远时用该时区的代表城市,避免出现
+  // “莫斯科 + Asia/Qyzylorda”这种相距上千公里的错位标签。
+  if (near.dist <= 8) return near.city;
   return { zh: zoneName(zone), en: '' };
 }
 function nearestTz(lat, lng) {
@@ -1023,7 +1025,10 @@ function renderConsole() {
     const rp = toXY(rep.lat, rep.lng);
     far = Math.hypot(rp.x - pinP.x, rp.y - pinP.y) > 8;
   }
-  if (!tzOn || !far) {
+  // 跟随位置静止时,HUD 的时区已经说明结果;参考圈只在拖动、飞行或
+  // 出现分歧(手动/跟随 IP/位置层关闭)时出现,避免地图上多一个圆。
+  const showRing = tzOn && far && (dragging || !!previewCity || tzMode !== 'geo' || !geoLayerOn());
+  if (!showRing) {
     $tzMarker.classList.add('off');
     $linkArc.setAttribute('hidden', '');
   } else {
@@ -1032,7 +1037,7 @@ function renderConsole() {
     $tzMarker.classList.remove('off');
     $tzMarker.setAttribute('transform', `translate(${rp.x.toFixed(2)} ${rp.y.toFixed(2)})`);
     const tzLabel = $tzMarker.querySelector('.tp-tz-label');
-    if (tzLabel) tzLabel.textContent = '时区 · ' + (tzCity ? tzCity.zh : zoneName(zone));
+    if (tzLabel) tzLabel.textContent = '时区参考 · ' + (tzCity ? tzCity.zh : zoneName(zone));
     drawArc({ lat: geoLat, lng: geoLng }, rep);
   }
 
