@@ -224,10 +224,13 @@ function updateSortHeaders() {
 function renderList() {
   updateSortHeaders();
 
-  // Update mode UI (点阵按钮的 active 态即当前模式)
-  document.querySelectorAll('.mode-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.mode === fontMode);
-  });
+  // Update font mode UI (点阵按钮的 active 态即当前模式). Scope this to the
+  // font control: module mode buttons reuse .mode-btn and have their own state.
+  if ($modeControl) {
+    $modeControl.querySelectorAll('.mode-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mode === fontMode);
+    });
+  }
 
   // 比例条:全库可见/隐藏统计(全局关闭时一切都是"可见"的诚实呈现)
   const engineActive = globalShieldEnabled;
@@ -640,6 +643,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
       if ($cityNameLanguage) $cityNameLanguage.value = changes.cityNameLanguage.newValue || 'system';
       applyCityLanguage(changes.cityNameLanguage.newValue || 'system');
     }
+    for (const [name, cfg] of Object.entries(MODULE_MODE_CONFIG)) {
+      if (changes[cfg.key]) updateModuleModeUI(name, changes[cfg.key].newValue);
+    }
     if (changes.theme) {
       applyTheme(changes.theme.newValue);
     }
@@ -670,6 +676,85 @@ for (const [key, el] of Object.entries(moduleInputs)) {
     onModuleToggle(key, el.checked);
   });
 }
+
+const MODULE_MODE_CONFIG = {
+  canvas: {
+    key: 'canvasMode',
+    control: 'canvasModeControl',
+    note: 'canvasModeNote',
+    values: ['standard', 'compat'],
+    fallback: 'standard',
+    notes: {
+      standard: '标准：2D 与 WebGL 导出都做逐页微扰。',
+      compat: '兼容：只保留 2D 导出微扰，跳过 WebGL 导出，减少地图/3D 站点兼容问题。'
+    }
+  },
+  audio: {
+    key: 'audioMode',
+    control: 'audioModeControl',
+    note: 'audioModeNote',
+    values: ['standard', 'compat'],
+    fallback: 'standard',
+    notes: {
+      standard: '标准：AudioBuffer 指纹加入逐页噪声。',
+      compat: '兼容：不修改音频数据（等同关闭音频噪声），适合对音频敏感的站点。'
+    }
+  },
+  webrtc: {
+    key: 'webrtcMode',
+    control: 'webrtcModeControl',
+    note: 'webrtcModeNote',
+    values: ['strict', 'compat'],
+    fallback: 'strict',
+    notes: {
+      strict: '严格：阻断非代理 UDP，最防泄漏，但可能影响视频通话。',
+      compat: '兼容视频：仅使用公网接口，保留视频，公网 IP 可能暴露；本地 IP 仍会清洗。'
+    }
+  },
+  hardware: {
+    key: 'hardwareMode',
+    control: 'hardwareModeControl',
+    note: 'hardwareModeNote',
+    values: ['standard', 'compat'],
+    fallback: 'standard',
+    notes: {
+      standard: '标准：GPU/WebGL/WebGPU 画像统一伪装。',
+      compat: '兼容：保留原生 GPU 画像，继续伪装屏幕/DPR/计时器/手柄，减少 3D/视频站点兼容问题。'
+    }
+  }
+};
+
+function updateModuleModeUI(name, value) {
+  const cfg = MODULE_MODE_CONFIG[name];
+  if (!cfg) return;
+  const selected = cfg.values.includes(value) ? value : cfg.fallback;
+  const control = document.getElementById(cfg.control);
+  if (control) {
+    control.querySelectorAll('.mode-btn').forEach(btn => {
+      const on = btn.dataset.mode === selected;
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+  const note = document.getElementById(cfg.note);
+  if (note) note.textContent = cfg.notes[selected];
+}
+
+function setupModuleModes() {
+  for (const [name, cfg] of Object.entries(MODULE_MODE_CONFIG)) {
+    const control = document.getElementById(cfg.control);
+    if (!control) continue;
+    control.querySelectorAll('.mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const value = btn.dataset.mode;
+        if (!cfg.values.includes(value)) return;
+        updateModuleModeUI(name, value);
+        chrome.storage.local.set({ [cfg.key]: value });
+      });
+    });
+  }
+}
+setupModuleModes();
 
 // 视图路由:侧栏切换 + hash 深链(默认字体)
 function showView(name) {
@@ -1620,7 +1705,7 @@ async function init() {
 
   allFonts.sort((a, b) => a.localeCompare(b));
 
-  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone', 'geolocationLatitude', 'geolocationLongitude', 'ipLatitude', 'ipLongitude', 'ipCity', 'cityNameLanguage', 'theme', ...MODULE_KEYS], (res) => {
+  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone', 'geolocationLatitude', 'geolocationLongitude', 'ipLatitude', 'ipLongitude', 'ipCity', 'cityNameLanguage', 'canvasMode', 'audioMode', 'webrtcMode', 'hardwareMode', 'theme', ...MODULE_KEYS], (res) => {
     fontMode = res.fontMode === 'whitelist' ? 'whitelist' : 'blacklist';
     customHiddenFonts = Array.isArray(res.customHiddenFonts) ? res.customHiddenFonts : [];
     customAllowedFonts = Array.isArray(res.customAllowedFonts) ? res.customAllowedFonts : [];
@@ -1638,6 +1723,9 @@ async function init() {
     applyIpUI(res);
     if ($cityNameLanguage) $cityNameLanguage.value = res.cityNameLanguage || 'system';
     applyCityLanguage(res.cityNameLanguage || 'system');
+    for (const [name, cfg] of Object.entries(MODULE_MODE_CONFIG)) {
+      updateModuleModeUI(name, res[cfg.key]);
+    }
     if (!(typeof res.ipLatitude === 'number' && typeof res.ipLongitude === 'number') &&
         typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
       try {

@@ -66,6 +66,9 @@
   if (typeof shieldConfig.timezoneProtection !== 'boolean') shieldConfig.timezoneProtection = true;
   if (typeof shieldConfig.hardwareProtection !== 'boolean') shieldConfig.hardwareProtection = true;
   if (typeof shieldConfig.fontProtection !== 'boolean') shieldConfig.fontProtection = true;
+  if (shieldConfig.canvasMode !== 'compat') shieldConfig.canvasMode = 'standard';
+  if (shieldConfig.audioMode !== 'compat') shieldConfig.audioMode = 'standard';
+  if (shieldConfig.hardwareMode !== 'compat') shieldConfig.hardwareMode = 'standard';
   if (!Array.isArray(shieldConfig.siteBypassList)) shieldConfig.siteBypassList = [];
 
   // Font privacy configuration registry (supports built-in CJK regex and user-custom font rules)
@@ -1027,6 +1030,9 @@
                 if (origGetContext.call(this, '2d')) ctxType = '2d';
               } catch (_) {}
             }
+            if (ctxType === 'webgl' && shieldConfig.canvasMode === 'compat') {
+              return origToDataURL.apply(this, arguments);
+            }
 
             if (ctxType === '2d' && this.width > 0 && this.height > 0) {
               try {
@@ -1074,6 +1080,9 @@
                 try {
                   if (origGetContext.call(this, '2d')) ctxType = '2d';
                 } catch (_) {}
+              }
+              if (ctxType === 'webgl' && shieldConfig.canvasMode === 'compat') {
+                return origToBlob.apply(this, arguments);
               }
 
               if (ctxType === '2d' && this.width > 0 && this.height > 0) {
@@ -1181,6 +1190,9 @@
             if (origConvertToBlob) {
               const hookedConvertToBlob = createNativeFunction(function convertToBlob(options) {
                 if (!isShieldActive('canvasProtection') || inInternalCanvas) {
+                  return origConvertToBlob.apply(this, arguments);
+                }
+                if (canvasContextTypeMap.get(this) === 'webgl' && shieldConfig.canvasMode === 'compat') {
                   return origConvertToBlob.apply(this, arguments);
                 }
                 const oc = this;
@@ -1305,6 +1317,7 @@
       }
 
       const spoofed = getSpoofedInfo();
+      const gpuShieldActive = () => isShieldActive('hardwareProtection') && shieldConfig.hardwareMode !== 'compat';
 
       function hookWebGLProto(proto, isWebGL2) {
         if (!proto) return;
@@ -1312,7 +1325,7 @@
         // getParameter
         const origGetParam = proto.getParameter;
         const hookedGetParam = createNativeFunction(function getParameter(param) {
-          if (!isShieldActive('hardwareProtection')) {
+          if (!gpuShieldActive()) {
             return origGetParam.apply(this, arguments);
           }
           if (param === UNMASKED_VENDOR_WEBGL) {
@@ -1354,7 +1367,7 @@
         // getExtension
         const origGetExtension = proto.getExtension;
         const hookedGetExtension = createNativeFunction(function getExtension(name) {
-          if (!isShieldActive('hardwareProtection')) {
+          if (!gpuShieldActive()) {
             return origGetExtension.apply(this, arguments);
           }
           const ext = origGetExtension.apply(this, arguments);
@@ -1372,7 +1385,7 @@
         if (proto.getSupportedExtensions) {
           const origGetSupportedExtensions = proto.getSupportedExtensions;
           const hookedGetSupportedExtensions = createNativeFunction(function getSupportedExtensions() {
-            if (!isShieldActive('hardwareProtection')) {
+            if (!gpuShieldActive()) {
               return origGetSupportedExtensions ? origGetSupportedExtensions.apply(this, arguments) : [];
             }
             const exts = origGetSupportedExtensions.apply(this, arguments) || [];
@@ -1388,7 +1401,7 @@
         const origReadPixels = proto.readPixels;
         const hookedReadPixels = createNativeFunction(function readPixels(x, y, width, height, format, type, pixels) {
           origReadPixels.apply(this, arguments);
-          if (isShieldActive('hardwareProtection') && pixels && pixels.length > 0) {
+          if (gpuShieldActive() && pixels && pixels.length > 0) {
             const idx = seeds.webgl % Math.min(pixels.length, 4);
             pixels[idx] = perturbPixel(pixels[idx], webglDelta);
           }
@@ -1419,7 +1432,7 @@
           description: ''
         };
         gpuObj.requestAdapter = createNativeFunction(function requestAdapter(...args) {
-          if (!isShieldActive('hardwareProtection')) {
+          if (!gpuShieldActive()) {
             return origReqAdapter.apply(this, args);
           }
           return origReqAdapter.apply(this, args).then(adapter => {
@@ -1488,7 +1501,7 @@
         // often (idempotent per (buffer, channel) via audioFarbledMap).
         // Applies on every domain (see the calibration-removal note above).
         const applyAudioFarbling = (buffer, channel, data) => {
-          if (!data || data.length <= 0) return;
+          if (!data || data.length <= 0 || shieldConfig.audioMode === 'compat') return;
           // Per-load-salt farbling on every domain: stable for one site
           // during a page load, different across sites and visits, so audio
           // fingerprints cannot be linked across sites or sessions.
@@ -3267,6 +3280,15 @@
             if (typeof c.fontProtection === 'boolean') {
               shieldConfig.fontProtection = c.fontProtection;
             }
+            if (c.canvasMode === 'compat' || c.canvasMode === 'standard') {
+              shieldConfig.canvasMode = c.canvasMode;
+            }
+            if (c.audioMode === 'compat' || c.audioMode === 'standard') {
+              shieldConfig.audioMode = c.audioMode;
+            }
+            if (c.hardwareMode === 'compat' || c.hardwareMode === 'standard') {
+              shieldConfig.hardwareMode = c.hardwareMode;
+            }
             if (typeof c.blockOtherScripts === 'boolean') {
               fontConfig.blockOtherScripts = c.blockOtherScripts;
             }
@@ -4407,6 +4429,9 @@
       }, 'check');
     }
 
+    // GPU persona snapshot: compat keeps the native GPU/WebGL/WebGPU values.
+    const hardwareGpuShield = ${shieldConfig.hardwareMode !== 'compat'};
+
     // OffscreenCanvas WebGL in worker
     if (typeof self.OffscreenCanvas !== 'undefined' && self.OffscreenCanvas.prototype && self.OffscreenCanvas.prototype.getContext) {
       const origOCGetContext = self.OffscreenCanvas.prototype.getContext;
@@ -4415,6 +4440,7 @@
         if (ctx && (type === 'webgl' || type === 'experimental-webgl' || type === 'webgl2')) {
           const origGP = ctx.getParameter;
           ctx.getParameter = makeNative(function(pname) {
+            if (!hardwareGpuShield) return origGP.apply(this, arguments);
             if (pname === 0x1F00) return 'WebKit';
             if (pname === 0x1F01) return 'WebKit WebGL';
             // Same pooled GPU profile as the main thread (interpolated from the
@@ -4455,6 +4481,7 @@
           description: ''
         };
         gpuObj.requestAdapter = makeNative(function requestAdapter() {
+          if (!hardwareGpuShield) return origReqAdapter.apply(this, arguments);
           return origReqAdapter.apply(this, arguments).then(function(adapter) {
             if (!adapter) return adapter;
             try {

@@ -8,9 +8,11 @@ A Manifest V3 Chromium extension engineered for advanced browser fingerprint def
 - **Font Filtering & Masking (Two Modes)**: Hides fonts from canvas measurement, `@font-face`, and local font enumeration (`queryLocalFonts`) probes. Default **blacklist mode** hides built-in Chinese/CJK fonts (toggleable) plus user-defined custom entries, and can hide other non-Latin script fonts or symbol/dingbat fonts by filtering the list by type and applying a batch hide — everything else stays visible. Optional **whitelist mode** restricts enumeration to a user-curated allow list. Font allow/block lists are global; per-site control is via the shield bypass list.
 - **Automatic Timezone Alignment**: Syncs the browser timezone (`Date`, `Intl.DateTimeFormat`) to match the network egress IP, eliminating timezone/IP discrepancies; a manual override is available via an IANA selector or an offline world-map picker, optionally linked with the spoofed geolocation.
 - **Geolocation Spoofing (opt-in)**: Reports user-chosen coordinates (manual latitude/longitude or an offline world-map picker) through `navigator.geolocation`; disabled by default.
-- **WebRTC Leak Prevention**:
-  - Enforces `disable_non_proxied_udp` policy via `chrome.privacy.network.webRTCIPHandlingPolicy`.
-  - Sanitizes local/host IP candidates in SDP offers/answers (`RTCPeerConnection.prototype.createOffer`, `setLocalDescription`, `localDescription`).
+- **WebRTC Leak Prevention (Two Modes)**:
+  - **Strict** (default) enforces `disable_non_proxied_udp` via `chrome.privacy.network.webRTCIPHandlingPolicy`; this is the strongest setting but can break WebRTC video calls.
+  - **Compat video** uses `default_public_interface_only`, keeping video calls working while still hiding local interfaces; the public IP may be visible to peers.
+  - Sanitizes local/host IP candidates in SDP offers/answers and masks `enumerateDevices` in both modes.
+- **Per-Module Compatibility Modes**: Canvas & WebGL, Audio, WebRTC, and Hardware each offer a standard/compat choice where the trade-off is real. Canvas compat skips WebGL export farbling (2D stays); Audio compat skips AudioBuffer farbling; Hardware compat keeps the native GPU/WebGL/WebGPU persona while retaining screen/timer/gamepad protections.
 - **Network Privacy**:
   - DeclarativeNetRequest rules block intrusive tracking domains (`trackersimulator.org`, `eviltracker.net`, etc.).
   - Enforces `DNT: 1` and `Sec-GPC: 1` privacy signal headers.

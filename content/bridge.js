@@ -43,13 +43,15 @@
     'geolocationProtection', 'geolocationLatitude', 'geolocationLongitude',
     'customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'fontMode', 'blockOtherScripts', 'blockSymbols',
     'globalShieldEnabled', 'siteBypassList',
-    'canvasProtection', 'webrtcProtection', 'audioProtection', 'timezoneProtection', 'hardwareProtection', 'fontProtection'
+    'canvasProtection', 'webrtcProtection', 'audioProtection', 'timezoneProtection', 'hardwareProtection', 'fontProtection',
+    'canvasMode', 'audioMode', 'hardwareMode'
   ];
 
   const SHIELD_KEYS = [
     'globalShieldEnabled', 'siteBypassList',
     'canvasProtection', 'webrtcProtection', 'audioProtection',
     'timezoneProtection', 'hardwareProtection', 'fontProtection',
+    'canvasMode', 'audioMode', 'hardwareMode',
     'blockOtherScripts', 'blockSymbols'
   ];
 
@@ -147,6 +149,9 @@
       timezoneProtection: res ? res.timezoneProtection !== false : true,
       hardwareProtection: res ? res.hardwareProtection !== false : true,
       fontProtection: res ? res.fontProtection !== false : true,
+      canvasMode: res && res.canvasMode === 'compat' ? 'compat' : 'standard',
+      audioMode: res && res.audioMode === 'compat' ? 'compat' : 'standard',
+      hardwareMode: res && res.hardwareMode === 'compat' ? 'compat' : 'standard',
       blockOtherScripts: res ? !!res.blockOtherScripts : false,
       blockSymbols: res ? !!res.blockSymbols : false
     };

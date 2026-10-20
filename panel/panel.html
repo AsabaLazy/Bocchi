@@ -151,7 +151,14 @@
               <i></i>
             </label>
           </div>
-          <p class="view-note">此模块无需额外配置。关闭后画布将返回真实像素，可能被用于跨站关联。</p>
+          <div class="view-options">
+            <span class="ctl-label">模式</span>
+            <div class="mode-seg" id="canvasModeControl" role="group" aria-label="Canvas 与 WebGL 模式">
+              <button type="button" class="mode-btn active" data-mode="standard" aria-pressed="true">标准</button>
+              <button type="button" class="mode-btn" data-mode="compat" aria-pressed="false">兼容</button>
+            </div>
+          </div>
+          <p class="view-note" id="canvasModeNote">标准：2D 与 WebGL 导出都做逐页微扰。兼容：只保留 2D 导出微扰，跳过 WebGL 导出，减少地图/3D 站点兼容问题。</p>
         </section>
 
         <!-- ═════════ 音频 ═════════ -->
@@ -166,7 +173,14 @@
               <i></i>
             </label>
           </div>
-          <p class="view-note">此模块无需额外配置。关闭后音频指纹将恢复原始值。</p>
+          <div class="view-options">
+            <span class="ctl-label">模式</span>
+            <div class="mode-seg" id="audioModeControl" role="group" aria-label="音频模式">
+              <button type="button" class="mode-btn active" data-mode="standard" aria-pressed="true">标准</button>
+              <button type="button" class="mode-btn" data-mode="compat" aria-pressed="false">兼容</button>
+            </div>
+          </div>
+          <p class="view-note" id="audioModeNote">标准：AudioBuffer 指纹加入逐页噪声。兼容：不修改音频数据（等同关闭音频噪声），适合对音频敏感的站点。</p>
         </section>
 
         <!-- ═════════ WebRTC ═════════ -->
@@ -174,14 +188,21 @@
           <div class="view-head">
             <div>
               <h2>WebRTC</h2>
-              <p>代理 UDP 流量并抑制私网 IPv4/mDNS 泄漏，防止真实网络拓扑暴露。</p>
+              <p>抑制私网 IPv4/mDNS 泄漏；严格模式阻断非代理 UDP，兼容模式保留视频所需的公网 UDP。</p>
             </div>
             <label class="switch" title="WebRTC 隐私隔离开关">
               <input type="checkbox" id="webrtcProtection" checked aria-label="WebRTC 隐私隔离">
               <i></i>
             </label>
           </div>
-          <p class="view-note">此模块无需额外配置。关闭后 WebRTC 将按浏览器默认策略工作。</p>
+          <div class="view-options">
+            <span class="ctl-label">模式</span>
+            <div class="mode-seg" id="webrtcModeControl" role="group" aria-label="WebRTC 模式">
+              <button type="button" class="mode-btn active" data-mode="strict" aria-pressed="true">严格</button>
+              <button type="button" class="mode-btn" data-mode="compat" aria-pressed="false">兼容视频</button>
+            </div>
+          </div>
+          <p class="view-note" id="webrtcModeNote">严格：阻断非代理 UDP，最防泄漏，但可能影响视频通话。兼容视频：仅使用公网接口，保留视频，公网 IP 可能暴露；本地 IP 仍会清洗。</p>
         </section>
 
         <!-- ═════════ 时间与位置 ═════════ -->
@@ -351,7 +372,14 @@
               <i></i>
             </label>
           </div>
-          <p class="view-note">此模块无需额外配置。关闭后硬件信息将返回真实值。</p>
+          <div class="view-options">
+            <span class="ctl-label">模式</span>
+            <div class="mode-seg" id="hardwareModeControl" role="group" aria-label="硬件指纹模式">
+              <button type="button" class="mode-btn active" data-mode="standard" aria-pressed="true">标准</button>
+              <button type="button" class="mode-btn" data-mode="compat" aria-pressed="false">兼容</button>
+            </div>
+          </div>
+          <p class="view-note" id="hardwareModeNote">标准：GPU/WebGL/WebGPU 画像统一伪装。兼容：保留原生 GPU 画像，继续伪装屏幕/DPR/计时器/手柄，减少 3D/视频站点兼容问题。</p>
         </section>
 
       </main>

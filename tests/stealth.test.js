@@ -148,6 +148,18 @@ assert.strictEqual(startupListeners.length, 1, 'Service worker must register onS
 
   assert.strictEqual(policySet, 'disable_non_proxied_udp', 'Service worker must set webRTCIPHandlingPolicy to disable_non_proxied_udp');
 
+  // WebRTC compat video mode keeps public UDP while hiding private interfaces.
+  storageData.webrtcMode = 'compat';
+  await swModule.exports.applyWebRTCPolicy();
+  assert.strictEqual(policySet, 'default_public_interface_only', 'Compat mode must use default_public_interface_only');
+  storageData.webrtcMode = 'strict';
+  await swModule.exports.applyWebRTCPolicy();
+  assert.strictEqual(policySet, 'disable_non_proxied_udp', 'Strict mode must keep disable_non_proxied_udp');
+  storageData.webrtcProtection = false;
+  await swModule.exports.applyWebRTCPolicy();
+  assert.strictEqual(policySet, 'default', 'Disabled WebRTC protection must restore the browser default');
+  storageData.webrtcProtection = true;
+
   const { fetchEgressInfo, fetchEgressTimezone, syncTimezone } = swModule.exports;
   assert(typeof fetchEgressInfo === 'function', 'fetchEgressInfo must be a function');
   assert(typeof fetchEgressTimezone === 'function', 'fetchEgressTimezone must be a function');
