@@ -14,7 +14,8 @@
     "declarativeNetRequest",
     "privacy",
     "storage",
-    "fontSettings"
+    "fontSettings",
+    "scripting"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -43,30 +44,5 @@
         "path": "rules/cyt_rules.json"
       }
     ]
-  },
-  "content_scripts": [
-    {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": [
-        "content/stealth_engine.js"
-      ],
-      "run_at": "document_start",
-      "all_frames": true,
-      "match_about_blank": true,
-      "world": "MAIN"
-    },
-    {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": [
-        "content/bridge.js"
-      ],
-      "run_at": "document_start",
-      "all_frames": true,
-      "match_about_blank": true
-    }
-  ]
+  }
 }

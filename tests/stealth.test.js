@@ -19,12 +19,15 @@ assert(manifest.permissions.includes('storage'), 'Must have storage permission')
 assert(manifest.host_permissions && manifest.host_permissions.includes('<all_urls>'), 'Must have <all_urls> host permission');
 assert.strictEqual(manifest.background.service_worker, 'background/service_worker.js', 'Service worker path mismatch');
 assert.strictEqual(manifest.declarative_net_request.rule_resources[0].path, 'rules/cyt_rules.json', 'DNR rules path mismatch');
-assert.strictEqual(manifest.content_scripts[0].world, 'MAIN', 'Content script must run in MAIN world');
-assert.strictEqual(manifest.content_scripts[0].run_at, 'document_start', 'Content script must run at document_start');
-assert.strictEqual(manifest.content_scripts[0].all_frames, true, 'Content script must apply to all frames');
-assert.strictEqual(manifest.content_scripts[0].match_about_blank, true, 'Content script must match about:blank');
+assert(manifest.permissions.includes('scripting'), 'Must have scripting permission for dynamic content-script registration');
+assert.strictEqual(manifest.content_scripts, undefined, 'Static content_scripts must be absent: injection is registered dynamically so bypassed sites receive NO injection');
+const swSource = fs.readFileSync(path.join(__dirname, '../background/service_worker.js'), 'utf8');
+assert(swSource.includes("id: 'bocchi-engine'") && swSource.includes("world: 'MAIN'"), 'SW must register the engine in the MAIN world');
+assert(swSource.includes("id: 'bocchi-bridge'") && swSource.includes("world: 'ISOLATED'"), 'SW must register the bridge in the isolated world');
+assert(swSource.includes('excludeMatches'), 'Dynamic registration must exclude bypassed hosts');
+assert(swSource.includes("runAt: 'document_start'"), 'Dynamic scripts must run at document_start');
+assert(swSource.includes('matchOriginAsFallback'), 'Dynamic scripts must fall back to initiator origin (about:blank frames)');
 assert.strictEqual(manifest.web_accessible_resources, undefined, 'Must NOT declare web_accessible_resources (anti-fingerprinting)');
-assert(manifest.content_scripts.some(cs => cs.js.includes('content/bridge.js')), 'Must declare content/bridge.js in content_scripts');
 console.log('✓ manifest.json is fully valid and compliant.\n');
 
 // 2. Test rules/cyt_rules.json

@@ -130,6 +130,88 @@ async function syncTimezone(force = false) {
   }
 }
 
+/**
+ * Content-script registration.
+ *
+ * MV3 static content scripts cannot exclude hosts at runtime, so the engine
+ * and bridge are registered dynamically with excludeMatches derived from the
+ * per-site bypass list. Bypassed sites therefore receive NO injection at all
+ * (no hooks for the page to detect) instead of injected-but-disabled code.
+ * Registration persists across sessions; syncContentScripts() re-runs on
+ * install/startup and whenever the bypass list changes.
+ */
+const CONTENT_SCRIPTS = [
+  { id: 'bocchi-engine', js: ['content/stealth_engine.js'], world: 'MAIN' },
+  { id: 'bocchi-bridge', js: ['content/bridge.js'], world: 'ISOLATED' }
+];
+
+function normalizeBypassHost(raw) {
+  const s = String(raw || '').trim().toLowerCase();
+  if (!s) return null;
+  if (s.startsWith('[')) {
+    const end = s.indexOf(']');
+    if (end < 0) return null;
+    const host = s.slice(0, end + 1);
+    return /^\[[0-9a-f:.]+\]$/.test(host) ? host : null;
+  }
+  const host = s.replace(/^https?:\/\//, '').replace(/^\*\.?/, '').replace(/^\.+/, '').split('/')[0].split(':')[0];
+  if (!host) return null;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return host;
+  if (/^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(host)) return host;
+  return null;
+}
+
+// Mirror the runtime bypass semantics (host === s || host.endsWith('.' + s)):
+// exact host plus all subdomains; IP literals get an exact match only.
+function bypassExcludeMatches(list) {
+  const out = new Set();
+  for (const raw of Array.isArray(list) ? list : []) {
+    const host = normalizeBypassHost(raw);
+    if (!host) continue;
+    out.add(`*://${host}/*`);
+    const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.startsWith('[');
+    if (!isIp) out.add(`*://*.${host}/*`);
+  }
+  return [...out];
+}
+
+async function syncContentScripts() {
+  if (typeof chrome === 'undefined' || !chrome.scripting) return;
+  try {
+    let excludeMatches = [];
+    try {
+      const res = await new Promise(resolve => {
+        chrome.storage.local.get(['siteBypassList'], resolve);
+      });
+      excludeMatches = bypassExcludeMatches(res && res.siteBypassList);
+    } catch (_) {}
+
+    const scripts = CONTENT_SCRIPTS.map(s => ({
+      id: s.id,
+      js: s.js,
+      world: s.world,
+      matches: ['<all_urls>'],
+      excludeMatches,
+      allFrames: true,
+      matchOriginAsFallback: true,
+      runAt: 'document_start',
+      persistAcrossSessions: true
+    }));
+
+    const ids = CONTENT_SCRIPTS.map(s => s.id);
+    const existing = await chrome.scripting.getRegisteredContentScripts();
+    const registered = existing.filter(s => ids.includes(s.id));
+    if (registered.length > 0) {
+      await chrome.scripting.updateContentScripts(scripts);
+    } else {
+      await chrome.scripting.registerContentScripts(scripts);
+    }
+  } catch (err) {
+    // Losing registration means no protection at all: surface it loudly.
+    console.error('[Bocchi] content-script registration failed:', err);
+  }
+}
+
 function setupPeriodicTimezoneAlarm() {
   if (typeof chrome !== 'undefined' && chrome.alarms) {
     try {
@@ -142,6 +224,7 @@ function init() {
   applyWebRTCPolicy();
   syncTimezone();
   setupPeriodicTimezoneAlarm();
+  syncContentScripts();
 }
 
 // Apply immediately when service worker starts
@@ -167,6 +250,9 @@ if (typeof chrome !== 'undefined' && chrome.runtime) {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === 'local' && (changes.globalShieldEnabled || changes.webrtcProtection)) {
         applyWebRTCPolicy();
+      }
+      if (area === 'local' && changes.siteBypassList) {
+        syncContentScripts();
       }
     });
   }
