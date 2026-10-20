@@ -2515,13 +2515,22 @@
           }
         };
 
-        // webdriver = false
-        defineNavProp('webdriver', createNativeGetter(function webdriver() {
-          if (!isShieldActive()) {
-            return origNavWdDesc && origNavWdDesc.get ? origNavWdDesc.get.call(this) : false;
-          }
-          return false;
-        }, 'webdriver', navProto));
+        // webdriver: patch ONLY when automation is actually reported. A normal
+        // browser already returns false, and any getter replacement is
+        // detectable on its own (empirically: replacing it — even with an
+        // identical-looking native descriptor and preserved brand-check
+        // semantics — makes Google's risk control challenge search requests).
+        // Zero privacy gain otherwise, pure detection surface.
+        if (targetWin.navigator && targetWin.navigator.webdriver === true) {
+          const nativeWdGet = origNavWdDesc && origNavWdDesc.get;
+          defineNavProp('webdriver', createNativeGetter(function webdriver() {
+            if (nativeWdGet) {
+              const nativeValue = nativeWdGet.call(this); // preserve native brand check (illegal invocation throws)
+              return isShieldActive() ? false : nativeValue;
+            }
+            return isShieldActive() ? false : true;
+          }, 'webdriver', navProto));
+        }
 
         // navigator.doNotTrack: intentionally NOT overridden. The DNT signal is
         // already sent at the network layer (Sec-GPC/DNT headers via DNR), and a
