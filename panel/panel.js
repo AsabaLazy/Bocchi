@@ -630,6 +630,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (changes.geolocationLatitude || changes.geolocationLongitude) {
       chrome.storage.local.get(['geolocationLatitude', 'geolocationLongitude'], applyGeoUI);
     }
+    if (changes.geoLinkTimezone) {
+      applyGeoLinkUI(changes.geoLinkTimezone.newValue);
+    }
     if (changes.theme) {
       applyTheme(changes.theme.newValue);
     }
@@ -741,6 +744,7 @@ function applyTzUI(res) {
   if (el) {
     const autoTz = res && (res.timezone || res.targetTimezone);
     const effective = tzMode === 'manual' ? tzManual : autoTz;
+    renderTzMap(effective);
     const offset = effective ? tzOffsetLabel(effective) : '';
     el.textContent = effective
       ? `当前生效时区：${effective}${offset ? '（' + offset + '）' : ''} · ${tzMode === 'manual' ? '手动指定' : '按出口 IP 自动对齐'}`
@@ -770,17 +774,103 @@ if (tzSelectEl) {
   });
 }
 
-// 位置模块:经纬度输入 + 离线世界地图选点
+// ── 地图选点共用(时区 / 位置两个地图) ──
+function bindMapPicker(mapId, pathId, markerId, onPick) {
+  const map = document.getElementById(mapId);
+  const path = document.getElementById(pathId);
+  const marker = document.getElementById(markerId);
+  if (path && window.BOCCHI_WORLD_MAP_PATH) {
+    path.setAttribute('d', window.BOCCHI_WORLD_MAP_PATH);
+  }
+  if (map) {
+    map.addEventListener('click', (e) => {
+      const ctm = map.getScreenCTM();
+      if (!ctm) return;
+      const pt = map.createSVGPoint();
+      pt.x = e.clientX;
+      pt.y = e.clientY;
+      const loc = pt.matrixTransform(ctm.inverse());
+      const lat = clampLat(90 - (loc.y / 360) * 180);
+      const lng = clampLng((loc.x / 720) * 360 - 180);
+      onPick(lat, lng);
+    });
+  }
+  return { map, marker };
+}
+
+function placeMarker(marker, lat, lng) {
+  if (!marker) return;
+  const valid = Number.isFinite(lat) && Number.isFinite(lng);
+  marker.hidden = !valid;
+  if (!valid) return;
+  const x = (lng + 180) / 360 * 720;
+  const y = (90 - lat) / 180 * 360;
+  marker.setAttribute('transform', 'translate(' + x.toFixed(2) + ' ' + y.toFixed(2) + ')');
+}
+
+// ── 时区映射:离线最近代表城市点(Natural Earth) ──
+const TZ_POINTS = Array.isArray(window.BOCCHI_TZ_POINTS) ? window.BOCCHI_TZ_POINTS : [];
+const $tzMarker = document.getElementById('tzMarker');
+const $tzMapReadout = document.getElementById('tzMapReadout');
+
+function nearestTz(lat, lng) {
+  let best = null;
+  let bestD = Infinity;
+  const cosLat = Math.cos(lat * Math.PI / 180);
+  for (const p of TZ_POINTS) {
+    const dLat = lat - p[0];
+    const dLng = (lng - p[1]) * cosLat;
+    const d = dLat * dLat + dLng * dLng;
+    if (d < bestD) {
+      bestD = d;
+      best = p[2];
+    }
+  }
+  return best;
+}
+
+function tzRepPoint(tz) {
+  if (!tz) return null;
+  for (const p of TZ_POINTS) {
+    if (p[2] === tz) return { lat: p[0], lng: p[1] };
+  }
+  return null;
+}
+
+function renderTzMap(effectiveTz) {
+  const rep = tzRepPoint(effectiveTz);
+  placeMarker($tzMarker, rep ? rep.lat : NaN, rep ? rep.lng : NaN);
+  if ($tzMapReadout) {
+    const offset = effectiveTz ? tzOffsetLabel(effectiveTz) : '';
+    $tzMapReadout.textContent = effectiveTz
+      ? '时区：' + effectiveTz + (offset ? '（' + offset + '）' : '')
+      : '点击地图选择时区';
+  }
+}
+
+// 联动开关:开启后任意地图选点都会同时设置时区与位置(默认开启)
+let geoLink = true;
+
+function isGeoLinkEnabled() { return geoLink; }
+
+function applyGeoLinkUI(enabled) {
+  geoLink = enabled !== false;
+  document.querySelectorAll('.geo-link-toggle').forEach(el => { el.checked = geoLink; });
+}
+
+document.querySelectorAll('.geo-link-toggle').forEach(el => {
+  el.addEventListener('change', () => {
+    geoLink = el.checked;
+    document.querySelectorAll('.geo-link-toggle').forEach(other => { other.checked = geoLink; });
+    chrome.storage.local.set({ geoLinkTimezone: geoLink });
+  });
+});
+
+// ── 位置模块:经纬度输入 + 离线世界地图选点 ──
 const $geoLat = document.getElementById('geoLat');
 const $geoLng = document.getElementById('geoLng');
 const $geoMarker = document.getElementById('geoMarker');
 const $geoReadout = document.getElementById('geoReadout');
-const $worldMap = document.getElementById('worldMap');
-const $worldPath = document.getElementById('worldPath');
-
-if ($worldPath && window.BOCCHI_WORLD_MAP_PATH) {
-  $worldPath.setAttribute('d', window.BOCCHI_WORLD_MAP_PATH);
-}
 
 const GEO_DEFAULT = { lat: 34.0522, lng: -118.2437 }; // 与默认时区 America/Los_Angeles 一致
 let geoLat = GEO_DEFAULT.lat;
@@ -791,14 +881,7 @@ function clampLng(v) { return Math.max(-180, Math.min(180, v)); }
 
 function renderGeoMarker() {
   const valid = Number.isFinite(geoLat) && Number.isFinite(geoLng);
-  if ($geoMarker) {
-    $geoMarker.hidden = !valid;
-    if (valid) {
-      const x = (geoLng + 180) / 360 * 720;
-      const y = (90 - geoLat) / 180 * 360;
-      $geoMarker.setAttribute('transform', 'translate(' + x.toFixed(2) + ' ' + y.toFixed(2) + ')');
-    }
-  }
+  placeMarker($geoMarker, geoLat, geoLng);
   if ($geoReadout) {
     $geoReadout.textContent = valid
       ? '纬度 ' + geoLat.toFixed(4) + ' · 经度 ' + geoLng.toFixed(4)
@@ -834,22 +917,32 @@ function applyGeoFromInputs() {
 if ($geoLat) $geoLat.addEventListener('change', applyGeoFromInputs);
 if ($geoLng) $geoLng.addEventListener('change', applyGeoFromInputs);
 
-if ($worldMap) {
-  $worldMap.addEventListener('click', (e) => {
-    const ctm = $worldMap.getScreenCTM();
-    if (!ctm) return;
-    const pt = $worldMap.createSVGPoint();
-    pt.x = e.clientX;
-    pt.y = e.clientY;
-    const loc = pt.matrixTransform(ctm.inverse());
-    geoLng = clampLng((loc.x / 720) * 360 - 180);
-    geoLat = clampLat(90 - (loc.y / 360) * 180);
-    if ($geoLat) $geoLat.value = geoLat.toFixed(4);
-    if ($geoLng) $geoLng.value = geoLng.toFixed(4);
-    renderGeoMarker();
-    saveGeo();
-  });
-}
+bindMapPicker('worldMap', 'worldPath', 'geoMarker', (lat, lng) => {
+  geoLat = lat;
+  geoLng = lng;
+  if ($geoLat) $geoLat.value = geoLat.toFixed(4);
+  if ($geoLng) $geoLng.value = geoLng.toFixed(4);
+  renderGeoMarker();
+  saveGeo();
+  if (isGeoLinkEnabled()) {
+    const tz = nearestTz(lat, lng);
+    if (tz) {
+      chrome.storage.local.set({ manualTimezone: tz, timezoneMode: 'manual' });
+    }
+  }
+});
+
+// 时区地图:点击取最近代表城市点的 IANA 时区;联动时同时写入位置
+bindMapPicker('tzMap', 'tzPath', 'tzMarker', (lat, lng) => {
+  const tz = nearestTz(lat, lng);
+  if (!tz) return;
+  const updates = { manualTimezone: tz, timezoneMode: 'manual' };
+  if (isGeoLinkEnabled()) {
+    updates.geolocationLatitude = lat;
+    updates.geolocationLongitude = lng;
+  }
+  chrome.storage.local.set(updates);
+});
 
 // 首次开启位置伪装时,若从未设置过坐标,种入默认坐标,避免 0,0
 const $geoProtection = document.getElementById('geolocationProtection');
@@ -928,7 +1021,7 @@ async function init() {
 
   allFonts.sort((a, b) => a.localeCompare(b));
 
-  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geolocationLatitude', 'geolocationLongitude', 'theme', ...MODULE_KEYS], (res) => {
+  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geolocationLatitude', 'geolocationLongitude', 'geoLinkTimezone', 'theme', ...MODULE_KEYS], (res) => {
     fontMode = res.fontMode === 'whitelist' ? 'whitelist' : 'blacklist';
     customHiddenFonts = Array.isArray(res.customHiddenFonts) ? res.customHiddenFonts : [];
     customAllowedFonts = Array.isArray(res.customAllowedFonts) ? res.customAllowedFonts : [];
@@ -943,6 +1036,7 @@ async function init() {
     syncNavDotsFromInputs();
     applyTzUI(res);
     applyGeoUI(res);
+    applyGeoLinkUI(res.geoLinkTimezone);
     applyTheme(res.theme);
     applyShieldState(res.globalShieldEnabled !== false);
     showView((location.hash || '#fonts').slice(1));

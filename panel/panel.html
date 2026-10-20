@@ -207,6 +207,21 @@
             <label class="tz-label" for="tzSelect">时区</label>
             <select id="tzSelect" class="tz-select"></select>
           </div>
+          <div class="geo-map-wrap">
+            <svg id="tzMap" viewBox="0 0 720 360" role="img" aria-label="点击地图选择时区">
+              <rect width="720" height="360" class="geo-ocean"></rect>
+              <path id="tzPath" class="geo-land" d=""></path>
+              <g id="tzMarker" class="geo-marker" hidden>
+                <circle r="9" class="geo-marker-ring"></circle>
+                <circle r="4" class="geo-marker-dot"></circle>
+              </g>
+            </svg>
+            <div class="geo-readout" id="tzMapReadout">点击地图选择时区</div>
+          </div>
+          <label class="link-row" title="开启后，在地图选点会同时设置时区与位置">
+            <span class="switch"><input type="checkbox" class="geo-link-toggle" checked aria-label="联动选择时区与位置"><i></i></span>
+            <span>联动：选点同时设置时区与位置</span>
+          </label>
           <p class="view-note" id="tzInfo">当前生效时区：读取中…</p>
         </section>
 
@@ -241,6 +256,10 @@
             </svg>
             <div class="geo-readout" id="geoReadout">点击地图选择位置</div>
           </div>
+          <label class="link-row" title="开启后，在地图选点会同时设置时区与位置">
+            <span class="switch"><input type="checkbox" class="geo-link-toggle" checked aria-label="联动选择时区与位置"><i></i></span>
+            <span>联动：选点同时设置时区与位置</span>
+          </label>
           <p class="view-note">经纬度会原样返回给网站的 <code>navigator.geolocation</code>。地图为离线内置（Natural Earth 110m，公有领域）。</p>
         </section>
 
@@ -264,6 +283,7 @@
   </div>
 
   <script src="world-map.js"></script>
+  <script src="tz-points.js"></script>
   <script src="panel.js"></script>
 </body>
 </html>

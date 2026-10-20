@@ -116,7 +116,7 @@ fi
 #   panel/panel.{html,css,js}, popup/popup.{html,css,js}, rules/cyt_rules.json
 #   => 14 files. Update this constant only when the shipped set intentionally
 #   changes.
-EXPECTED_FILE_COUNT=15
+EXPECTED_FILE_COUNT=16
 if [ "$FILE_COUNT" -ne "$EXPECTED_FILE_COUNT" ]; then
   VERIFY_ERRORS="$VERIFY_ERRORS
 - [C] expected $EXPECTED_FILE_COUNT files in the zip, found $FILE_COUNT:
