@@ -238,17 +238,16 @@
                 <rect class="tp-ocean" width="720" height="360"></rect>
                 <g id="tpGraticule" class="tp-graticule"></g>
                 <path id="worldPath" class="tp-land" d=""></path>
-                <path id="tpLinkArc" d="" hidden></path>
+                <path id="tpIpArc" d="" hidden></path>
                 <path id="tpFlightTrail" class="tp-flight-trail" d=""></path>
-                <g id="tpTzMarker" class="tp-tz-marker off">
-                  <title>时区按最近代表城市计算</title>
-                  <circle class="tp-tz-ring" r="7"></circle>
-                  <text class="tp-tz-label" y="-13" text-anchor="middle">时区</text>
+                <g id="tpIpMarker" class="tp-ip-marker off">
+                  <title id="tpIpTitle">当前出口 IP 的大致位置</title>
+                  <circle class="tp-ip-ring" r="7"></circle>
+                  <text class="tp-ip-label" y="-13" text-anchor="middle">出口 IP</text>
                 </g>
                 <g id="tpPin" class="tp-pin" tabindex="0" role="img" aria-label="拖动设置位置">
                   <g class="tp-pin-shape">
                     <circle class="tp-pin-halo" r="17"></circle>
-                    <circle class="tp-pin-pulse" r="7"></circle>
                     <circle class="tp-pin-ring" r="7"></circle>
                     <circle class="tp-pin-dot" r="2.6"></circle>
                   </g>

@@ -633,6 +633,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (changes.geolocationLatitude || changes.geolocationLongitude) {
       chrome.storage.local.get(['geolocationLatitude', 'geolocationLongitude'], applyGeoUI);
     }
+    if (changes.ipLatitude || changes.ipLongitude || changes.ipCity) {
+      chrome.storage.local.get(['ipLatitude', 'ipLongitude', 'ipCity'], applyIpUI);
+    }
     if (changes.theme) {
       applyTheme(changes.theme.newValue);
     }
@@ -689,6 +692,9 @@ window.addEventListener('hashchange', () => showView((location.hash || '#fonts')
 const GEO_DEFAULT = { lat: 34.0522, lng: -118.2437 };
 let geoLat = GEO_DEFAULT.lat;
 let geoLng = GEO_DEFAULT.lng;
+let ipLat = NaN;
+let ipLng = NaN;
+let ipCity = '';
 let tzMode = 'auto';          // auto(出口 IP) | geo(跟随位置) | manual
 let tzManual = '';
 let tzGeo = '';
@@ -752,8 +758,9 @@ const CITIES = [
 const $worldMap = document.getElementById('worldMap');
 const $worldPath = document.getElementById('worldPath');
 const $pin = document.getElementById('tpPin');
-const $tzMarker = document.getElementById('tpTzMarker');
-const $linkArc = document.getElementById('tpLinkArc');
+const $ipMarker = document.getElementById('tpIpMarker');
+const $ipArc = document.getElementById('tpIpArc');
+const $ipTitle = document.getElementById('tpIpTitle');
 const $flightTrail = document.getElementById('tpFlightTrail');
 const $geoLat = document.getElementById('geoLat');
 const $geoLng = document.getElementById('geoLng');
@@ -815,9 +822,6 @@ function tzOffsetLabel(zone) {
     const off = parts.find(p => p.type === 'timeZoneName');
     return off ? off.value : '';
   } catch (_) { return ''; }
-}
-function cityForZone(zone) {
-  return CITIES.find(c => c.tz === zone) || null;
 }
 function zoneName(zone) {
   return String(zone || '').split('/').pop().replace(/_/g, ' ');
@@ -906,13 +910,6 @@ function setClock(text) {
   }
   clockInitialized = true;
 }
-function pingPin() {
-  if (!$pin) return;
-  $pin.classList.remove('ping');
-  void $pin.getBoundingClientRect();
-  $pin.classList.add('ping');
-  setTimeout(() => $pin.classList.remove('ping'), 800);
-}
 
 function populateTzSelect() {
   if (!$tzSelect || $tzSelect.options.length > 0) return;
@@ -969,6 +966,13 @@ function applyGeoUI(res) {
   refreshGeoTimezone();
 }
 
+function applyIpUI(res) {
+  ipLat = res && typeof res.ipLatitude === 'number' && isFinite(res.ipLatitude) ? res.ipLatitude : NaN;
+  ipLng = res && typeof res.ipLongitude === 'number' && isFinite(res.ipLongitude) ? res.ipLongitude : NaN;
+  ipCity = res && typeof res.ipCity === 'string' ? res.ipCity : '';
+  renderConsole();
+}
+
 function refreshGeoTimezone() {
   if (tzMode !== 'geo' || dragging) return;
   const derived = nearestTz(geoLat, geoLng);
@@ -995,13 +999,13 @@ function commitPin() {
 }
 
 function drawArc(from, to) {
-  if (!$linkArc) return;
+  if (!$ipArc) return;
   const a = toXY(from.lat, from.lng);
   const b = toXY(to.lat, to.lng);
   const mx = (a.x + b.x) / 2;
   const my = Math.max(64, Math.min(338, Math.min(a.y, b.y) - Math.abs(b.x - a.x) * .10));
-  $linkArc.setAttribute('d', `M${a.x.toFixed(1)},${a.y.toFixed(1)} Q${mx.toFixed(1)},${my.toFixed(1)} ${b.x.toFixed(1)},${b.y.toFixed(1)}`);
-  $linkArc.removeAttribute('hidden');
+  $ipArc.setAttribute('d', `M${a.x.toFixed(1)},${a.y.toFixed(1)} Q${mx.toFixed(1)},${my.toFixed(1)} ${b.x.toFixed(1)},${b.y.toFixed(1)}`);
+  $ipArc.removeAttribute('hidden');
 }
 
 function renderConsole() {
@@ -1019,26 +1023,20 @@ function renderConsole() {
   const pinLabel = $pin.querySelector('.tp-pin-label');
   if (pinLabel) pinLabel.textContent = place.zh;
 
-  const rep = tzRepPoint(zone);
-  let far = false;
-  if (rep && tzOn) {
-    const rp = toXY(rep.lat, rep.lng);
-    far = Math.hypot(rp.x - pinP.x, rp.y - pinP.y) > 8;
-  }
-  // 跟随位置静止时,HUD 的时区已经说明结果;参考圈只在拖动、飞行或
-  // 出现分歧(手动/跟随 IP/位置层关闭)时出现,避免地图上多一个圆。
-  const showRing = tzOn && far && (dragging || !!previewCity || tzMode !== 'geo' || !geoLayerOn());
-  if (!showRing) {
-    $tzMarker.classList.add('off');
-    $linkArc.setAttribute('hidden', '');
+  // 虚线圆 = 当前出口 IP 的大致位置;粉点 = 伪装坐标。
+  const ipKnown = Number.isFinite(ipLat) && Number.isFinite(ipLng);
+  const ipP = ipKnown ? toXY(ipLat, ipLng) : null;
+  const ipFar = ipP && Math.hypot(ipP.x - pinP.x, ipP.y - pinP.y) > 8;
+  if (!ipFar) {
+    $ipMarker.classList.add('off');
+    $ipArc.setAttribute('hidden', '');
   } else {
-    const rp = toXY(rep.lat, rep.lng);
-    const tzCity = cityForZone(zone);
-    $tzMarker.classList.remove('off');
-    $tzMarker.setAttribute('transform', `translate(${rp.x.toFixed(2)} ${rp.y.toFixed(2)})`);
-    const tzLabel = $tzMarker.querySelector('.tp-tz-label');
-    if (tzLabel) tzLabel.textContent = '时区参考 · ' + (tzCity ? tzCity.zh : zoneName(zone));
-    drawArc({ lat: geoLat, lng: geoLng }, rep);
+    $ipMarker.classList.remove('off');
+    $ipMarker.setAttribute('transform', `translate(${ipP.x.toFixed(2)} ${ipP.y.toFixed(2)})`);
+    if ($ipTitle) {
+      $ipTitle.textContent = '当前出口 IP 的大致位置' + (ipCity ? ' · ' + ipCity : '') + ` · ${ipLat.toFixed(2)}, ${ipLng.toFixed(2)}`;
+    }
+    drawArc({ lat: geoLat, lng: geoLng }, { lat: ipLat, lng: ipLng });
   }
 
   const placeName = document.getElementById('tpPlace');
@@ -1188,7 +1186,6 @@ if ($pin) {
     e.preventDefault();
     setPin(geoLat + dLat, geoLng + dLng);
     commitPin();
-    pingPin();
   });
 }
 window.addEventListener('pointermove', (e) => {
@@ -1204,7 +1201,6 @@ function endDrag() {
   lastDragEnd = Date.now();
   if ($pin) $pin.classList.remove('dragging');
   if (dragMoved) commitPin();
-  pingPin();
 }
 window.addEventListener('pointerup', endDrag);
 window.addEventListener('pointercancel', endDrag);
@@ -1219,7 +1215,6 @@ if ($worldMap) {
     if ($flightTrail) $flightTrail.classList.remove('on');
     setPin(p.lat, p.lng);
     commitPin();
-    pingPin();
   });
   $worldMap.addEventListener('mousemove', (e) => {
     if (dragging || !$cursorReadout) return;
@@ -1292,7 +1287,6 @@ function flyTo(lat, lng, city) {
     geoLat = lat; geoLng = lng;
     previewCity = null;
     commitPin();
-    pingPin();
     return;
   }
   const p0 = toXY(geoLat, geoLng);
@@ -1320,7 +1314,6 @@ function flyTo(lat, lng, city) {
       geoLat = lat; geoLng = lng;
       previewCity = null;
       commitPin();
-      pingPin();
       if ($flightTrail) $flightTrail.classList.remove('on');
     }
   }
@@ -1369,7 +1362,6 @@ function applyCoordsInputs() {
   renderConsole();
   commitPin();
   if ($coordsPop) $coordsPop.hidden = true;
-  pingPin();
 }
 if ($tpCoords) {
   $tpCoords.addEventListener('click', () => {
@@ -1494,7 +1486,7 @@ async function init() {
 
   allFonts.sort((a, b) => a.localeCompare(b));
 
-  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone', 'geolocationLatitude', 'geolocationLongitude', 'theme', ...MODULE_KEYS], (res) => {
+  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone', 'geolocationLatitude', 'geolocationLongitude', 'ipLatitude', 'ipLongitude', 'ipCity', 'theme', ...MODULE_KEYS], (res) => {
     fontMode = res.fontMode === 'whitelist' ? 'whitelist' : 'blacklist';
     customHiddenFonts = Array.isArray(res.customHiddenFonts) ? res.customHiddenFonts : [];
     customAllowedFonts = Array.isArray(res.customAllowedFonts) ? res.customAllowedFonts : [];
@@ -1509,6 +1501,13 @@ async function init() {
     syncNavDotsFromInputs();
     applyTzUI(res);
     applyGeoUI(res);
+    applyIpUI(res);
+    if (!(typeof res.ipLatitude === 'number' && typeof res.ipLongitude === 'number') &&
+        typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+      try {
+        chrome.runtime.sendMessage({ type: 'SYNC_EGRESS' }, () => { void chrome.runtime.lastError; });
+      } catch (_) {}
+    }
     applyTheme(res.theme);
     applyShieldState(res.globalShieldEnabled !== false);
     showView((location.hash || '#fonts').slice(1));

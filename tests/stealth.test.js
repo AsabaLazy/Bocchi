@@ -148,15 +148,21 @@ assert.strictEqual(startupListeners.length, 1, 'Service worker must register onS
 
   assert.strictEqual(policySet, 'disable_non_proxied_udp', 'Service worker must set webRTCIPHandlingPolicy to disable_non_proxied_udp');
 
-  const { fetchEgressTimezone, syncTimezone } = swModule.exports;
+  const { fetchEgressInfo, fetchEgressTimezone, syncTimezone } = swModule.exports;
+  assert(typeof fetchEgressInfo === 'function', 'fetchEgressInfo must be a function');
   assert(typeof fetchEgressTimezone === 'function', 'fetchEgressTimezone must be a function');
   assert(typeof syncTimezone === 'function', 'syncTimezone must be a function');
 
-  // Successful GeoIP fetch
+  // Successful GeoIP fetch (timezone + IP coordinates)
   mockFetchError = false;
-  mockFetchReturn = { timezone: { id: 'America/Chicago' } };
+  mockFetchReturn = { timezone: { id: 'America/Chicago' }, latitude: 41.85, longitude: -87.65, city: 'Chicago' };
   const detectedTz = await fetchEgressTimezone();
   assert.strictEqual(detectedTz, 'America/Chicago', 'fetchEgressTimezone should return detected timezone');
+  const detectedInfo = await fetchEgressInfo();
+  assert.strictEqual(detectedInfo.timezone, 'America/Chicago', 'fetchEgressInfo should carry the timezone');
+  assert.strictEqual(detectedInfo.lat, 41.85, 'fetchEgressInfo should carry the latitude');
+  assert.strictEqual(detectedInfo.lng, -87.65, 'fetchEgressInfo should carry the longitude');
+  assert.strictEqual(detectedInfo.city, 'Chicago', 'fetchEgressInfo should carry the city');
 
   // Fallback to geojs.io when ipwho.is fails
   mockFetchError = false;
@@ -174,10 +180,14 @@ assert.strictEqual(startupListeners.length, 1, 'Service worker must register onS
   const fallbackTz = await fetchEgressTimezone();
   assert.strictEqual(fallbackTz, 'America/Los_Angeles', 'fetchEgressTimezone should fallback to America/Los_Angeles on error');
 
-  // syncTimezone stores in storage
+  // syncTimezone stores the timezone and the IP location
   mockFetchError = false;
-  mockFetchReturn = { timezone: { id: 'America/Denver' } };
+  mockFetchReturn = { timezone: { id: 'America/Denver' }, latitude: 39.74, longitude: -104.99, city: 'Denver' };
   await syncTimezone();
+  assert.strictEqual(storageData.timezone, 'America/Denver', 'syncTimezone should store the timezone');
+  assert.strictEqual(storageData.ipLatitude, 39.74, 'syncTimezone should store the IP latitude');
+  assert.strictEqual(storageData.ipLongitude, -104.99, 'syncTimezone should store the IP longitude');
+  assert.strictEqual(storageData.ipCity, 'Denver', 'syncTimezone should store the IP city');
 
   // Persona machinery was removed entirely: the service worker must NOT
   // export syncUserAgentRule and must not touch declarativeNetRequest.

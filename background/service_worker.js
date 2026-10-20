@@ -58,19 +58,28 @@ async function applyWebRTCPolicy(specifiedEnabled) {
  * Tries ipwho.is first, then get.geojs.io and ipapi.co as fallbacks, defaulting
  * to America/Los_Angeles.
  */
-async function fetchEgressTimezone(fallback = DEFAULT_TIMEZONE) {
+async function fetchEgressInfo(fallback = DEFAULT_TIMEZONE) {
   const fetchOpts = (typeof AbortSignal !== 'undefined' && AbortSignal.timeout)
     ? { signal: AbortSignal.timeout(4000) }
     : {};
+  const readGeo = (data) => {
+    const lat = Number(data && (data.latitude != null ? data.latitude : data.lat));
+    const lng = Number(data && (data.longitude != null ? data.longitude : data.lon));
+    return {
+      lat: Number.isFinite(lat) ? lat : null,
+      lng: Number.isFinite(lng) ? lng : null,
+      city: data && typeof data.city === 'string' ? data.city : ''
+    };
+  };
 
   // Try ipwho.is
   try {
     const res = await fetch('https://ipwho.is/', fetchOpts);
     if (res.ok) {
       const data = await res.json();
-      const tz = (data && data.timezone && (data.timezone.id || data.timezone)) || data.timezone;
+      const tz = (data && data.timezone && (data.timezone.id || data.timezone)) || (data && data.timezone);
       if (typeof tz === 'string' && tz.includes('/')) {
-        return tz;
+        return { timezone: tz, ...readGeo(data) };
       }
     }
   } catch (_) {}
@@ -81,7 +90,7 @@ async function fetchEgressTimezone(fallback = DEFAULT_TIMEZONE) {
     if (res.ok) {
       const data = await res.json();
       if (data && typeof data.timezone === 'string' && data.timezone.includes('/')) {
-        return data.timezone;
+        return { timezone: data.timezone, ...readGeo(data) };
       }
     }
   } catch (_) {}
@@ -92,12 +101,17 @@ async function fetchEgressTimezone(fallback = DEFAULT_TIMEZONE) {
     if (res.ok) {
       const data = await res.json();
       if (data && typeof data.timezone === 'string' && data.timezone.includes('/')) {
-        return data.timezone;
+        return { timezone: data.timezone, ...readGeo(data) };
       }
     }
   } catch (_) {}
 
-  return fallback;
+  return { timezone: fallback, lat: null, lng: null, city: '' };
+}
+
+async function fetchEgressTimezone(fallback = DEFAULT_TIMEZONE) {
+  const info = await fetchEgressInfo(fallback);
+  return info.timezone;
 }
 
 const TIMEZONE_CACHE_TTL_MS = 4 * 60 * 60 * 1000; // 4-hour GeoIP cache TTL
@@ -109,21 +123,25 @@ const TIMEZONE_CACHE_TTL_MS = 4 * 60 * 60 * 1000; // 4-hour GeoIP cache TTL
 async function syncTimezone(force = false) {
   try {
     if (!force && typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-      const cached = await chrome.storage.local.get(['timezone', 'lastUpdated']);
-      if (cached && cached.timezone && cached.lastUpdated && (Date.now() - cached.lastUpdated < TIMEZONE_CACHE_TTL_MS)) {
+      const cached = await chrome.storage.local.get(['timezone', 'lastUpdated', 'ipLatitude', 'ipLongitude']);
+      const hasCoords = typeof cached.ipLatitude === 'number' && typeof cached.ipLongitude === 'number';
+      if (cached && cached.timezone && cached.lastUpdated && (Date.now() - cached.lastUpdated < TIMEZONE_CACHE_TTL_MS) && hasCoords) {
         return cached.timezone;
       }
     }
 
-    const tz = await fetchEgressTimezone();
+    const info = await fetchEgressInfo();
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       await chrome.storage.local.set({
-        timezone: tz,
+        timezone: info.timezone,
+        ipLatitude: info.lat,
+        ipLongitude: info.lng,
+        ipCity: info.city,
         lastUpdated: Date.now()
       });
-      console.log('[Bocchi Privacy Shield] Egress timezone synchronized:', tz);
+      console.log('[Bocchi Privacy Shield] Egress timezone synchronized:', info.timezone);
     }
-    return tz;
+    return info.timezone;
   } catch (err) {
     console.error('[Bocchi Privacy Shield] Failed to sync timezone:', err);
     return DEFAULT_TIMEZONE;
@@ -262,12 +280,23 @@ if (typeof chrome !== 'undefined' && chrome.runtime) {
       if (message && message.type === 'GET_TIMEZONE') {
         (async () => {
           if (chrome.storage && chrome.storage.local) {
-            const res = await chrome.storage.local.get(['timezone']);
-            sendResponse({ timezone: (res && res.timezone) || DEFAULT_TIMEZONE });
+            const res = await chrome.storage.local.get(['timezone', 'ipLatitude', 'ipLongitude', 'ipCity']);
+            sendResponse({
+              timezone: (res && res.timezone) || DEFAULT_TIMEZONE,
+              ipLatitude: res && res.ipLatitude,
+              ipLongitude: res && res.ipLongitude,
+              ipCity: res && res.ipCity
+            });
           } else {
             sendResponse({ timezone: DEFAULT_TIMEZONE });
           }
         })();
+        return true;
+      }
+      if (message && message.type === 'SYNC_EGRESS') {
+        syncTimezone(true)
+          .then((tz) => sendResponse({ ok: true, timezone: tz }))
+          .catch(() => sendResponse({ ok: false }));
         return true;
       }
     });
@@ -278,6 +307,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     DEFAULT_TIMEZONE,
     applyWebRTCPolicy,
+    fetchEgressInfo,
     fetchEgressTimezone,
     syncTimezone
   };
