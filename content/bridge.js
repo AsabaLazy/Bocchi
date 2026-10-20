@@ -39,7 +39,7 @@
   let configEventName = null;  // CE: random config event name from the engine
 
   const ALL_KEYS = [
-    'timezone', 'targetTimezone',
+    'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone',
     'customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'fontMode', 'blockOtherScripts', 'blockSymbols',
     'globalShieldEnabled', 'siteBypassList',
     'canvasProtection', 'webrtcProtection', 'audioProtection', 'timezoneProtection', 'hardwareProtection', 'fontProtection'
@@ -174,7 +174,9 @@
         return;
       }
       chrome.storage.local.get(ALL_KEYS, (res) => {
-        let tz = (res && (res.timezone || res.targetTimezone));
+        const mode = res && res.timezoneMode === 'manual' ? 'manual' : 'auto';
+        const manual = res && typeof res.manualTimezone === 'string' ? res.manualTimezone : '';
+        let tz = mode === 'manual' ? manual : (res && (res.timezone || res.targetTimezone));
         if (!tz && typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
           try {
             chrome.runtime.sendMessage({ type: 'GET_TIMEZONE' }, (response) => {
@@ -205,12 +207,15 @@
         return;
       }
 
-      if (changes.timezone || changes.targetTimezone) {
-        const newTz = (changes.timezone && changes.timezone.newValue) ||
-                      (changes.targetTimezone && changes.targetTimezone.newValue);
-        if (newTz) {
-          sendPayload({ tz: newTz });
-        }
+      if (changes.timezone || changes.targetTimezone || changes.timezoneMode || changes.manualTimezone) {
+        chrome.storage.local.get(['timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone'], (res) => {
+          const mode = res && res.timezoneMode === 'manual' ? 'manual' : 'auto';
+          const manual = res && typeof res.manualTimezone === 'string' ? res.manualTimezone : '';
+          const newTz = mode === 'manual' ? manual : ((res && (res.timezone || res.targetTimezone)) || '');
+          if (newTz) {
+            sendPayload({ tz: newTz });
+          }
+        });
       }
       if (changes.customHiddenFonts || changes.customAllowedFonts || changes.blockBuiltinChineseFonts || changes.fontMode || changes.blockOtherScripts || changes.blockSymbols || changes.fontProtection) {
         chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'fontMode', 'blockOtherScripts', 'blockSymbols', 'fontProtection'], (res) => {

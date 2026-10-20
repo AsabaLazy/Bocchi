@@ -189,12 +189,20 @@
           <div class="view-head">
             <div>
               <h2>时区</h2>
-              <p>按出站 IP 自动对齐 Date / Intl 本地化参数，消除时区与网络出口的矛盾。</p>
+              <p>对齐 Date / Intl 本地化参数。自动模式跟随出口 IP，手动模式固定为你选择的时区。</p>
             </div>
             <label class="switch" title="动态时区对齐开关">
               <input type="checkbox" id="timezoneProtection" checked aria-label="动态时区对齐">
               <i></i>
             </label>
+          </div>
+          <div class="tz-mode-seg" role="group" aria-label="时区来源">
+            <button type="button" class="tz-mode-btn" data-tz-mode="auto" aria-pressed="true">自动（出口 IP）</button>
+            <button type="button" class="tz-mode-btn" data-tz-mode="manual" aria-pressed="false">手动</button>
+          </div>
+          <div class="tz-manual" id="tzManual" hidden>
+            <label class="tz-label" for="tzSelect">时区</label>
+            <select id="tzSelect" class="tz-select"></select>
           </div>
           <p class="view-note" id="tzInfo">当前生效时区：读取中…</p>
         </section>

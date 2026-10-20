@@ -624,8 +624,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
       }
     }
     if (moduleChanged) syncNavDotsFromInputs();
-    if (changes.timezone || changes.targetTimezone) {
-      chrome.storage.local.get(['timezone', 'targetTimezone'], updateTzInfo);
+    if (changes.timezone || changes.targetTimezone || changes.timezoneMode || changes.manualTimezone) {
+      chrome.storage.local.get(['timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone'], applyTzUI);
     }
     if (changes.theme) {
       applyTheme(changes.theme.newValue);
@@ -676,14 +676,95 @@ document.querySelectorAll('.nav-item').forEach(btn => {
 });
 window.addEventListener('hashchange', () => showView((location.hash || '#fonts').slice(1)));
 
-// 时区模块:展示当前生效时区(由出口 IP 自动对齐,无手动配置)
-function updateTzInfo(res) {
+// 时区模块:自动(跟随出口 IP) / 手动(IANA 时区选择)
+let tzMode = 'auto';
+let tzManual = '';
+
+function populateTzSelect() {
+  const sel = document.getElementById('tzSelect');
+  if (!sel || sel.options.length > 0) return;
+  let zones = [];
+  try { zones = Intl.supportedValuesOf('timeZone'); } catch (_) { zones = []; }
+  if (!zones.length) {
+    zones = ['UTC', 'America/Los_Angeles', 'America/New_York', 'Europe/London',
+      'Europe/Berlin', 'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Singapore', 'Australia/Sydney'];
+  }
+  if (!zones.includes('UTC')) zones.unshift('UTC');
+  zones = [...zones].sort((a, b) => a.localeCompare(b));
+  for (const z of zones) {
+    const opt = document.createElement('option');
+    opt.value = z;
+    opt.textContent = z;
+    sel.appendChild(opt);
+  }
+}
+
+function tzOffsetLabel(zone) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: zone, timeZoneName: 'shortOffset' }).formatToParts(new Date());
+    const off = parts.find(p => p.type === 'timeZoneName');
+    return off ? off.value : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function applyTzUI(res) {
+  tzMode = res && res.timezoneMode === 'manual' ? 'manual' : 'auto';
+  tzManual = res && typeof res.manualTimezone === 'string' ? res.manualTimezone : '';
+
+  document.querySelectorAll('.tz-mode-btn').forEach(btn => {
+    btn.setAttribute('aria-pressed', btn.dataset.tzMode === tzMode ? 'true' : 'false');
+  });
+
+  populateTzSelect();
+  const manualWrap = document.getElementById('tzManual');
+  if (manualWrap) manualWrap.hidden = tzMode !== 'manual';
+
+  const sel = document.getElementById('tzSelect');
+  if (sel) {
+    const fallback = (res && (res.timezone || res.targetTimezone)) || 'UTC';
+    const value = tzManual || fallback;
+    if (value && ![...sel.options].some(o => o.value === value)) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = value;
+      sel.appendChild(opt);
+    }
+    sel.value = value;
+  }
+
   const el = document.getElementById('tzInfo');
-  if (!el) return;
-  const tz = res && (res.timezone || res.targetTimezone);
-  el.textContent = tz
-    ? `当前生效时区：${tz}（随出口 IP 自动对齐）`
-    : '当前生效时区：尚未对齐（随出口 IP 自动更新）';
+  if (el) {
+    const autoTz = res && (res.timezone || res.targetTimezone);
+    const effective = tzMode === 'manual' ? tzManual : autoTz;
+    const offset = effective ? tzOffsetLabel(effective) : '';
+    el.textContent = effective
+      ? `当前生效时区：${effective}${offset ? '（' + offset + '）' : ''} · ${tzMode === 'manual' ? '手动指定' : '按出口 IP 自动对齐'}`
+      : '当前生效时区：尚未对齐（随出口 IP 自动更新）';
+  }
+}
+
+document.querySelectorAll('.tz-mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const mode = btn.dataset.tzMode;
+    if (mode === 'manual' && !tzManual) {
+      // 首次切到手动:用当前生效值作为起点,避免时区跳变
+      chrome.storage.local.get(['timezone', 'targetTimezone'], (r) => {
+        const seed = (r && (r.timezone || r.targetTimezone)) || 'UTC';
+        chrome.storage.local.set({ timezoneMode: 'manual', manualTimezone: seed });
+      });
+    } else {
+      chrome.storage.local.set({ timezoneMode: mode });
+    }
+  });
+});
+
+const tzSelectEl = document.getElementById('tzSelect');
+if (tzSelectEl) {
+  tzSelectEl.addEventListener('change', () => {
+    chrome.storage.local.set({ manualTimezone: tzSelectEl.value, timezoneMode: 'manual' });
+  });
 }
 
 // 主题:右上角图标循环切换 跟随系统 → 深色 → 浅色(存储键 theme,默认 system)
@@ -750,7 +831,7 @@ async function init() {
 
   allFonts.sort((a, b) => a.localeCompare(b));
 
-  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'theme', ...MODULE_KEYS], (res) => {
+  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'theme', ...MODULE_KEYS], (res) => {
     fontMode = res.fontMode === 'whitelist' ? 'whitelist' : 'blacklist';
     customHiddenFonts = Array.isArray(res.customHiddenFonts) ? res.customHiddenFonts : [];
     customAllowedFonts = Array.isArray(res.customAllowedFonts) ? res.customAllowedFonts : [];
@@ -762,7 +843,7 @@ async function init() {
       if (moduleInputs[key]) moduleInputs[key].checked = res[key] !== false;
     }
     syncNavDotsFromInputs();
-    updateTzInfo(res);
+    applyTzUI(res);
     applyTheme(res.theme);
     applyShieldState(res.globalShieldEnabled !== false);
     showView((location.hash || '#fonts').slice(1));
