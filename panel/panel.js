@@ -1024,19 +1024,38 @@ function renderConsole() {
   if (pinLabel) pinLabel.textContent = place.zh;
 
   // 虚线圆 = 当前出口 IP 的大致位置;粉点 = 伪装坐标。
-  const ipKnown = Number.isFinite(ipLat) && Number.isFinite(ipLng);
-  const ipP = ipKnown ? toXY(ipLat, ipLng) : null;
-  const ipFar = ipP && Math.hypot(ipP.x - pinP.x, ipP.y - pinP.y) > 8;
-  if (!ipFar) {
+  // 精确坐标缺失时,用出口 IP 的时区代表城市估算,保证这个参考始终可见。
+  let ipRef = null;
+  let ipExact = false;
+  if (Number.isFinite(ipLat) && Number.isFinite(ipLng)) {
+    ipRef = { lat: ipLat, lng: ipLng };
+    ipExact = true;
+  } else if (autoTzValue) {
+    ipRef = tzRepPoint(autoTzValue);
+  }
+  if (ipRef) {
+    const ipP = toXY(ipRef.lat, ipRef.lng);
+    const near = Math.hypot(ipP.x - pinP.x, ipP.y - pinP.y) <= 8;
+    const ring = $ipMarker.querySelector('.tp-ip-ring');
+    const label = $ipMarker.querySelector('.tp-ip-label');
+    $ipMarker.classList.remove('off');
+    $ipMarker.classList.toggle('near', near);
+    $ipMarker.setAttribute('transform', `translate(${ipP.x.toFixed(2)} ${ipP.y.toFixed(2)})`);
+    if (ring) ring.setAttribute('r', near ? 12 : 7);
+    if (label) {
+      label.textContent = ipExact ? '出口 IP' : '出口 IP（估算）';
+      label.setAttribute('y', near ? 18 : -13);
+    }
+    if ($ipTitle) {
+      $ipTitle.textContent = ipExact
+        ? '当前出口 IP 的大致位置' + (ipCity ? ' · ' + ipCity : '') + ` · ${ipLat.toFixed(2)}, ${ipLng.toFixed(2)}`
+        : '按出口 IP 的时区估算 · ' + autoTzValue;
+    }
+    if (!near) drawArc({ lat: geoLat, lng: geoLng }, ipRef);
+    else $ipArc.setAttribute('hidden', '');
+  } else {
     $ipMarker.classList.add('off');
     $ipArc.setAttribute('hidden', '');
-  } else {
-    $ipMarker.classList.remove('off');
-    $ipMarker.setAttribute('transform', `translate(${ipP.x.toFixed(2)} ${ipP.y.toFixed(2)})`);
-    if ($ipTitle) {
-      $ipTitle.textContent = '当前出口 IP 的大致位置' + (ipCity ? ' · ' + ipCity : '') + ` · ${ipLat.toFixed(2)}, ${ipLng.toFixed(2)}`;
-    }
-    drawArc({ lat: geoLat, lng: geoLng }, { lat: ipLat, lng: ipLng });
   }
 
   const placeName = document.getElementById('tpPlace');

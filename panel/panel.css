@@ -121,6 +121,8 @@ body {
   --map-land-line: rgba(255,255,255,.055);
   --map-grid: rgba(255,255,255,.032);
   --map-trail: rgba(242,164,184,.30);
+  --ip-ring: #9db8e8;
+  --ip-line: rgba(157,184,232,.40);
 }
 html[data-theme="light"] {
   --map-ocean-a: #eef1f6;
@@ -129,6 +131,8 @@ html[data-theme="light"] {
   --map-land-line: rgba(20,20,30,.12);
   --map-grid: rgba(20,20,30,.06);
   --map-trail: rgba(207,90,128,.28);
+  --ip-ring: #5a7fb5;
+  --ip-line: rgba(90,127,181,.35);
 }
 [hidden] { display: none !important; }
 
@@ -145,7 +149,7 @@ html[data-theme="light"] .tp-map-wrap { box-shadow: 0 14px 40px rgba(20,20,30,.1
 .tp-ocean { fill: url(#tpOceanGrad); }
 .tp-land { fill: var(--map-land); stroke: var(--map-land-line); stroke-width: .45; }
 .tp-graticule { stroke: var(--map-grid); stroke-width: .5; fill: none; }
-#tpIpArc { fill: none; stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 4; opacity: .4; }
+#tpIpArc { fill: none; stroke: var(--ip-line); stroke-width: 1; stroke-dasharray: 3 4; }
 .tp-flight-trail { fill: none; stroke: var(--map-trail); stroke-width: 1; stroke-dasharray: 2 5; opacity: 0; transition: opacity .25s; }
 .tp-flight-trail.on { opacity: 1; }
 
@@ -165,8 +169,8 @@ html[data-theme="light"] .tp-map-wrap { box-shadow: 0 14px 40px rgba(20,20,30,.1
 .tp-pin.ghost .tp-pin-dot { opacity: .35; }
 .tp-pin.ghost .tp-pin-label { opacity: .45; }
 .tp-pin:focus-visible .tp-pin-ring { stroke-width: 3; }
-.tp-ip-ring { fill: none; stroke: var(--muted); stroke-width: 1.4; stroke-dasharray: 2.5 3; opacity: .62; }
-.tp-ip-label { fill: var(--muted); font-size: 9px; }
+.tp-ip-ring { fill: none; stroke: var(--ip-ring); stroke-width: 1.5; stroke-dasharray: 2.5 3; opacity: .9; }
+.tp-ip-label { fill: var(--ip-ring); font-size: 9px; }
 .tp-ip-marker.off { display: none; }
 
 .tp-layers { display: flex; gap: 6px; flex: none; }
