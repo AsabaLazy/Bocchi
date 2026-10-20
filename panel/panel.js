@@ -1399,7 +1399,7 @@ if ($geoProtection) {
   });
 }
 
-// 地图底图 / 经纬网 / 晨昏线
+// 地图底图 / 经纬网
 if ($worldPath && window.BOCCHI_WORLD_MAP_PATH) {
   $worldPath.setAttribute('d', window.BOCCHI_WORLD_MAP_PATH);
 }
@@ -1421,45 +1421,8 @@ if ($worldPath && window.BOCCHI_WORLD_MAP_PATH) {
   }
 })();
 
-function updateTerminator() {
-  const night = document.getElementById('tpNight');
-  const termGlow = document.getElementById('tpTermGlow');
-  const termLine = document.getElementById('tpTermLine');
-  const sun = document.getElementById('tpSun');
-  if (!night || !termGlow || !termLine) return;
-  const now = new Date();
-  const decl = solarDeclination(now);
-  const declRad = decl * Math.PI / 180;
-  const utcHours = now.getUTCHours() + now.getUTCMinutes() / 60;
-  if (Math.abs(Math.tan(declRad)) < 1e-3) {
-    const anti = (((12 - utcHours) * 15 + 180 + 540) % 360) - 180;
-    const x = (anti + 180) / 360 * 720;
-    night.setAttribute('d', `M${x.toFixed(1)},0L720,0L720,360L${x.toFixed(1)},360Z`);
-    termLine.setAttribute('d', `M${x.toFixed(1)},0L${x.toFixed(1)},360`);
-    termGlow.setAttribute('d', `M${x.toFixed(1)},0L${x.toFixed(1)},360`);
-  } else {
-    const pts = [];
-    for (let lng = -180; lng <= 180; lng += 2) {
-      const H = ((utcHours + lng / 15 - 12) * 15) * Math.PI / 180;
-      let lat = Math.atan(-Math.cos(H) / Math.tan(declRad)) * 180 / Math.PI;
-      lat = Math.max(-89.5, Math.min(89.5, lat));
-      pts.push([(lng + 180) / 360 * 720, (90 - lat) / 180 * 360]);
-    }
-    const curve = 'M' + pts.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('L');
-    const north = decl < 0;
-    night.setAttribute('d', north ? `${curve}L720,0L0,0Z` : `${curve}L720,360L0,360Z`);
-    termGlow.setAttribute('d', curve);
-    termLine.setAttribute('d', curve);
-  }
-  if (sun) {
-    const sunLng = (((12 - utcHours) * 15 + 540) % 360) - 180;
-    const p = toXY(decl, sunLng);
-    sun.setAttribute('cx', p.x.toFixed(1));
-    sun.setAttribute('cy', p.y.toFixed(1));
-  }
-}
-updateTerminator();
-setInterval(updateTerminator, 60000);
+// 昼夜状态只用于 HUD 的太阳/月亮图标,地图不再绘制晨昏线
+
 setInterval(() => { renderConsole(); }, 15000);
 
 // 主题:右上角图标循环切换 跟随系统 → 深色 → 浅色(存储键 theme,默认 system)
