@@ -627,6 +627,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (changes.timezone || changes.targetTimezone || changes.timezoneMode || changes.manualTimezone) {
       chrome.storage.local.get(['timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone'], applyTzUI);
     }
+    if (changes.geolocationLatitude || changes.geolocationLongitude) {
+      chrome.storage.local.get(['geolocationLatitude', 'geolocationLongitude'], applyGeoUI);
+    }
     if (changes.theme) {
       applyTheme(changes.theme.newValue);
     }
@@ -635,7 +638,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 // ── 设置页:模块开关 / 侧栏导航 / 时区信息 ──
-const MODULE_KEYS = ['canvasProtection', 'webrtcProtection', 'audioProtection', 'timezoneProtection', 'hardwareProtection', 'fontProtection'];
+const MODULE_KEYS = ['canvasProtection', 'webrtcProtection', 'audioProtection', 'timezoneProtection', 'geolocationProtection', 'hardwareProtection', 'fontProtection'];
 const moduleInputs = {};
 for (const key of MODULE_KEYS) {
   const el = document.getElementById(key);
@@ -767,6 +770,100 @@ if (tzSelectEl) {
   });
 }
 
+// 位置模块:经纬度输入 + 离线世界地图选点
+const $geoLat = document.getElementById('geoLat');
+const $geoLng = document.getElementById('geoLng');
+const $geoMarker = document.getElementById('geoMarker');
+const $geoReadout = document.getElementById('geoReadout');
+const $worldMap = document.getElementById('worldMap');
+const $worldPath = document.getElementById('worldPath');
+
+if ($worldPath && window.BOCCHI_WORLD_MAP_PATH) {
+  $worldPath.setAttribute('d', window.BOCCHI_WORLD_MAP_PATH);
+}
+
+const GEO_DEFAULT = { lat: 34.0522, lng: -118.2437 }; // 与默认时区 America/Los_Angeles 一致
+let geoLat = GEO_DEFAULT.lat;
+let geoLng = GEO_DEFAULT.lng;
+
+function clampLat(v) { return Math.max(-90, Math.min(90, v)); }
+function clampLng(v) { return Math.max(-180, Math.min(180, v)); }
+
+function renderGeoMarker() {
+  const valid = Number.isFinite(geoLat) && Number.isFinite(geoLng);
+  if ($geoMarker) {
+    $geoMarker.hidden = !valid;
+    if (valid) {
+      const x = (geoLng + 180) / 360 * 720;
+      const y = (90 - geoLat) / 180 * 360;
+      $geoMarker.setAttribute('transform', 'translate(' + x.toFixed(2) + ' ' + y.toFixed(2) + ')');
+    }
+  }
+  if ($geoReadout) {
+    $geoReadout.textContent = valid
+      ? '纬度 ' + geoLat.toFixed(4) + ' · 经度 ' + geoLng.toFixed(4)
+      : '点击地图选择位置';
+  }
+}
+
+function applyGeoUI(res) {
+  const lat = res && typeof res.geolocationLatitude === 'number' && isFinite(res.geolocationLatitude)
+    ? res.geolocationLatitude : GEO_DEFAULT.lat;
+  const lng = res && typeof res.geolocationLongitude === 'number' && isFinite(res.geolocationLongitude)
+    ? res.geolocationLongitude : GEO_DEFAULT.lng;
+  geoLat = lat;
+  geoLng = lng;
+  if ($geoLat) $geoLat.value = lat;
+  if ($geoLng) $geoLng.value = lng;
+  renderGeoMarker();
+}
+
+function saveGeo() {
+  chrome.storage.local.set({ geolocationLatitude: geoLat, geolocationLongitude: geoLng });
+}
+
+function applyGeoFromInputs() {
+  const lat = parseFloat($geoLat && $geoLat.value);
+  const lng = parseFloat($geoLng && $geoLng.value);
+  if (!isFinite(lat) || !isFinite(lng)) return;
+  geoLat = clampLat(lat);
+  geoLng = clampLng(lng);
+  renderGeoMarker();
+  saveGeo();
+}
+if ($geoLat) $geoLat.addEventListener('change', applyGeoFromInputs);
+if ($geoLng) $geoLng.addEventListener('change', applyGeoFromInputs);
+
+if ($worldMap) {
+  $worldMap.addEventListener('click', (e) => {
+    const ctm = $worldMap.getScreenCTM();
+    if (!ctm) return;
+    const pt = $worldMap.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const loc = pt.matrixTransform(ctm.inverse());
+    geoLng = clampLng((loc.x / 720) * 360 - 180);
+    geoLat = clampLat(90 - (loc.y / 360) * 180);
+    if ($geoLat) $geoLat.value = geoLat.toFixed(4);
+    if ($geoLng) $geoLng.value = geoLng.toFixed(4);
+    renderGeoMarker();
+    saveGeo();
+  });
+}
+
+// 首次开启位置伪装时,若从未设置过坐标,种入默认坐标,避免 0,0
+const $geoProtection = document.getElementById('geolocationProtection');
+if ($geoProtection) {
+  $geoProtection.addEventListener('change', () => {
+    if (!$geoProtection.checked) return;
+    chrome.storage.local.get(['geolocationLatitude', 'geolocationLongitude'], (r) => {
+      if (typeof r.geolocationLatitude !== 'number' || typeof r.geolocationLongitude !== 'number') {
+        chrome.storage.local.set({ geolocationLatitude: geoLat, geolocationLongitude: geoLng });
+      }
+    });
+  });
+}
+
 // 主题:右上角图标循环切换 跟随系统 → 深色 → 浅色(存储键 theme,默认 system)
 const themeMedia = window.matchMedia('(prefers-color-scheme: light)');
 const $themeToggle = document.getElementById('themeToggle');
@@ -831,19 +928,21 @@ async function init() {
 
   allFonts.sort((a, b) => a.localeCompare(b));
 
-  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'theme', ...MODULE_KEYS], (res) => {
+  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geolocationLatitude', 'geolocationLongitude', 'theme', ...MODULE_KEYS], (res) => {
     fontMode = res.fontMode === 'whitelist' ? 'whitelist' : 'blacklist';
     customHiddenFonts = Array.isArray(res.customHiddenFonts) ? res.customHiddenFonts : [];
     customAllowedFonts = Array.isArray(res.customAllowedFonts) ? res.customAllowedFonts : [];
     blockBuiltinChineseFonts = typeof res.blockBuiltinChineseFonts === 'boolean' ? res.blockBuiltinChineseFonts : true;
     blockOtherScripts = typeof res.blockOtherScripts === 'boolean' ? res.blockOtherScripts : false;
     blockSymbols = typeof res.blockSymbols === 'boolean' ? res.blockSymbols : false;
-    // 模块开关默认全部开启
+    // 模块开关默认:位置伪装默认关闭,其余默认开启
     for (const key of MODULE_KEYS) {
-      if (moduleInputs[key]) moduleInputs[key].checked = res[key] !== false;
+      if (!moduleInputs[key]) continue;
+      moduleInputs[key].checked = key === 'geolocationProtection' ? res[key] === true : res[key] !== false;
     }
     syncNavDotsFromInputs();
     applyTzUI(res);
+    applyGeoUI(res);
     applyTheme(res.theme);
     applyShieldState(res.globalShieldEnabled !== false);
     showView((location.hash || '#fonts').slice(1));

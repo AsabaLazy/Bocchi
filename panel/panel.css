@@ -141,6 +141,30 @@ body {
 .tz-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .tz-select option { background: var(--surface); color: var(--text); }
 
+/* 位置:经纬度 + 离线地图选点 */
+.geo-controls { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+.geo-field { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.geo-field input {
+  width: 130px; font: inherit; font-size: 13px; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-s); padding: 7px 10px;
+  font-variant-numeric: tabular-nums;
+}
+.geo-field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.geo-map-wrap {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden; background: var(--surface); margin-bottom: 8px;
+}
+#worldMap { display: block; width: 100%; height: auto; cursor: crosshair; }
+.geo-ocean { fill: var(--surface); }
+.geo-land { fill: var(--surface-2); stroke: var(--border); stroke-width: .5; }
+.geo-marker-ring { fill: none; stroke: var(--accent); stroke-width: 2; opacity: .55; }
+.geo-marker-dot { fill: var(--accent); }
+.geo-readout {
+  padding: 8px 12px; font-size: 12px; color: var(--muted);
+  border-top: 1px solid var(--border); font-variant-numeric: tabular-nums;
+}
+
 /* 右上角主题图标(点击循环:跟随系统 → 深色 → 浅色) */
 .icon-btn {
   margin-left: auto;

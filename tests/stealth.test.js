@@ -1111,12 +1111,28 @@ function createMockWindow(hostname, platform = 'Linux x86_64') {
         }
       };
       this.mediaDevices = new win.MediaDevices();
+      this.geolocation = new win.Geolocation();
     }
     // Native gamepad list (engine downgrades to [] while hardwareProtection is on)
     getGamepads() {
       return [{ index: 0, id: 'Xbox 360 Controller (XInput STANDARD GAMEPAD Vendor: 045e Product: 028e)' }];
     }
   }
+  class Geolocation {
+    getCurrentPosition(success) {
+      if (typeof success === 'function') {
+        success({ coords: { latitude: 1, longitude: 2, accuracy: 100 }, timestamp: 1 });
+      }
+    }
+    watchPosition(success) {
+      if (typeof success === 'function') {
+        success({ coords: { latitude: 1, longitude: 2, accuracy: 100 }, timestamp: 1 });
+      }
+      return 7;
+    }
+    clearWatch() {}
+  }
+
   class MediaDevices {
     enumerateDevices() {
       return Promise.resolve([
@@ -1126,6 +1142,10 @@ function createMockWindow(hostname, platform = 'Linux x86_64') {
     }
   }
   win.MediaDevices = MediaDevices;
+  // Timer primitives used by async native-style APIs (geolocation callbacks).
+  win.setTimeout = (fn, ms) => setTimeout(fn, ms);
+  win.clearTimeout = (id) => clearTimeout(id);
+  win.Geolocation = Geolocation;
   win.Navigator = Navigator;
   win.navigator = new Navigator();
 
@@ -2561,6 +2581,34 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     assert(fontsRestored.some(f => f.family === 'Noto Sans Arabic'), 'When blockOtherScripts=false, Noto Sans Arabic must be restored');
     assert(fontsRestored.some(f => f.family === 'Symbola'), 'When blockSymbols=false, Symbola must be restored');
     console.log('✓ Batch minority scripts and symbol toggles filter independently (blockOtherScripts does not hide symbols).\n');
+
+    // 9.5 Geolocation spoof (opt-in): off by default, configured coordinates when enabled
+    const winGeo = createMockWindow('geo-test.com', 'Linux x86_64');
+    vm.runInContext(stealthCode, vm.createContext(winGeo));
+    const readGeo = (win) => new Promise((resolve) => {
+      win.navigator.geolocation.getCurrentPosition((pos) => resolve(pos));
+    });
+
+    const geoNative = await readGeo(winGeo);
+    assert.strictEqual(geoNative.coords.latitude, 1, 'By default geolocation must pass through natively');
+    assert.strictEqual(geoNative.coords.longitude, 2, 'By default geolocation must pass through natively');
+
+    driveConfig(winGeo, { geo: { enabled: true, latitude: 35.6762, longitude: 139.6503 } });
+    const geoMocked = await readGeo(winGeo);
+    assert.strictEqual(geoMocked.coords.latitude, 35.6762, 'When enabled, geolocation must report the configured latitude');
+    assert.strictEqual(geoMocked.coords.longitude, 139.6503, 'When enabled, geolocation must report the configured longitude');
+    assert.strictEqual(typeof geoMocked.timestamp, 'number', 'Spoofed position must carry a timestamp');
+
+    const watchResult = await new Promise((resolve) => {
+      const id = winGeo.navigator.geolocation.watchPosition((pos) => resolve({ id, lat: pos.coords.latitude }));
+    });
+    assert.strictEqual(watchResult.id, 1, 'watchPosition must return a watcher id when spoofing');
+    assert.strictEqual(watchResult.lat, 35.6762, 'watchPosition must report the configured latitude');
+
+    driveConfig(winGeo, { geo: { enabled: false } });
+    const geoRestored = await readGeo(winGeo);
+    assert.strictEqual(geoRestored.coords.latitude, 1, 'Disabled geolocation must pass through natively again');
+    console.log('✓ Geolocation spoof: opt-in coordinates apply to getCurrentPosition/watchPosition and reset cleanly.\n');
 
     // 10. Regression: v1.0.1 security & correctness fixes
     console.log('[Test 10] Validating Regression: v1.0.1 security & correctness fixes...');

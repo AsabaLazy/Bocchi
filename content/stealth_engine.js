@@ -77,6 +77,9 @@
   if (typeof fontConfig.blockSymbols !== 'boolean') fontConfig.blockSymbols = false;
   if (typeof fontConfig.fontMode !== 'string') fontConfig.fontMode = 'blacklist';
 
+  // Geolocation spoof configuration (opt-in; disabled by default)
+  const geoConfig = { enabled: false, latitude: null, longitude: null };
+
   /**
    * Resolve hostname for target realm with iframe fallback.
    */
@@ -2580,6 +2583,99 @@
         }
       }
 
+      // Geolocation spoof (opt-in): report the configured coordinates instead of
+      // the real geolocation provider. Disabled unless geolocationProtection is
+      // on AND a finite coordinate pair has been configured.
+      try {
+        if (targetWin.Geolocation && targetWin.Geolocation.prototype &&
+            typeof targetWin.Geolocation.prototype.getCurrentPosition === 'function') {
+          const geoProto = targetWin.Geolocation.prototype;
+          const origGeoGet = geoProto.getCurrentPosition;
+          const origGeoWatch = geoProto.watchPosition;
+          const origGeoClear = geoProto.clearWatch;
+
+          const spoofActive = () => geoConfig.enabled &&
+            typeof geoConfig.latitude === 'number' && isFinite(geoConfig.latitude) &&
+            typeof geoConfig.longitude === 'number' && isFinite(geoConfig.longitude);
+
+          // Async delivery matches the native API in browsers; environments
+          // without timers (vm-based tests) fall back to a synchronous call.
+          const schedule = (fn) => {
+            try {
+              if (typeof targetWin.setTimeout === 'function') return targetWin.setTimeout(fn, 0);
+              if (typeof setTimeout === 'function') return setTimeout(fn, 0);
+            } catch (_) {}
+            return fn();
+          };
+
+          const buildPosition = () => {
+            const coords = {
+              latitude: geoConfig.latitude,
+              longitude: geoConfig.longitude,
+              accuracy: 25,
+              altitude: null,
+              altitudeAccuracy: null,
+              heading: null,
+              speed: null
+            };
+            return {
+              coords,
+              timestamp: Date.now()
+            };
+          };
+
+          const hookedGeoGet = createNativeFunction(function getCurrentPosition(success, error, options) {
+            if (!(this instanceof targetWin.Geolocation) || !spoofActive()) {
+              // Preserve native brand check / real behavior when inactive.
+              return origGeoGet.apply(this, arguments);
+            }
+            if (typeof success === 'function') {
+              const pos = buildPosition();
+              schedule(() => { try { success(pos); } catch (_) {} });
+            }
+            return undefined;
+          }, 'getCurrentPosition', 1, geoProto);
+          Object.defineProperty(geoProto, 'getCurrentPosition', {
+            value: hookedGeoGet, writable: true, enumerable: true, configurable: true
+          });
+
+          if (typeof origGeoWatch === 'function') {
+            let nextWatchId = 1;
+            const activeWatches = new Set();
+            const hookedGeoWatch = createNativeFunction(function watchPosition(success, error, options) {
+              if (!(this instanceof targetWin.Geolocation) || !spoofActive()) {
+                return origGeoWatch.apply(this, arguments);
+              }
+              const id = nextWatchId++;
+              activeWatches.add(id);
+              if (typeof success === 'function') {
+                const pos = buildPosition();
+                schedule(() => {
+                  if (activeWatches.has(id)) {
+                    try { success(pos); } catch (_) {}
+                  }
+                });
+              }
+              return id;
+            }, 'watchPosition', 1, geoProto);
+            Object.defineProperty(geoProto, 'watchPosition', {
+              value: hookedGeoWatch, writable: true, enumerable: true, configurable: true
+            });
+
+            if (typeof origGeoClear === 'function') {
+              const hookedGeoClear = createNativeFunction(function clearWatch(id) {
+                activeWatches.delete(id);
+                if (spoofActive()) return undefined;
+                return origGeoClear.apply(this, arguments);
+              }, 'clearWatch', 1, geoProto);
+              Object.defineProperty(geoProto, 'clearWatch', {
+                value: hookedGeoClear, writable: true, enumerable: true, configurable: true
+              });
+            }
+          }
+        }
+      } catch (_) {}
+
       // Screen geometry + devicePixelRatio spoof (common Linux desktop profile).
       // Consistency guard: skip the spoof when it would be obviously contradictory:
       // (a) the real window is larger than the profile (impossible outerWidth >
@@ -3128,6 +3224,18 @@
             }
             if (typeof f.fontProtection === 'boolean') {
               shieldConfig.fontProtection = f.fontProtection;
+            }
+          }
+          if (d.geo && typeof d.geo === 'object') {
+            const g = d.geo;
+            if (typeof g.enabled === 'boolean') {
+              geoConfig.enabled = g.enabled;
+            }
+            if (typeof g.latitude === 'number' && isFinite(g.latitude)) {
+              geoConfig.latitude = g.latitude;
+            }
+            if (typeof g.longitude === 'number' && isFinite(g.longitude)) {
+              geoConfig.longitude = g.longitude;
             }
           }
           if (d.cfg && typeof d.cfg === 'object') {

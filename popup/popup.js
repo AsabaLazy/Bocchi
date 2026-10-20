@@ -16,6 +16,7 @@ const $audioProtection = document.getElementById('audioProtection');
 const $timezoneProtection = document.getElementById('timezoneProtection');
 const $hardwareProtection = document.getElementById('hardwareProtection');
 const $fontProtection = document.getElementById('fontProtection');
+const $geolocationProtection = document.getElementById('geolocationProtection');
 
 const $btnOpenPanel = document.getElementById('btnOpenPanel');
 
@@ -30,6 +31,7 @@ let audioProtection = true;
 let timezoneProtection = true;
 let hardwareProtection = true;
 let fontProtection = true;
+let geolocationProtection = false;
 
 const MODULE_SWITCHES = [
   { el: $canvasProtection, key: 'canvasProtection' },
@@ -37,7 +39,8 @@ const MODULE_SWITCHES = [
   { el: $audioProtection, key: 'audioProtection' },
   { el: $timezoneProtection, key: 'timezoneProtection' },
   { el: $hardwareProtection, key: 'hardwareProtection' },
-  { el: $fontProtection, key: 'fontProtection' }
+  { el: $fontProtection, key: 'fontProtection' },
+  { el: $geolocationProtection, key: 'geolocationProtection' }
 ];
 
 function normalizeDomain(d) {
@@ -68,6 +71,7 @@ function updateUI() {
       case 'timezoneProtection': el.checked = timezoneProtection; break;
       case 'hardwareProtection': el.checked = hardwareProtection; break;
       case 'fontProtection': el.checked = fontProtection; break;
+      case 'geolocationProtection': el.checked = geolocationProtection; break;
     }
   });
 
@@ -166,6 +170,7 @@ MODULE_SWITCHES.forEach(({ el, key }) => {
       case 'timezoneProtection': timezoneProtection = val; break;
       case 'hardwareProtection': hardwareProtection = val; break;
       case 'fontProtection': fontProtection = val; break;
+      case 'geolocationProtection': geolocationProtection = val; break;
     }
     chrome.storage.local.set({ [key]: val });
     updateUI();
@@ -221,6 +226,10 @@ if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged)
       fontProtection = changes.fontProtection.newValue !== false;
       needsUpdate = true;
     }
+    if (changes.geolocationProtection) {
+      geolocationProtection = changes.geolocationProtection.newValue === true;
+      needsUpdate = true;
+    }
     if (changes.theme) {
       applyTheme(changes.theme.newValue);
     }
@@ -265,6 +274,7 @@ function init() {
       'timezoneProtection',
       'hardwareProtection',
       'fontProtection',
+      'geolocationProtection',
       'theme'
     ];
 
@@ -278,6 +288,7 @@ function init() {
         timezoneProtection = res.timezoneProtection !== false;
         hardwareProtection = res.hardwareProtection !== false;
         fontProtection = res.fontProtection !== false;
+        geolocationProtection = res.geolocationProtection === true;
         applyTheme(res.theme);
       }
       updateUI();

@@ -48,6 +48,9 @@
         <button type="button" class="nav-item" data-view="timezone">
           <span class="nav-dot" data-key="timezoneProtection" aria-hidden="true"></span>时区
         </button>
+        <button type="button" class="nav-item" data-view="geolocation">
+          <span class="nav-dot" data-key="geolocationProtection" aria-hidden="true"></span>位置
+        </button>
         <button type="button" class="nav-item" data-view="hardware">
           <span class="nav-dot" data-key="hardwareProtection" aria-hidden="true"></span>硬件指纹
         </button>
@@ -207,6 +210,40 @@
           <p class="view-note" id="tzInfo">当前生效时区：读取中…</p>
         </section>
 
+        <!-- ═════════ 位置(经纬度) ═════════ -->
+        <section class="view" id="view-geolocation" data-view="geolocation" hidden>
+          <div class="view-head">
+            <div>
+              <h2>位置</h2>
+              <p>向网站报告指定的经纬度，而不是真实定位。建议与时区模块保持一致。</p>
+            </div>
+            <label class="switch" title="地理位置伪装开关">
+              <input type="checkbox" id="geolocationProtection" aria-label="地理位置伪装">
+              <i></i>
+            </label>
+          </div>
+          <div class="geo-controls">
+            <label class="geo-field">纬度
+              <input type="number" id="geoLat" step="0.0001" min="-90" max="90" placeholder="34.0522" inputmode="decimal">
+            </label>
+            <label class="geo-field">经度
+              <input type="number" id="geoLng" step="0.0001" min="-180" max="180" placeholder="-118.2437" inputmode="decimal">
+            </label>
+          </div>
+          <div class="geo-map-wrap">
+            <svg id="worldMap" viewBox="0 0 720 360" role="img" aria-label="点击地图选择位置">
+              <rect width="720" height="360" class="geo-ocean"></rect>
+              <path id="worldPath" class="geo-land" d=""></path>
+              <g id="geoMarker" class="geo-marker" hidden>
+                <circle r="9" class="geo-marker-ring"></circle>
+                <circle r="4" class="geo-marker-dot"></circle>
+              </g>
+            </svg>
+            <div class="geo-readout" id="geoReadout">点击地图选择位置</div>
+          </div>
+          <p class="view-note">经纬度会原样返回给网站的 <code>navigator.geolocation</code>。地图为离线内置（Natural Earth 110m，公有领域）。</p>
+        </section>
+
         <!-- ═════════ 硬件指纹 ═════════ -->
         <section class="view" id="view-hardware" data-view="hardware" hidden>
           <div class="view-head">
@@ -226,6 +263,7 @@
     </div>
   </div>
 
+  <script src="world-map.js"></script>
   <script src="panel.js"></script>
 </body>
 </html>

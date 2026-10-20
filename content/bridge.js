@@ -40,6 +40,7 @@
 
   const ALL_KEYS = [
     'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone',
+    'geolocationProtection', 'geolocationLatitude', 'geolocationLongitude',
     'customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'fontMode', 'blockOtherScripts', 'blockSymbols',
     'globalShieldEnabled', 'siteBypassList',
     'canvasProtection', 'webrtcProtection', 'audioProtection', 'timezoneProtection', 'hardwareProtection', 'fontProtection'
@@ -126,6 +127,14 @@
     };
   }
 
+  function buildGeoDetail(res) {
+    return {
+      enabled: res ? res.geolocationProtection === true : false,
+      latitude: res && typeof res.geolocationLatitude === 'number' ? res.geolocationLatitude : undefined,
+      longitude: res && typeof res.geolocationLongitude === 'number' ? res.geolocationLongitude : undefined
+    };
+  }
+
   function buildCfgDetail(res) {
     const bypassList = Array.isArray(res && res.siteBypassList) ? res.siteBypassList : [];
     return {
@@ -190,7 +199,8 @@
         const payload = {
           tz: tz || undefined,
           fonts: buildFontsDetail(res),
-          cfg: buildCfgDetail(res)
+          cfg: buildCfgDetail(res),
+          geo: buildGeoDetail(res)
         };
         sendPayload(payload);
       });
@@ -215,6 +225,11 @@
           if (newTz) {
             sendPayload({ tz: newTz });
           }
+        });
+      }
+      if (changes.geolocationProtection || changes.geolocationLatitude || changes.geolocationLongitude) {
+        chrome.storage.local.get(['geolocationProtection', 'geolocationLatitude', 'geolocationLongitude'], (res) => {
+          sendPayload({ geo: buildGeoDetail(res) });
         });
       }
       if (changes.customHiddenFonts || changes.customAllowedFonts || changes.blockBuiltinChineseFonts || changes.fontMode || changes.blockOtherScripts || changes.blockSymbols || changes.fontProtection) {
