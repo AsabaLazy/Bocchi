@@ -2001,12 +2001,12 @@ assert.notStrictEqual(chBL[100], Math.fround(Math.sin(100 / 100)), 'Stepped audi
 assert.strictEqual(chBL[100], chBL2[100], 'Farbled audio must be stable within the same domain visit');
 assert.strictEqual(chBL[101], Math.fround(Math.sin(101 / 100)), 'Non-stepped audio samples must remain byte-identical to native data');
 
-// Plugin description is perturbed on every domain: spaces appended =
-// djb2(host) % 3 + 1 (deterministic per-site, stable across sessions).
-const blSpaces = (djb2Hash('browserleaks.com') % 3) + 1;
+// Plugin description passes through untouched: Chrome's built-in plugin
+// descriptions are crowd-common constants, so per-site perturbation adds no
+// entropy reduction while a replaced getter adds detection surface.
 const pluginBL = new winBL.Plugin();
-assert.strictEqual(pluginBL.description, 'Portable Document Format' + ' '.repeat(blSpaces), 'Plugin description on browserleaks.com must append djb2(host)%3+1 spaces');
-console.log('✓ Scheme B: Canvas/WebGL/Audio/Plugins are farbled on browserleaks.com too.');
+assert.strictEqual(pluginBL.description, 'Portable Document Format', 'Plugin description must pass through unmodified');
+console.log('✓ Scheme B: Canvas/WebGL/Audio are farbled on browserleaks.com too.');
 
 // Metric 2: WebGL readPixels
 const glCYT = new winCYT.WebGLRenderingContext();
@@ -2049,11 +2049,12 @@ assert.strictEqual(concCYT, 16, 'Hardware concurrency must pass through natively
 assert.strictEqual(concFPS, 16, 'Hardware concurrency must pass through natively on all sites');
 console.log(`✓ Hardware Concurrency: CYT=${concCYT}, FPS=${concFPS} (native passthrough).`);
 
-// Metric 5: Plugins Description
+// Metric 5: Plugins Description — native passthrough (crowd-common constant;
+// per-site perturbation would only add a replaced getter).
 const pluginCYT = new winCYT.Plugin();
 const pluginFPS = new winFPS.Plugin();
-assert.notStrictEqual(pluginCYT.description, pluginFPS.description, 'Plugin description must diverge across domains');
-console.log(`✓ Plugins: CYT="${pluginCYT.description}" vs FPS="${pluginFPS.description}" (Diverged).\n`);
+assert.strictEqual(pluginCYT.description, pluginFPS.description, 'Plugin description must pass through identically across domains');
+console.log(`✓ Plugins: description stays native ("${pluginCYT.description}").\n`);
 
 // 6. Test Edge Cases & Advanced Evasions
 console.log('[Test 6] Validating Edge Cases & Advanced Evasions...');
@@ -2119,14 +2120,13 @@ assert.strictEqual(frameRendererA, frameRendererB, 'Same-site frames (a.example.
 assert.strictEqual(frameRendererA, expectedGpuProfile('a.example.com').renderer, 'Same-site frame renderer must be the pool entry selected by djb2(eTLD+1) % 5');
 console.log('✓ Same-site frames agree on the GPU persona (salt-independent eTLD+1 derivation).');
 
-// Plugin description perturbation is host-derived with NO salt: two frames
-// of one site (a.example.com / b.example.com), each with its own per-load
-// salt, must still append the same number of spaces — a salt-derived key
-// would split them, and frames of one site disagreeing is itself a signal.
+// Plugin description passes through natively in every frame: no salt, no
+// host derivation, no replaced getter. (The old host-derived space padding
+// was removed: Chrome's built-in descriptions are crowd-common constants.)
 const winPlugA = createMockWindow('a.example.com', 'Linux x86_64');
 vm.runInContext(stealthCode, vm.createContext(winPlugA));
 const winPlugB = createMockWindow('b.example.com', 'Linux x86_64');
-// Different per-load salt in the second frame: same-site agreement must survive it.
+// Different per-load salt in the second frame: passthrough must be unaffected.
 winPlugB.crypto = {
   getRandomValues(arr) {
     for (let i = 0; i < arr.length; i++) arr[i] = (TEST_SESSION_SALT + 98765 + i * 2654435761) >>> 0;
@@ -2136,9 +2136,9 @@ winPlugB.crypto = {
 vm.runInContext(stealthCode, vm.createContext(winPlugB));
 const plugDescA = new winPlugA.Plugin().description;
 const plugDescB = new winPlugB.Plugin().description;
-assert.strictEqual(plugDescA, plugDescB, 'Same-site frames (a/b.example.com) must get an identical Plugin description despite independent per-load salts');
-assert.strictEqual(plugDescA, 'Portable Document Format' + ' '.repeat((djb2Hash('a.example.com') % 3) + 1), 'Plugin description must match the salt-free djb2(host) derivation');
-console.log('✓ Same-site frames agree on the host-derived Plugin description (salt-free derivation).');
+assert.strictEqual(plugDescA, plugDescB, 'Same-site frames must report the same native Plugin description');
+assert.strictEqual(plugDescA, 'Portable Document Format', 'Plugin description must stay byte-identical to native');
+console.log('✓ Plugin description stays native in same-site frames.');
 
 // Transparent Canvas toDataURL and toBlob non-clamping farbling
 const canvasZero = new winCYT.HTMLCanvasElement();

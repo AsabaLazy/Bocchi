@@ -200,11 +200,52 @@ async function connectCDP(port, timeoutMs = 30000) {
 }
 
 /**
+ * Start an off-screen Xvfb display for headed runs. The user's desktop is
+ * never touched, while Chromium still sees a normal (non-headless) display,
+ * which keeps UA/JS surfaces realistic for risk-control testing.
+ * Throws with install instructions when Xvfb is missing and the caller did
+ * not opt into on-screen windows (BOCCHI_TEST_ONSCREEN=1).
+ */
+async function startXvfb() {
+  const candidates = ['Xvfb'];
+  let bin = null;
+  for (const c of candidates) {
+    const which = spawnSync('sh', ['-c', `command -v ${c}`], { encoding: 'utf8' });
+    if (which.status === 0 && which.stdout.trim()) { bin = which.stdout.trim(); break; }
+  }
+  if (!bin) {
+    const err = new Error(
+      'Headed runs use an off-screen Xvfb display so they never disturb the desktop, ' +
+      'but Xvfb is not installed. Install it (Arch: sudo pacman -S xorg-server-xvfb) ' +
+      'or set BOCCHI_TEST_ONSCREEN=1 to allow a real window.'
+    );
+    err.fatal = true; // configuration problem: retrying cannot help
+    throw err;
+  }
+  // Pick a free display number.
+  let displayNum = 90 + Math.floor(Math.random() * 9);
+  for (let i = 0; i < 20; i++) {
+    if (!fs.existsSync(`/tmp/.X11-unix/X${displayNum}`) && !fs.existsSync(`/tmp/.X${displayNum}-lock`)) break;
+    displayNum = 90 + Math.floor(Math.random() * 9);
+  }
+  const display = `:${displayNum}`;
+  const proc = spawn(bin, [display, '-screen', '0', '1280x900x24', '-nolisten', 'tcp'], { stdio: 'ignore' });
+  for (let i = 0; i < 40; i++) {
+    if (fs.existsSync(`/tmp/.X11-unix/X${displayNum}`)) return { display, proc };
+    await sleep(100);
+  }
+  try { proc.kill('SIGKILL'); } catch (_) {}
+  throw new Error(`Xvfb failed to start on ${display}`);
+}
+
+/**
  * Launch Chromium with a fresh profile and the repo-root extension loaded.
- * Returns { chromeProcess, cdp, tempDir, port, bin, headed }. Headless by
- * default; opts.headed === true runs a real window (real GPU rendering, no
- * headless tells). If the CDP connection fails, the process is killed and
- * the error rethrown (runWithRetry treats that as transient).
+ * Returns { chromeProcess, cdp, tempDir, port, bin, headed, xvfbProcess }.
+ * Headless by default; opts.headed === true runs with a normal browser
+ * window on an off-screen Xvfb display (no desktop disturbance; set
+ * BOCCHI_TEST_ONSCREEN=1 for a visible window on the real desktop).
+ * If the CDP connection fails, the process is killed and the error rethrown
+ * (runWithRetry treats that as transient).
  */
 async function launch(opts = {}) {
   const bin = resolveChromeBin();
@@ -222,7 +263,17 @@ async function launch(opts = {}) {
   ];
   if (!headed) args.unshift('--headless=new', '--disable-gpu');
 
-  const chromeProcess = spawn(bin, args, { stdio: 'ignore' });
+  let env = process.env;
+  let xvfbProcess = null;
+  if (headed && !process.env.BOCCHI_TEST_ONSCREEN) {
+    const xvfb = await startXvfb();
+    xvfbProcess = xvfb.proc;
+    env = { ...process.env, DISPLAY: xvfb.display };
+    delete env.WAYLAND_DISPLAY; // force the X11 backend inside Xvfb
+    args.push('--ozone-platform=x11');
+  }
+
+  const chromeProcess = spawn(bin, args, { stdio: 'ignore', env });
   // A missing binary surfaces as an async 'error' event, not a synchronous
   // throw; race it against the CDP wait so launch() rejects promptly instead
   // of crashing on an unhandled 'error' event or polling a dead port.
@@ -237,9 +288,10 @@ async function launch(opts = {}) {
     cdp = await Promise.race([connectCDP(port), spawnFailed]);
   } catch (err) {
     killAndRemove(chromeProcess, tempDir);
+    if (xvfbProcess) { try { xvfbProcess.kill('SIGKILL'); } catch (_) {} }
     throw err;
   }
-  return { chromeProcess, cdp, tempDir, port, bin, headed };
+  return { chromeProcess, cdp, tempDir, port, bin, headed, xvfbProcess };
 }
 
 /**
@@ -316,6 +368,7 @@ function cleanup(ctx) {
   if (!ctx) return;
   try { if (ctx.cdp) ctx.cdp.close(); } catch (_) {}
   killAndRemove(ctx.chromeProcess, ctx.tempDir);
+  if (ctx.xvfbProcess) { try { ctx.xvfbProcess.kill('SIGKILL'); } catch (_) {} }
 }
 
 /**
@@ -350,7 +403,7 @@ async function runWithRetry(name, opts, body) {
       ctx = await launch(opts);
       return await body(ctx);
     } catch (err) {
-      const transient = ctx === null || err instanceof EngineMissingError;
+      const transient = !err.fatal && (ctx === null || err instanceof EngineMissingError);
       if (attempt === 1 && transient) {
         console.log(`${name}: attempt 1 failed (${err.message}), retrying with a fresh profile...`);
         continue;

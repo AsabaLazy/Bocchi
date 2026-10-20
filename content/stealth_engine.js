@@ -2580,37 +2580,6 @@
         }
       }
 
-      // Plugins description divergence
-      if (targetWin.Plugin && targetWin.Plugin.prototype) {
-        const origDescDesc = Object.getOwnPropertyDescriptor(targetWin.Plugin.prototype, 'description');
-        if (origDescDesc && origDescDesc.get) {
-          const origGetDesc = origDescDesc.get;
-          // Host-derived perturbation (no session salt): stable per site like
-          // the native value, different across sites (breaks cross-site
-          // linking of this vector), and carries no trackable entropy since
-          // it is derived from the site's own hostname.
-          const spacesCount = (djb2(host) % 3) + 1;
-          const spaces = ' '.repeat(spacesCount);
-          const hookedGetDesc = createNativeGetter(function description() {
-            const val = origGetDesc.call(this);
-            if (!isShieldActive()) {
-              return val;
-            }
-            if (typeof val === 'string' && val.length > 0) {
-              return val + spaces;
-            }
-            return val;
-          }, 'description', targetWin.Plugin.prototype);
-          Object.defineProperty(targetWin.Plugin.prototype, 'description', {
-            get: hookedGetDesc,
-            set: origDescDesc.set,
-            enumerable: true,
-            configurable: true
-          });
-        }
-      }
-
-
       // Screen geometry + devicePixelRatio spoof (common Linux desktop profile).
       // Consistency guard: skip the spoof when it would be obviously contradictory:
       // (a) the real window is larger than the profile (impossible outerWidth >
@@ -2722,24 +2691,32 @@
       }
 
       // Gamepad API downgrade (not a spoof): getGamepads is a rarely used
-      // high-entropy hardware vector; while the shield is active report no
-      // controllers, returning a fresh array per call exactly like the native
-      // method does.
+      // high-entropy hardware vector. Patch ONLY when a controller is
+      // actually connected — without gamepads the native method already
+      // returns an empty list, so replacing it would add detection surface
+      // for zero privacy gain (same reasoning as navigator.webdriver).
       if (targetWin.Navigator && targetWin.Navigator.prototype &&
           typeof targetWin.Navigator.prototype.getGamepads === 'function') {
         const gpNavProto = targetWin.Navigator.prototype;
         const origGetGamepads = gpNavProto.getGamepads;
-        Object.defineProperty(gpNavProto, 'getGamepads', {
-          value: createNativeFunction(function getGamepads() {
-            if (!isShieldActive('hardwareProtection')) {
-              return origGetGamepads.apply(this, arguments);
-            }
-            return [];
-          }, 'getGamepads', 0, gpNavProto),
-          writable: true,
-          enumerable: true,
-          configurable: true
-        });
+        let hasGamepad = false;
+        try {
+          const nativeList = origGetGamepads.call(targetWin.navigator);
+          hasGamepad = Array.prototype.some.call(nativeList, Boolean);
+        } catch (_) {}
+        if (hasGamepad) {
+          Object.defineProperty(gpNavProto, 'getGamepads', {
+            value: createNativeFunction(function getGamepads() {
+              if (!isShieldActive('hardwareProtection')) {
+                return origGetGamepads.apply(this, arguments);
+              }
+              return [];
+            }, 'getGamepads', 0, gpNavProto),
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+        }
       }
 
       if (!ch.app) {
