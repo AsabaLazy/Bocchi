@@ -57,6 +57,7 @@ body {
   gap: 2px;
 }
 .nav-item {
+  position: relative;
   display: flex; align-items: center; gap: 9px;
   width: 100%; text-align: left;
   font: inherit; font-size: 13px; color: var(--muted);
@@ -68,7 +69,14 @@ body {
 .nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .nav-item[aria-current="page"] {
   color: var(--text); background: var(--surface);
-  box-shadow: inset 2px 0 0 var(--accent);
+}
+/* 选中强调条:独立直线,不随项圆角弯曲 */
+.nav-item[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 7px; bottom: 7px;
+  width: 2px;
+  background: var(--accent);
 }
 .nav-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }
 .nav-dot.on { background: var(--accent); }
@@ -89,7 +97,11 @@ body {
   .settings-body { grid-template-columns: 1fr; gap: 12px; }
   .settings-nav { position: static; flex-direction: row; overflow-x: auto; padding-bottom: 6px; }
   .nav-item { width: auto; white-space: nowrap; }
-  .nav-item[aria-current="page"] { box-shadow: inset 0 -2px 0 var(--accent); }
+  .nav-item[aria-current="page"] { box-shadow: none; }
+  .nav-item[aria-current="page"]::before {
+    top: auto; left: 12px; right: 12px; bottom: 0;
+    width: auto; height: 2px;
+  }
 }
 
 /* ───────────────── 页头 ───────────────── */
