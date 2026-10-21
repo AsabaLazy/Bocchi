@@ -144,22 +144,37 @@
           <div class="view-head">
             <div>
               <h2>Canvas &amp; WebGL</h2>
-              <p>2D/3D 画布及 WebGPU 微扰动注入与动态降噪，让每个页面加载的指纹互不相同。</p>
+              <p>2D 与 WebGL 画布按入口独立脱敏，减少单个入口的站点兼容问题。</p>
             </div>
             <label class="switch" title="Canvas & WebGL 脱敏开关">
               <input type="checkbox" id="canvasProtection" checked aria-label="Canvas & WebGL 脱敏">
               <i></i>
             </label>
           </div>
-          <div class="view-options">
-            <span class="ctl-label">强度</span>
-            <div class="mode-seg" id="canvasStrengthControl" role="group" aria-label="Canvas 扰动强度">
-              <button type="button" class="mode-btn" data-strength="light" aria-pressed="false">轻</button>
-              <button type="button" class="mode-btn active" data-strength="standard" aria-pressed="true">标准</button>
-              <button type="button" class="mode-btn" data-strength="strong" aria-pressed="false">强</button>
-            </div>
+          <div class="view-options view-options-stack">
+            <label class="opt-row">
+              <span class="opt-copy">
+                <span class="opt-title">2D Canvas 导出</span>
+                <span class="opt-desc">toDataURL / toBlob 的 2D 像素扰动。</span>
+              </span>
+              <span class="switch"><input type="checkbox" id="canvas2dExport" checked aria-label="2D Canvas 导出脱敏"><i></i></span>
+            </label>
+            <label class="opt-row">
+              <span class="opt-copy">
+                <span class="opt-title">2D 像素读取</span>
+                <span class="opt-desc">getImageData 返回的像素扰动。</span>
+              </span>
+              <span class="switch"><input type="checkbox" id="canvas2dPixels" checked aria-label="2D 像素读取脱敏"><i></i></span>
+            </label>
+            <label class="opt-row">
+              <span class="opt-copy">
+                <span class="opt-title">WebGL 导出</span>
+                <span class="opt-desc">WebGL 画布 toDataURL / toBlob 的像素扰动。</span>
+              </span>
+              <span class="switch"><input type="checkbox" id="canvasWebglExport" checked aria-label="WebGL 导出脱敏"><i></i></span>
+            </label>
           </div>
-          <p class="view-note" id="canvasStrengthNote">标准：2D 与 WebGL 导出使用当前扰动量。轻/强降低或增大像素扰动。</p>
+          <p class="view-note" id="canvasOptionsNote">2D 导出、2D 像素读取和 WebGL 导出独立控制；关闭 WebGL 导出可减少 3D/地图站点兼容问题，2D 保护仍保留。</p>
         </section>
 
         <!-- ═════════ 音频 ═════════ -->
@@ -167,22 +182,30 @@
           <div class="view-head">
             <div>
               <h2>音频</h2>
-              <p>频域分析防探针与动态振幅微扰脱敏，干扰 AudioContext 指纹采集。</p>
+              <p>AudioBuffer 指纹按读取入口独立加噪，干扰音频指纹采集。</p>
             </div>
             <label class="switch" title="音频脱敏开关">
               <input type="checkbox" id="audioProtection" checked aria-label="音频脱敏">
               <i></i>
             </label>
           </div>
-          <div class="view-options">
-            <span class="ctl-label">强度</span>
-            <div class="mode-seg" id="audioStrengthControl" role="group" aria-label="音频扰动强度">
-              <button type="button" class="mode-btn" data-strength="light" aria-pressed="false">轻</button>
-              <button type="button" class="mode-btn active" data-strength="standard" aria-pressed="true">标准</button>
-              <button type="button" class="mode-btn" data-strength="strong" aria-pressed="false">强</button>
-            </div>
+          <div class="view-options view-options-stack">
+            <label class="opt-row">
+              <span class="opt-copy">
+                <span class="opt-title">指纹读取</span>
+                <span class="opt-desc">AudioBuffer.getChannelData 返回的样本加入逐页噪声。</span>
+              </span>
+              <span class="switch"><input type="checkbox" id="audioGetChannelData" checked aria-label="音频指纹读取脱敏"><i></i></span>
+            </label>
+            <label class="opt-row">
+              <span class="opt-copy">
+                <span class="opt-title">播放数据</span>
+                <span class="opt-desc">copyFromChannel 路径也做同样处理；关闭可减少部分音频兼容问题。</span>
+              </span>
+              <span class="switch"><input type="checkbox" id="audioCopyFromChannel" checked aria-label="音频播放数据脱敏"><i></i></span>
+            </label>
           </div>
-          <p class="view-note" id="audioStrengthNote">标准：AudioBuffer 指纹使用当前噪声幅度。轻/强降低或增大噪声。</p>
+          <p class="view-note" id="audioOptionsNote">两个 AudioBuffer 入口独立控制；关闭“播放数据”可减少使用 copyFromChannel 的音频兼容问题。</p>
         </section>
 
         <!-- ═════════ WebRTC ═════════ -->
@@ -383,22 +406,44 @@
           <div class="view-head">
             <div>
               <h2>硬件指纹</h2>
-              <p>规范化 CPU、内存、并发规格与 GPU 画像，降低设备唯一性。</p>
+              <p>GPU、屏幕、计时器与手柄分别规范化，降低设备唯一性。</p>
             </div>
             <label class="switch" title="硬件指纹混淆开关">
               <input type="checkbox" id="hardwareProtection" checked aria-label="硬件指纹混淆">
               <i></i>
             </label>
           </div>
-          <div class="view-options">
-            <span class="ctl-label">强度</span>
-            <div class="mode-seg" id="hardwareStrengthControl" role="group" aria-label="硬件混淆强度">
-              <button type="button" class="mode-btn" data-strength="light" aria-pressed="false">轻</button>
-              <button type="button" class="mode-btn active" data-strength="standard" aria-pressed="true">标准</button>
-              <button type="button" class="mode-btn" data-strength="strong" aria-pressed="false">强</button>
-            </div>
+          <div class="view-options view-options-stack">
+            <label class="opt-row">
+              <span class="opt-copy">
+                <span class="opt-title">GPU / WebGL 画像</span>
+                <span class="opt-desc">WebGL/WebGPU 厂商、渲染器与 readPixels 噪声。</span>
+              </span>
+              <span class="switch"><input type="checkbox" id="hardwareGpu" checked aria-label="GPU 与 WebGL 画像伪装"><i></i></span>
+            </label>
+            <label class="opt-row">
+              <span class="opt-copy">
+                <span class="opt-title">屏幕与 DPR</span>
+                <span class="opt-desc">screen 尺寸/色深与 devicePixelRatio 规范化。</span>
+              </span>
+              <span class="switch"><input type="checkbox" id="hardwareScreen" checked aria-label="屏幕与 DPR 伪装"><i></i></span>
+            </label>
+            <label class="opt-row">
+              <span class="opt-copy">
+                <span class="opt-title">计时器精度</span>
+                <span class="opt-desc">performance.now 精度限制到 1ms。</span>
+              </span>
+              <span class="switch"><input type="checkbox" id="hardwareTimer" checked aria-label="计时器精度限制"><i></i></span>
+            </label>
+            <label class="opt-row">
+              <span class="opt-copy">
+                <span class="opt-title">游戏手柄</span>
+                <span class="opt-desc">getGamepads 返回空列表，降低手柄指纹。</span>
+              </span>
+              <span class="switch"><input type="checkbox" id="hardwareGamepad" checked aria-label="游戏手柄降级"><i></i></span>
+            </label>
           </div>
-          <p class="view-note" id="hardwareStrengthNote">标准：当前 GPU/屏幕画像，计时器精度 1ms。轻/强调整 WebGL 读像素噪声与计时器精度。</p>
+          <p class="view-note" id="hardwareOptionsNote">GPU、屏幕、计时器、手柄独立；关闭 GPU 可减少 3D/视频兼容问题，其他层仍生效。</p>
         </section>
 
       </main>

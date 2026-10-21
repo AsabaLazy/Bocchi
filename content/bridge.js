@@ -44,14 +44,20 @@
     'customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'fontMode', 'blockOtherScripts', 'blockSymbols',
     'globalShieldEnabled', 'siteBypassList',
     'canvasProtection', 'webrtcProtection', 'audioProtection', 'timezoneProtection', 'hardwareProtection', 'fontProtection',
-    'canvasStrength', 'audioStrength', 'hardwareStrength', 'webrtcDevices', 'webrtcLocalIp'
+    'canvas2dExport', 'canvas2dPixels', 'canvasWebglExport',
+    'audioGetChannelData', 'audioCopyFromChannel',
+    'hardwareGpu', 'hardwareScreen', 'hardwareTimer', 'hardwareGamepad',
+    'webrtcDevices', 'webrtcLocalIp'
   ];
 
   const SHIELD_KEYS = [
     'globalShieldEnabled', 'siteBypassList',
     'canvasProtection', 'webrtcProtection', 'audioProtection',
     'timezoneProtection', 'hardwareProtection', 'fontProtection',
-    'canvasStrength', 'audioStrength', 'hardwareStrength', 'webrtcDevices', 'webrtcLocalIp',
+    'canvas2dExport', 'canvas2dPixels', 'canvasWebglExport',
+    'audioGetChannelData', 'audioCopyFromChannel',
+    'hardwareGpu', 'hardwareScreen', 'hardwareTimer', 'hardwareGamepad',
+    'webrtcDevices', 'webrtcLocalIp',
     'blockOtherScripts', 'blockSymbols'
   ];
 
@@ -149,9 +155,15 @@
       timezoneProtection: res ? res.timezoneProtection !== false : true,
       hardwareProtection: res ? res.hardwareProtection !== false : true,
       fontProtection: res ? res.fontProtection !== false : true,
-      canvasStrength: ['light', 'standard', 'strong'].includes(res && res.canvasStrength) ? res.canvasStrength : 'standard',
-      audioStrength: ['light', 'standard', 'strong'].includes(res && res.audioStrength) ? res.audioStrength : 'standard',
-      hardwareStrength: ['light', 'standard', 'strong'].includes(res && res.hardwareStrength) ? res.hardwareStrength : 'standard',
+      canvas2dExport: res ? res.canvas2dExport !== false : true,
+      canvas2dPixels: res ? res.canvas2dPixels !== false : true,
+      canvasWebglExport: res ? res.canvasWebglExport !== false : true,
+      audioGetChannelData: res ? res.audioGetChannelData !== false : true,
+      audioCopyFromChannel: res ? res.audioCopyFromChannel !== false : true,
+      hardwareGpu: res ? res.hardwareGpu !== false : true,
+      hardwareScreen: res ? res.hardwareScreen !== false : true,
+      hardwareTimer: res ? res.hardwareTimer !== false : true,
+      hardwareGamepad: res ? res.hardwareGamepad !== false : true,
       webrtcDevices: res ? res.webrtcDevices !== false : true,
       webrtcLocalIp: res ? res.webrtcLocalIp !== false : true,
       blockOtherScripts: res ? !!res.blockOtherScripts : false,

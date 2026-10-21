@@ -11,8 +11,8 @@ A Manifest V3 Chromium extension engineered for advanced browser fingerprint def
 - **WebRTC Leak Prevention (Three Switches)**:
   - Device-list masking, local-IP scrubbing, and non-proxied UDP blocking are independent. The UDP switch is the one that can affect WebRTC video calls.
   - UDP on enforces `disable_non_proxied_udp`; UDP off with local-IP cleaning on uses `default_public_interface_only` (video works, public IP may be visible); both off restores the browser default.
-  - Local-IP scrubbing removes private SDP/ICE candidates in both policy configurations.
-- **Per-Module Strength**: Canvas & WebGL, Audio, and Hardware each offer light/standard/strong. The strength scales Canvas pixel perturbation, AudioBuffer noise, and hardware WebGL readPixels noise plus timer precision, without changing which protections are active. Fonts and Time & Place keep their existing options.
+  - Local-IP scrubbing (when enabled) removes private SDP/ICE candidates in both policy configurations.
+- **Per-Module Sub-Switches**: Canvas exposes 2D export, 2D pixel reads, and WebGL export separately; Audio exposes getChannelData and copyFromChannel; Hardware exposes GPU/WebGL persona, screen/DPR, timer precision, and gamepad downgrade. Turn off only the surface that breaks a site while the other protections stay active. Fonts and Time & Place keep their existing options.
 - **Network Privacy**:
   - DeclarativeNetRequest rules block intrusive tracking domains (`trackersimulator.org`, `eviltracker.net`, etc.).
   - Enforces `DNT: 1` and `Sec-GPC: 1` privacy signal headers.

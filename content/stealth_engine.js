@@ -66,9 +66,15 @@
   if (typeof shieldConfig.timezoneProtection !== 'boolean') shieldConfig.timezoneProtection = true;
   if (typeof shieldConfig.hardwareProtection !== 'boolean') shieldConfig.hardwareProtection = true;
   if (typeof shieldConfig.fontProtection !== 'boolean') shieldConfig.fontProtection = true;
-  if (!['light', 'standard', 'strong'].includes(shieldConfig.canvasStrength)) shieldConfig.canvasStrength = 'standard';
-  if (!['light', 'standard', 'strong'].includes(shieldConfig.audioStrength)) shieldConfig.audioStrength = 'standard';
-  if (!['light', 'standard', 'strong'].includes(shieldConfig.hardwareStrength)) shieldConfig.hardwareStrength = 'standard';
+  if (typeof shieldConfig.canvas2dExport !== 'boolean') shieldConfig.canvas2dExport = true;
+  if (typeof shieldConfig.canvas2dPixels !== 'boolean') shieldConfig.canvas2dPixels = true;
+  if (typeof shieldConfig.canvasWebglExport !== 'boolean') shieldConfig.canvasWebglExport = true;
+  if (typeof shieldConfig.audioGetChannelData !== 'boolean') shieldConfig.audioGetChannelData = true;
+  if (typeof shieldConfig.audioCopyFromChannel !== 'boolean') shieldConfig.audioCopyFromChannel = true;
+  if (typeof shieldConfig.hardwareGpu !== 'boolean') shieldConfig.hardwareGpu = true;
+  if (typeof shieldConfig.hardwareScreen !== 'boolean') shieldConfig.hardwareScreen = true;
+  if (typeof shieldConfig.hardwareTimer !== 'boolean') shieldConfig.hardwareTimer = true;
+  if (typeof shieldConfig.hardwareGamepad !== 'boolean') shieldConfig.hardwareGamepad = true;
   if (typeof shieldConfig.webrtcDevices !== 'boolean') shieldConfig.webrtcDevices = true;
   if (typeof shieldConfig.webrtcLocalIp !== 'boolean') shieldConfig.webrtcLocalIp = true;
   if (!Array.isArray(shieldConfig.siteBypassList)) shieldConfig.siteBypassList = [];
@@ -770,9 +776,6 @@
     const canvasDelta = (seeds.canvas % 12) * 2 + 1;
     const webglDelta = (seeds.webgl % 12) * 2 + 1;
     const audioDelta = ((seeds.audio % 50) * 2 + 1) * 1e-7;
-    const strengthFactor = (value) => value === 'light' ? 0.5 : value === 'strong' ? 2 : 1;
-    const canvasStrengthDelta = (delta) => Math.max(1, Math.round(delta * strengthFactor(shieldConfig.canvasStrength)));
-    const hardwareStrengthDelta = (delta) => Math.max(1, Math.round(delta * strengthFactor(shieldConfig.hardwareStrength)));
 
     // GPU persona for this window, picked from the module-scope GPU_PROFILES
     // pool by a hash of the site's eTLD+1 approximation (last two host labels).
@@ -841,9 +844,9 @@
 
           const hookedGetImageData = createNativeFunction(function getImageData(sx, sy, sw, sh) {
             const result = origGetImageData.apply(this, arguments);
-            if (isShieldActive('canvasProtection') && !inInternalCanvas && result && result.data && result.data.length >= 4) {
+            if (isShieldActive('canvasProtection') && shieldConfig.canvas2dPixels !== false && !inInternalCanvas && result && result.data && result.data.length >= 4) {
               const origR = result.data[0];
-              result.data[0] = perturbPixel(origR, canvasStrengthDelta(canvasDelta));
+              result.data[0] = perturbPixel(origR, canvasDelta);
               if (result.data[3] === 0) {
                 result.data[3] = 255;
               }
@@ -916,7 +919,6 @@
         // call site: the visible-canvas hooks have already validated the
         // context type, while the OffscreenCanvas resolveCtx re-checks it.
         const makeExportFarbler = ({ resolveCtx, origGetImageData, origPutImageData, delta }) => {
-          const resolveDelta = () => (typeof delta === 'function' ? delta() : delta);
           const restoreMap = new WeakMap(); // canvas -> { pending, r, g, b, a, tx, ty }
           const putTruePixel = (ctx, rec) => {
             try {
@@ -954,11 +956,10 @@
             rec.a = imgData.data[3];
             rec.tx = tx;
             rec.ty = ty;
-            const exportDelta = resolveDelta();
             if (imgData.data[3] > 10) {
-              imgData.data[0] = perturbPixel(rec.r, exportDelta);
+              imgData.data[0] = perturbPixel(rec.r, delta);
             } else {
-              imgData.data[0] = exportDelta;
+              imgData.data[0] = delta;
               imgData.data[3] = 255; // Full alpha prevents premultiplied alpha collapse
             }
             origPutImageData.call(ctx, imgData, tx, ty);
@@ -1002,7 +1003,7 @@
             resolveCtx: (canvas) => origGetContext.call(canvas, '2d'),
             origGetImageData,
             origPutImageData,
-            delta: () => canvasStrengthDelta(canvasDelta)
+            delta: canvasDelta
           });
           // WebGL export farbling: render the canvas into a throwaway 2D
           // canvas and perturb one pixel there (the source canvas is never
@@ -1016,9 +1017,9 @@
             oCtx.drawImage(canvas, 0, 0);
             const imgData = origGetImageData.call(oCtx, 0, 0, 1, 1);
             if (imgData.data[3] > 10) {
-              imgData.data[0] = perturbPixel(imgData.data[0], canvasStrengthDelta(webglDelta));
+              imgData.data[0] = perturbPixel(imgData.data[0], webglDelta);
             } else {
-              imgData.data[0] = canvasStrengthDelta(webglDelta);
+              imgData.data[0] = webglDelta;
               imgData.data[3] = 255;
             }
             origPutImageData.call(oCtx, imgData, 0, 0);
@@ -1036,6 +1037,12 @@
               try {
                 if (origGetContext.call(this, '2d')) ctxType = '2d';
               } catch (_) {}
+            }
+            if (ctxType === '2d' && shieldConfig.canvas2dExport === false) {
+              return origToDataURL.apply(this, arguments);
+            }
+            if (ctxType === 'webgl' && shieldConfig.canvasWebglExport === false) {
+              return origToDataURL.apply(this, arguments);
             }
             if (ctxType === '2d' && this.width > 0 && this.height > 0) {
               try {
@@ -1083,6 +1090,12 @@
                 try {
                   if (origGetContext.call(this, '2d')) ctxType = '2d';
                 } catch (_) {}
+              }
+              if (ctxType === '2d' && shieldConfig.canvas2dExport === false) {
+                return origToBlob.apply(this, arguments);
+              }
+              if (ctxType === 'webgl' && shieldConfig.canvasWebglExport === false) {
+                return origToBlob.apply(this, arguments);
               }
               if (ctxType === '2d' && this.width > 0 && this.height > 0) {
                 try {
@@ -1177,7 +1190,7 @@
               },
               origGetImageData: origOCGetImageData,
               origPutImageData: origOCPutImageData,
-              delta: () => canvasStrengthDelta(canvasDelta)
+              delta: canvasDelta
             });
 
             // measureText + font getter: identical filtering to the visible
@@ -1191,6 +1204,9 @@
                 if (!isShieldActive('canvasProtection') || inInternalCanvas) {
                   return origConvertToBlob.apply(this, arguments);
                 }
+                if (canvasContextTypeMap.get(this) === '2d' && shieldConfig.canvas2dExport === false) {
+                  return origConvertToBlob.apply(this, arguments);
+                }
                 const oc = this;
                 // WebGL-typed offscreen canvases have no 2D context, so the
                 // shared farbler below cannot touch the framebuffer and the
@@ -1199,7 +1215,7 @@
                 // OffscreenCanvas, perturb one pixel there (the source canvas
                 // is never modified, so no restore/race handling is needed)
                 // and convert the temp canvas instead.
-                if (canvasContextTypeMap.get(oc) === 'webgl' && oc.width > 0 && oc.height > 0) {
+                if (canvasContextTypeMap.get(oc) === 'webgl' && shieldConfig.canvasWebglExport !== false && oc.width > 0 && oc.height > 0) {
                   try {
                     const temp = new targetWin.OffscreenCanvas(oc.width, oc.height);
                     const tempCtx = origOCGetContext.call(temp, '2d');
@@ -1207,9 +1223,9 @@
                       tempCtx.drawImage(oc, 0, 0);
                       const imgData = origOCGetImageData.call(tempCtx, 0, 0, 1, 1);
                       if (imgData.data[3] > 10) {
-                        imgData.data[0] = perturbPixel(imgData.data[0], canvasStrengthDelta(webglDelta));
+                        imgData.data[0] = perturbPixel(imgData.data[0], webglDelta);
                       } else {
-                        imgData.data[0] = canvasStrengthDelta(webglDelta);
+                        imgData.data[0] = webglDelta;
                         imgData.data[1] = 0;
                         imgData.data[2] = 0;
                         imgData.data[3] = 255; // Full alpha prevents premultiplied alpha collapse
@@ -1274,7 +1290,7 @@
             const origTransferToImageBitmap = ocProto.transferToImageBitmap;
             if (origTransferToImageBitmap) {
               const hookedTransferToImageBitmap = createNativeFunction(function transferToImageBitmap() {
-                if (!isShieldActive('canvasProtection') || inInternalCanvas) {
+                if (!isShieldActive('canvasProtection') || shieldConfig.canvas2dExport === false || inInternalCanvas) {
                   return origTransferToImageBitmap.apply(this, arguments);
                 }
                 const ctx = ocFarbleForExport(this);
@@ -1313,6 +1329,7 @@
       }
 
       const spoofed = getSpoofedInfo();
+      const hardwareGpuActive = () => isShieldActive('hardwareProtection') && shieldConfig.hardwareGpu !== false;
 
       function hookWebGLProto(proto, isWebGL2) {
         if (!proto) return;
@@ -1320,7 +1337,7 @@
         // getParameter
         const origGetParam = proto.getParameter;
         const hookedGetParam = createNativeFunction(function getParameter(param) {
-          if (!isShieldActive('hardwareProtection')) {
+          if (!hardwareGpuActive()) {
             return origGetParam.apply(this, arguments);
           }
           if (param === UNMASKED_VENDOR_WEBGL) {
@@ -1362,7 +1379,7 @@
         // getExtension
         const origGetExtension = proto.getExtension;
         const hookedGetExtension = createNativeFunction(function getExtension(name) {
-          if (!isShieldActive('hardwareProtection')) {
+          if (!hardwareGpuActive()) {
             return origGetExtension.apply(this, arguments);
           }
           const ext = origGetExtension.apply(this, arguments);
@@ -1380,7 +1397,7 @@
         if (proto.getSupportedExtensions) {
           const origGetSupportedExtensions = proto.getSupportedExtensions;
           const hookedGetSupportedExtensions = createNativeFunction(function getSupportedExtensions() {
-            if (!isShieldActive('hardwareProtection')) {
+            if (!hardwareGpuActive()) {
               return origGetSupportedExtensions ? origGetSupportedExtensions.apply(this, arguments) : [];
             }
             const exts = origGetSupportedExtensions.apply(this, arguments) || [];
@@ -1396,9 +1413,9 @@
         const origReadPixels = proto.readPixels;
         const hookedReadPixels = createNativeFunction(function readPixels(x, y, width, height, format, type, pixels) {
           origReadPixels.apply(this, arguments);
-          if (isShieldActive('hardwareProtection') && pixels && pixels.length > 0) {
+          if (hardwareGpuActive() && pixels && pixels.length > 0) {
             const idx = seeds.webgl % Math.min(pixels.length, 4);
-            pixels[idx] = perturbPixel(pixels[idx], hardwareStrengthDelta(webglDelta));
+            pixels[idx] = perturbPixel(pixels[idx], webglDelta);
           }
         }, 'readPixels', 7, proto);
         proto.readPixels = hookedReadPixels;
@@ -1427,7 +1444,7 @@
           description: ''
         };
         gpuObj.requestAdapter = createNativeFunction(function requestAdapter(...args) {
-          if (!isShieldActive('hardwareProtection')) {
+          if (!hardwareGpuActive()) {
             return origReqAdapter.apply(this, args);
           }
           return origReqAdapter.apply(this, args).then(adapter => {
@@ -1507,7 +1524,7 @@
           }
           if (!farbledChannels.has(channel)) {
             farbledChannels.add(channel);
-            const delta = audioDelta * strengthFactor(shieldConfig.audioStrength);
+            const delta = audioDelta;
             const step = Math.max(1, Math.floor(data.length / 100));
             for (let i = 0; i < data.length; i += step) {
               data[i] += delta;
@@ -1517,7 +1534,7 @@
 
         const hookedGetChannelData = createNativeFunction(function getChannelData(channel) {
           const data = origGetChannelData.apply(this, arguments);
-          if (isShieldActive('audioProtection')) {
+          if (isShieldActive('audioProtection') && shieldConfig.audioGetChannelData !== false) {
             applyAudioFarbling(this, channel, data);
           }
           return data;
@@ -1527,7 +1544,7 @@
         const origCopyFromChannel = audioProto.copyFromChannel;
         if (origCopyFromChannel) {
           const hookedCopyFromChannel = createNativeFunction(function copyFromChannel(destination, channelNumber, bufferOffset) {
-            if (isShieldActive('audioProtection')) {
+            if (isShieldActive('audioProtection') && shieldConfig.audioCopyFromChannel !== false) {
               // Mutate the underlying channel data once (exactly like the
               // getChannelData path above), then pass through the native
               // copy so both entry points stay mutually consistent and
@@ -2729,7 +2746,7 @@
           if (!origGet) return;
           Object.defineProperty(scrProto, prop, {
             get: createNativeGetter(function() {
-              if (!isShieldActive('hardwareProtection') || !canSpoofScreen()) {
+              if (!isShieldActive('hardwareProtection') || shieldConfig.hardwareScreen === false || !canSpoofScreen()) {
                 return origGet.call(this);
               }
               return SCREEN_PROFILE[prop];
@@ -2755,7 +2772,7 @@
           const origDprGet = dprDesc.get;
           Object.defineProperty(targetWin, 'devicePixelRatio', {
             get: createNativeGetter(function devicePixelRatio() {
-              if (!isShieldActive('hardwareProtection') || !canSpoofScreen()) {
+              if (!isShieldActive('hardwareProtection') || shieldConfig.hardwareScreen === false || !canSpoofScreen()) {
                 return origDprGet.call(this);
               }
               return 1;
@@ -2784,11 +2801,9 @@
           Object.defineProperty(perfProto, 'now', {
             value: createNativeFunction(function now() {
               const t = origPerfNow.apply(this, arguments);
-              if (!isShieldActive('hardwareProtection')) {
+              if (!isShieldActive('hardwareProtection') || shieldConfig.hardwareTimer === false) {
                 return t;
               }
-              if (shieldConfig.hardwareStrength === 'strong') return Math.floor(t / 10) * 10;
-              if (shieldConfig.hardwareStrength === 'light') return Math.floor(t * 10) / 10;
               return Math.floor(t);
             }, 'now', 0, perfProto),
             writable: true,
@@ -2815,7 +2830,7 @@
         if (hasGamepad) {
           Object.defineProperty(gpNavProto, 'getGamepads', {
             value: createNativeFunction(function getGamepads() {
-              if (!isShieldActive('hardwareProtection')) {
+              if (!isShieldActive('hardwareProtection') || shieldConfig.hardwareGamepad === false) {
                 return origGetGamepads.apply(this, arguments);
               }
               return [];
@@ -3279,16 +3294,15 @@
             if (typeof c.fontProtection === 'boolean') {
               shieldConfig.fontProtection = c.fontProtection;
             }
-            for (const name of ['canvasStrength', 'audioStrength', 'hardwareStrength']) {
-              if (c[name] === 'light' || c[name] === 'standard' || c[name] === 'strong') {
+            for (const name of [
+              'canvas2dExport', 'canvas2dPixels', 'canvasWebglExport',
+              'audioGetChannelData', 'audioCopyFromChannel',
+              'hardwareGpu', 'hardwareScreen', 'hardwareTimer', 'hardwareGamepad',
+              'webrtcDevices', 'webrtcLocalIp'
+            ]) {
+              if (typeof c[name] === 'boolean') {
                 shieldConfig[name] = c[name];
               }
-            }
-            if (typeof c.webrtcDevices === 'boolean') {
-              shieldConfig.webrtcDevices = c.webrtcDevices;
-            }
-            if (typeof c.webrtcLocalIp === 'boolean') {
-              shieldConfig.webrtcLocalIp = c.webrtcLocalIp;
             }
             if (typeof c.blockOtherScripts === 'boolean') {
               fontConfig.blockOtherScripts = c.blockOtherScripts;
@@ -4430,6 +4444,9 @@
       }, 'check');
     }
 
+    // GPU persona sub-switch snapshot for worker-side WebGL/WebGPU.
+    const hardwareGpuShield = ${shieldConfig.hardwareGpu !== false};
+
     // OffscreenCanvas WebGL in worker
     if (typeof self.OffscreenCanvas !== 'undefined' && self.OffscreenCanvas.prototype && self.OffscreenCanvas.prototype.getContext) {
       const origOCGetContext = self.OffscreenCanvas.prototype.getContext;
@@ -4438,6 +4455,7 @@
         if (ctx && (type === 'webgl' || type === 'experimental-webgl' || type === 'webgl2')) {
           const origGP = ctx.getParameter;
           ctx.getParameter = makeNative(function(pname) {
+            if (!hardwareGpuShield) return origGP.apply(this, arguments);
             if (pname === 0x1F00) return 'WebKit';
             if (pname === 0x1F01) return 'WebKit WebGL';
             // Same pooled GPU profile as the main thread (interpolated from the
@@ -4478,6 +4496,7 @@
           description: ''
         };
         gpuObj.requestAdapter = makeNative(function requestAdapter() {
+          if (!hardwareGpuShield) return origReqAdapter.apply(this, arguments);
           return origReqAdapter.apply(this, arguments).then(function(adapter) {
             if (!adapter) return adapter;
             try {

@@ -643,11 +643,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
       if ($cityNameLanguage) $cityNameLanguage.value = changes.cityNameLanguage.newValue || 'system';
       applyCityLanguage(changes.cityNameLanguage.newValue || 'system');
     }
-    for (const [name, cfg] of Object.entries(MODULE_STRENGTH_CONFIG)) {
-      if (changes[cfg.key]) updateModuleStrengthUI(name, changes[cfg.key].newValue);
-    }
-    for (const key of WEBRTC_OPTION_KEYS) {
-      if (changes[key]) updateWebRTCOptionUI(key, changes[key].newValue);
+    for (const key of MODULE_OPTION_KEYS) {
+      if (changes[key]) updateModuleOptionUI(key, changes[key].newValue);
     }
     if (changes.theme) {
       applyTheme(changes.theme.newValue);
@@ -680,85 +677,20 @@ for (const [key, el] of Object.entries(moduleInputs)) {
   });
 }
 
-const MODULE_STRENGTH_CONFIG = {
-  canvas: {
-    key: 'canvasStrength',
-    control: 'canvasStrengthControl',
-    note: 'canvasStrengthNote',
-    values: ['light', 'standard', 'strong'],
-    fallback: 'standard',
-    notes: {
-      light: '轻：像素扰动量减半，画布导出更接近原始值。',
-      standard: '标准：2D 与 WebGL 导出使用当前扰动量。',
-      strong: '强：像素扰动量加倍，降低关联性，可能影响图像校验。'
-    }
-  },
-  audio: {
-    key: 'audioStrength',
-    control: 'audioStrengthControl',
-    note: 'audioStrengthNote',
-    values: ['light', 'standard', 'strong'],
-    fallback: 'standard',
-    notes: {
-      light: '轻：AudioBuffer 噪声幅度减半。',
-      standard: '标准：AudioBuffer 指纹使用当前噪声幅度。',
-      strong: '强：噪声幅度加倍，指纹更难关联，但音频数据偏差更大。'
-    }
-  },
-  hardware: {
-    key: 'hardwareStrength',
-    control: 'hardwareStrengthControl',
-    note: 'hardwareStrengthNote',
-    values: ['light', 'standard', 'strong'],
-    fallback: 'standard',
-    notes: {
-      light: '轻：WebGL 读像素噪声减半，计时器精度 0.1ms。',
-      standard: '标准：当前 GPU/屏幕画像，计时器精度 1ms。',
-      strong: '强：WebGL 读像素噪声加倍，计时器精度 10ms。'
-    }
-  }
-};
+const MODULE_OPTION_KEYS = [
+  'canvas2dExport', 'canvas2dPixels', 'canvasWebglExport',
+  'audioGetChannelData', 'audioCopyFromChannel',
+  'hardwareGpu', 'hardwareScreen', 'hardwareTimer', 'hardwareGamepad',
+  'webrtcDevices', 'webrtcLocalIp', 'webrtcUdp'
+];
 
-const WEBRTC_OPTION_KEYS = ['webrtcDevices', 'webrtcLocalIp', 'webrtcUdp'];
-
-function updateModuleStrengthUI(name, value) {
-  const cfg = MODULE_STRENGTH_CONFIG[name];
-  if (!cfg) return;
-  const selected = cfg.values.includes(value) ? value : cfg.fallback;
-  const control = document.getElementById(cfg.control);
-  if (control) {
-    control.querySelectorAll('.mode-btn').forEach(btn => {
-      const on = btn.dataset.strength === selected;
-      btn.classList.toggle('active', on);
-      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-    });
-  }
-  const note = document.getElementById(cfg.note);
-  if (note) note.textContent = cfg.notes[selected];
-}
-
-function setupModuleStrengths() {
-  for (const [name, cfg] of Object.entries(MODULE_STRENGTH_CONFIG)) {
-    const control = document.getElementById(cfg.control);
-    if (!control) continue;
-    control.querySelectorAll('.mode-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const value = btn.dataset.strength;
-        if (!cfg.values.includes(value)) return;
-        updateModuleStrengthUI(name, value);
-        chrome.storage.local.set({ [cfg.key]: value });
-      });
-    });
-  }
-}
-
-function updateWebRTCOptionUI(key, value) {
+function updateModuleOptionUI(key, value) {
   const el = document.getElementById(key);
   if (el) el.checked = value !== false;
 }
 
-function setupWebRTCOptions() {
-  for (const key of WEBRTC_OPTION_KEYS) {
+function setupModuleOptions() {
+  for (const key of MODULE_OPTION_KEYS) {
     const el = document.getElementById(key);
     if (!el) continue;
     el.addEventListener('change', () => {
@@ -767,8 +699,7 @@ function setupWebRTCOptions() {
   }
 }
 
-setupModuleStrengths();
-setupWebRTCOptions();
+setupModuleOptions();
 
 // 视图路由:侧栏切换 + hash 深链(默认字体)
 function showView(name) {
@@ -1719,7 +1650,7 @@ async function init() {
 
   allFonts.sort((a, b) => a.localeCompare(b));
 
-  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone', 'geolocationLatitude', 'geolocationLongitude', 'ipLatitude', 'ipLongitude', 'ipCity', 'cityNameLanguage', 'canvasStrength', 'audioStrength', 'hardwareStrength', 'webrtcDevices', 'webrtcLocalIp', 'webrtcUdp', 'theme', ...MODULE_KEYS], (res) => {
+  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone', 'geolocationLatitude', 'geolocationLongitude', 'ipLatitude', 'ipLongitude', 'ipCity', 'cityNameLanguage', 'theme', ...MODULE_KEYS, ...MODULE_OPTION_KEYS], (res) => {
     fontMode = res.fontMode === 'whitelist' ? 'whitelist' : 'blacklist';
     customHiddenFonts = Array.isArray(res.customHiddenFonts) ? res.customHiddenFonts : [];
     customAllowedFonts = Array.isArray(res.customAllowedFonts) ? res.customAllowedFonts : [];
@@ -1737,11 +1668,8 @@ async function init() {
     applyIpUI(res);
     if ($cityNameLanguage) $cityNameLanguage.value = res.cityNameLanguage || 'system';
     applyCityLanguage(res.cityNameLanguage || 'system');
-    for (const [name, cfg] of Object.entries(MODULE_STRENGTH_CONFIG)) {
-      updateModuleStrengthUI(name, res[cfg.key]);
-    }
-    for (const key of WEBRTC_OPTION_KEYS) {
-      updateWebRTCOptionUI(key, res[key]);
+    for (const key of MODULE_OPTION_KEYS) {
+      updateModuleOptionUI(key, res[key]);
     }
     if (!(typeof res.ipLatitude === 'number' && typeof res.ipLongitude === 'number') &&
         typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
