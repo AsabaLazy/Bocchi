@@ -574,6 +574,7 @@ function applyShieldState(enabled) {
   if ($statusText) {
     $statusText.textContent = globalShieldEnabled ? '防护运行中' : '防护已关闭';
   }
+  updateLanguagePreview();
 }
 
 if ($globalShieldEnabled) {
@@ -645,6 +646,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     }
     if (changes.languageTarget && $languageTarget) {
       $languageTarget.value = normalizeLanguageTarget(changes.languageTarget.newValue);
+      updateLanguagePreview();
     }
     for (const key of MODULE_OPTION_KEYS) {
       if (changes[key]) updateModuleOptionUI(key, changes[key].newValue);
@@ -671,6 +673,7 @@ function syncNavDotsFromInputs() {
     const on = (primary && primary.checked) || (anyInput && anyInput.checked);
     dot.classList.toggle('on', !!on);
   });
+  updateLanguagePreview();
 }
 
 for (const [key, el] of Object.entries(moduleInputs)) {
@@ -691,6 +694,7 @@ const MODULE_OPTION_KEYS = [
 function updateModuleOptionUI(key, value) {
   const el = document.getElementById(key);
   if (el) el.checked = value !== false;
+  updateLanguagePreview();
 }
 
 function setupModuleOptions() {
@@ -699,6 +703,7 @@ function setupModuleOptions() {
     if (!el) continue;
     el.addEventListener('change', () => {
       chrome.storage.local.set({ [key]: el.checked });
+      updateLanguagePreview();
     });
   }
 }
@@ -919,6 +924,40 @@ const $languageTarget = document.getElementById('languageTarget');
 function normalizeLanguageTarget(value) {
   if ($languageTarget && Array.from($languageTarget.options).some(o => o.value === value)) return value;
   return 'en-US';
+}
+
+// 语言模块的当前生效结果:不打开 DevTools 也能确认三项信号是否一致
+function setLanguageResult(id, value, native) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = value;
+  el.classList.toggle('is-native', native);
+}
+
+function updateLanguagePreview() {
+  const stateEl = document.getElementById('languageResultState');
+  if (!stateEl) return;
+  const protection = document.getElementById('languageProtection');
+  const targetSel = document.getElementById('languageTarget');
+  let target = targetSel ? targetSel.value : 'en-US';
+  if (!target || !targetSel || !Array.from(targetSel.options).some(o => o.value === target)) target = 'en-US';
+  const nav = document.getElementById('languageNavigator');
+  const intl = document.getElementById('languageIntl');
+  const header = document.getElementById('languageHeader');
+  const moduleOn = !!(protection && protection.checked);
+  const active = globalShieldEnabled && moduleOn;
+  const navOn = active && !!(nav && nav.checked);
+  const intlOn = active && !!(intl && intl.checked);
+  const headerOn = active && !!(header && header.checked);
+  const base = target.split('-')[0];
+  const headerValue = base && base !== target ? `${target},${base};q=0.9` : target;
+
+  setLanguageResult('languageResultNavigator', navOn ? target : '原生', !navOn);
+  setLanguageResult('languageResultIntl', intlOn ? target : '原生', !intlOn);
+  setLanguageResult('languageResultHeader', headerOn ? headerValue : '原生', !headerOn);
+
+  stateEl.textContent = !globalShieldEnabled ? '全局已暂停' : !moduleOn ? '未启用' : (navOn || intlOn || headerOn) ? '已生效' : '未生效';
+  stateEl.classList.toggle('on', navOn || intlOn || headerOn);
 }
 const $cityResults = document.getElementById('cityResults');
 const $cursorReadout = document.getElementById('cursorReadout');
@@ -1704,6 +1743,7 @@ if ($cityNameLanguage) {
 if ($languageTarget) {
   $languageTarget.addEventListener('change', () => {
     chrome.storage.local.set({ languageTarget: normalizeLanguageTarget($languageTarget.value) });
+    updateLanguagePreview();
   });
 }
 

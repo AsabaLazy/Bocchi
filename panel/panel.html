@@ -154,32 +154,35 @@
               <i></i>
             </label>
           </div>
-          <div class="view-options">
-            <span class="ctl-label">目标语言</span>
-            <select id="languageTarget" class="lang-select" aria-label="目标语言">
-              <option value="zh-CN">中文（简体）</option>
-              <option value="zh-TW">中文（繁體）</option>
-              <option value="en-US" selected>English (US)</option>
-              <option value="en-GB">English (UK)</option>
-              <option value="ja-JP">日本語</option>
-              <option value="ko-KR">한국어</option>
-              <option value="fr-FR">Français</option>
-              <option value="de-DE">Deutsch</option>
-              <option value="es-ES">Español</option>
-              <option value="pt-BR">Português (Brasil)</option>
-              <option value="ru-RU">Русский</option>
-              <option value="it-IT">Italiano</option>
-              <option value="nl-NL">Nederlands</option>
-              <option value="pl-PL">Polski</option>
-              <option value="tr-TR">Türkçe</option>
-              <option value="ar-SA">العربية</option>
-              <option value="hi-IN">हिन्दी</option>
-              <option value="th-TH">ไทย</option>
-              <option value="vi-VN">Tiếng Việt</option>
-              <option value="id-ID">Bahasa Indonesia</option>
-            </select>
-          </div>
-          <div class="view-options view-options-stack">
+          <div class="view-options-stack">
+            <div class="opt-row opt-row-select">
+              <span class="opt-copy">
+                <span class="opt-title">目标语言</span>
+                <span class="opt-desc">navigator、Intl 与请求头统一使用该语言。</span>
+              </span>
+              <select id="languageTarget" class="lang-select" aria-label="目标语言">
+                <option value="zh-CN">中文（简体）</option>
+                <option value="zh-TW">中文（繁體）</option>
+                <option value="en-US" selected>English (US)</option>
+                <option value="en-GB">English (UK)</option>
+                <option value="ja-JP">日本語</option>
+                <option value="ko-KR">한국어</option>
+                <option value="fr-FR">Français</option>
+                <option value="de-DE">Deutsch</option>
+                <option value="es-ES">Español</option>
+                <option value="pt-BR">Português (Brasil)</option>
+                <option value="ru-RU">Русский</option>
+                <option value="it-IT">Italiano</option>
+                <option value="nl-NL">Nederlands</option>
+                <option value="pl-PL">Polski</option>
+                <option value="tr-TR">Türkçe</option>
+                <option value="ar-SA">العربية</option>
+                <option value="hi-IN">हिन्दी</option>
+                <option value="th-TH">ไทย</option>
+                <option value="vi-VN">Tiếng Việt</option>
+                <option value="id-ID">Bahasa Indonesia</option>
+              </select>
+            </div>
             <label class="opt-row">
               <span class="opt-copy">
                 <span class="opt-title">navigator.language / languages</span>
@@ -201,6 +204,26 @@
               </span>
               <span class="switch"><input type="checkbox" id="languageHeader" checked aria-label="Accept-Language 请求头伪装"><i></i></span>
             </label>
+          </div>
+          <div class="lang-result" id="languageResult" aria-live="polite">
+            <div class="lang-result-head">
+              <span class="lang-result-title">当前结果</span>
+              <span class="lang-result-state" id="languageResultState">未启用</span>
+            </div>
+            <div class="lang-result-grid">
+              <div class="lang-result-item">
+                <span class="lang-result-key">navigator</span>
+                <code class="lang-result-value is-native" id="languageResultNavigator">原生</code>
+              </div>
+              <div class="lang-result-item">
+                <span class="lang-result-key">Intl</span>
+                <code class="lang-result-value is-native" id="languageResultIntl">原生</code>
+              </div>
+              <div class="lang-result-item">
+                <span class="lang-result-key">Accept-Language</span>
+                <code class="lang-result-value is-native" id="languageResultHeader">原生</code>
+              </div>
+            </div>
           </div>
           <p class="view-note" id="languageOptionsNote">三项一起开最一致；站点 Service Worker/SharedWorker 无法注入，保持原生。模块关闭时保持浏览器原生语言。</p>
         </section>

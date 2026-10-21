@@ -29,7 +29,7 @@
         <span class="card-desc">一键启用或挂起所有指纹伪装与混淆</span>
       </div>
       <label class="switch" title="开启或暂停全局防御">
-        <input type="checkbox" id="globalShieldEnabled" checked>
+        <input type="checkbox" id="globalShieldEnabled" checked aria-label="全局防御总控">
         <span class="slider"></span>
       </label>
     </div>
@@ -46,7 +46,7 @@
       <div class="site-action">
         <span class="site-action-desc">对此站点停用防护 (加入旁路白名单)</span>
         <label class="switch switch-sm" title="对此站点停用防护">
-          <input type="checkbox" id="siteBypass">
+          <input type="checkbox" id="siteBypass" aria-label="对此站点停用防护">
           <span class="slider"></span>
         </label>
       </div>
@@ -55,90 +55,82 @@
     <!-- Modules Group -->
     <div class="section-title">核心防护模块</div>
     <div class="modules-list" id="modulesList">
-      <div class="module-item">
-        <div class="module-info">
-          <span class="module-name">Canvas &amp; WebGL 画布脱敏</span>
-          <span class="module-desc">2D/3D 画布及 WebGPU 微扰动注入与动态降噪</span>
-        </div>
-        <label class="switch switch-sm" title="切换画布与 WebGL 防护">
-          <input type="checkbox" id="canvasProtection" checked>
-          <span class="slider"></span>
-        </label>
-      </div>
-
-      <div class="module-item">
-        <div class="module-info">
-          <span class="module-name">WebRTC 隐私隔离</span>
-          <span class="module-desc">代理 UDP 流量并抑制私网 IPv4/mDNS 泄漏</span>
-        </div>
-        <label class="switch switch-sm" title="切换 WebRTC 保护">
-          <input type="checkbox" id="webrtcProtection" checked>
-          <span class="slider"></span>
-        </label>
-      </div>
-
-      <div class="module-item">
-        <div class="module-info">
-          <span class="module-name">AudioContext 音频微扰</span>
-          <span class="module-desc">频域分析防探针与动态振幅微扰脱敏</span>
-        </div>
-        <label class="switch switch-sm" title="切换音频指纹微扰">
-          <input type="checkbox" id="audioProtection" checked>
-          <span class="slider"></span>
-        </label>
-      </div>
-
-      <div class="module-item">
-        <div class="module-info">
-          <span class="module-name">动态时区对齐</span>
-          <span class="module-desc">按出站 IP 自动对齐 Date / Intl 时区</span>
-        </div>
-        <label class="switch switch-sm" title="切换动态时区对齐">
-          <input type="checkbox" id="timezoneProtection" checked>
-          <span class="slider"></span>
-        </label>
-      </div>
-
-      <div class="module-item">
-        <div class="module-info">
-          <span class="module-name">语言伪装</span>
-          <span class="module-desc">统一 navigator、Intl 与 Accept-Language</span>
-        </div>
-        <label class="switch switch-sm" title="切换语言伪装">
-          <input type="checkbox" id="languageProtection">
-          <span class="slider"></span>
-        </label>
-      </div>
-
-      <div class="module-item">
-        <div class="module-info">
-          <span class="module-name">地理位置伪装</span>
-          <span class="module-desc">向网站报告指定的经纬度而非真实定位</span>
-        </div>
-        <label class="switch switch-sm" title="切换地理位置伪装">
-          <input type="checkbox" id="geolocationProtection">
-          <span class="slider"></span>
-        </label>
-      </div>
-
-      <div class="module-item">
-        <div class="module-info">
-          <span class="module-name">硬件与设备指纹混淆</span>
-          <span class="module-desc">规范化 Linux x86_64 CPU、内存及并发规格</span>
-        </div>
-        <label class="switch switch-sm" title="切换硬件与设备混淆">
-          <input type="checkbox" id="hardwareProtection" checked>
-          <span class="slider"></span>
-        </label>
-      </div>
-
-      <div class="module-item">
+      <div class="module-item" title="阻断 DOMRect 及 Canvas 指纹扫描探测">
         <div class="module-info">
           <span class="module-name">系统字体探测防御</span>
-          <span class="module-desc">阻断 DOMRect 及 Canvas 指纹扫描探测</span>
         </div>
         <label class="switch switch-sm" title="切换系统字体探测防御">
-          <input type="checkbox" id="fontProtection" checked>
+          <input type="checkbox" id="fontProtection" checked aria-label="系统字体探测防御">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="module-item" title="统一 navigator、Intl 与 Accept-Language">
+        <div class="module-info">
+          <span class="module-name">语言伪装</span>
+        </div>
+        <label class="switch switch-sm" title="切换语言伪装">
+          <input type="checkbox" id="languageProtection" aria-label="语言伪装">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="module-item" title="2D/3D 画布及 WebGPU 微扰动注入与动态降噪">
+        <div class="module-info">
+          <span class="module-name">Canvas &amp; WebGL 画布脱敏</span>
+        </div>
+        <label class="switch switch-sm" title="切换画布与 WebGL 防护">
+          <input type="checkbox" id="canvasProtection" checked aria-label="Canvas &amp; WebGL 画布脱敏">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="module-item" title="频域分析防探针与动态振幅微扰脱敏">
+        <div class="module-info">
+          <span class="module-name">AudioContext 音频微扰</span>
+        </div>
+        <label class="switch switch-sm" title="切换音频指纹微扰">
+          <input type="checkbox" id="audioProtection" checked aria-label="AudioContext 音频微扰">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="module-item" title="代理 UDP 流量并抑制私网 IPv4/mDNS 泄漏">
+        <div class="module-info">
+          <span class="module-name">WebRTC 隐私隔离</span>
+        </div>
+        <label class="switch switch-sm" title="切换 WebRTC 保护">
+          <input type="checkbox" id="webrtcProtection" checked aria-label="WebRTC 隐私隔离">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="module-item" title="按出站 IP 自动对齐 Date / Intl 时区">
+        <div class="module-info">
+          <span class="module-name">动态时区对齐</span>
+        </div>
+        <label class="switch switch-sm" title="切换动态时区对齐">
+          <input type="checkbox" id="timezoneProtection" checked aria-label="动态时区对齐">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="module-item" title="向网站报告指定的经纬度而非真实定位">
+        <div class="module-info">
+          <span class="module-name">地理位置伪装</span>
+        </div>
+        <label class="switch switch-sm" title="切换地理位置伪装">
+          <input type="checkbox" id="geolocationProtection" aria-label="地理位置伪装">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="module-item" title="规范化 Linux x86_64 CPU、内存及并发规格">
+        <div class="module-info">
+          <span class="module-name">硬件与设备指纹混淆</span>
+        </div>
+        <label class="switch switch-sm" title="切换硬件与设备混淆">
+          <input type="checkbox" id="hardwareProtection" checked aria-label="硬件与设备指纹混淆">
           <span class="slider"></span>
         </label>
       </div>
