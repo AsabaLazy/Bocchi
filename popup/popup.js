@@ -14,6 +14,7 @@ const $canvasProtection = document.getElementById('canvasProtection');
 const $webrtcProtection = document.getElementById('webrtcProtection');
 const $audioProtection = document.getElementById('audioProtection');
 const $timezoneProtection = document.getElementById('timezoneProtection');
+const $languageProtection = document.getElementById('languageProtection');
 const $hardwareProtection = document.getElementById('hardwareProtection');
 const $fontProtection = document.getElementById('fontProtection');
 const $geolocationProtection = document.getElementById('geolocationProtection');
@@ -29,6 +30,7 @@ let canvasProtection = true;
 let webrtcProtection = true;
 let audioProtection = true;
 let timezoneProtection = true;
+let languageProtection = false;
 let hardwareProtection = true;
 let fontProtection = true;
 let geolocationProtection = false;
@@ -38,6 +40,7 @@ const MODULE_SWITCHES = [
   { el: $webrtcProtection, key: 'webrtcProtection' },
   { el: $audioProtection, key: 'audioProtection' },
   { el: $timezoneProtection, key: 'timezoneProtection' },
+  { el: $languageProtection, key: 'languageProtection' },
   { el: $hardwareProtection, key: 'hardwareProtection' },
   { el: $fontProtection, key: 'fontProtection' },
   { el: $geolocationProtection, key: 'geolocationProtection' }
@@ -69,6 +72,7 @@ function updateUI() {
       case 'webrtcProtection': el.checked = webrtcProtection; break;
       case 'audioProtection': el.checked = audioProtection; break;
       case 'timezoneProtection': el.checked = timezoneProtection; break;
+      case 'languageProtection': el.checked = languageProtection; break;
       case 'hardwareProtection': el.checked = hardwareProtection; break;
       case 'fontProtection': el.checked = fontProtection; break;
       case 'geolocationProtection': el.checked = geolocationProtection; break;
@@ -168,6 +172,7 @@ MODULE_SWITCHES.forEach(({ el, key }) => {
       case 'webrtcProtection': webrtcProtection = val; break;
       case 'audioProtection': audioProtection = val; break;
       case 'timezoneProtection': timezoneProtection = val; break;
+      case 'languageProtection': languageProtection = val; break;
       case 'hardwareProtection': hardwareProtection = val; break;
       case 'fontProtection': fontProtection = val; break;
       case 'geolocationProtection': geolocationProtection = val; break;
@@ -216,6 +221,10 @@ if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged)
     }
     if (changes.timezoneProtection) {
       timezoneProtection = changes.timezoneProtection.newValue !== false;
+      needsUpdate = true;
+    }
+    if (changes.languageProtection) {
+      languageProtection = changes.languageProtection.newValue === true;
       needsUpdate = true;
     }
     if (changes.hardwareProtection) {
@@ -272,6 +281,7 @@ function init() {
       'webrtcProtection',
       'audioProtection',
       'timezoneProtection',
+      'languageProtection',
       'hardwareProtection',
       'fontProtection',
       'geolocationProtection',
@@ -286,6 +296,7 @@ function init() {
         webrtcProtection = res.webrtcProtection !== false;
         audioProtection = res.audioProtection !== false;
         timezoneProtection = res.timezoneProtection !== false;
+        languageProtection = res.languageProtection === true;
         hardwareProtection = res.hardwareProtection !== false;
         fontProtection = res.fontProtection !== false;
         geolocationProtection = res.geolocationProtection === true;

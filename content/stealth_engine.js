@@ -66,6 +66,10 @@
   if (typeof shieldConfig.timezoneProtection !== 'boolean') shieldConfig.timezoneProtection = true;
   if (typeof shieldConfig.hardwareProtection !== 'boolean') shieldConfig.hardwareProtection = true;
   if (typeof shieldConfig.fontProtection !== 'boolean') shieldConfig.fontProtection = true;
+  if (typeof shieldConfig.languageProtection !== 'boolean') shieldConfig.languageProtection = false;
+  if (typeof shieldConfig.languageTarget !== 'string' || !/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(shieldConfig.languageTarget)) shieldConfig.languageTarget = 'en-US';
+  if (typeof shieldConfig.languageNavigator !== 'boolean') shieldConfig.languageNavigator = true;
+  if (typeof shieldConfig.languageIntl !== 'boolean') shieldConfig.languageIntl = true;
   if (typeof shieldConfig.canvas2dExport !== 'boolean') shieldConfig.canvas2dExport = true;
   if (typeof shieldConfig.canvas2dPixels !== 'boolean') shieldConfig.canvas2dPixels = true;
   if (typeof shieldConfig.canvasWebglExport !== 'boolean') shieldConfig.canvasWebglExport = true;
@@ -806,6 +810,21 @@
     const gpuProfile = GPU_PROFILES[djb2(host.split('.').slice(-2).join('.')) % GPU_PROFILES.length];
 
     const isShieldActive = (feature) => isProtectionActive(feature, targetWin);
+    const languageNavigatorActive = () => isShieldActive('languageProtection') && shieldConfig.languageNavigator !== false;
+    const languageIntlActive = () => isShieldActive('languageProtection') && shieldConfig.languageIntl !== false;
+    let languageListCacheTarget = '';
+    let languageListCacheValue = null;
+    const languageList = () => {
+      const target = shieldConfig.languageTarget;
+      if (target !== languageListCacheTarget) {
+        languageListCacheTarget = target;
+        const base = target.split('-')[0];
+        languageListCacheValue = Object.freeze(base && base !== target ? [target, base] : [target]);
+      }
+      return languageListCacheValue;
+    };
+    const isDefaultLocales = (locales) => locales === undefined || (Array.isArray(locales) && locales.length === 0);
+    const pickLocales = (locales) => (languageIntlActive() && isDefaultLocales(locales)) ? shieldConfig.languageTarget : locales;
 
     // 1. Native toString deception
     patchToString(targetWin);
@@ -2545,6 +2564,30 @@
           }
         };
 
+        // Language: keep native values when the module/sub-switch is off.
+        // The captured own values cover test doubles whose Navigator has own
+        // language properties instead of prototype accessors.
+        const nativeLangValue = targetWin.navigator ? targetWin.navigator.language : undefined;
+        const nativeLangsValue = targetWin.navigator ? targetWin.navigator.languages : undefined;
+        const langDesc = Object.getOwnPropertyDescriptor(navProto, 'language');
+        const langsDesc = Object.getOwnPropertyDescriptor(navProto, 'languages');
+        const nativeLangGet = langDesc && langDesc.get;
+        const nativeLangsGet = langsDesc && langsDesc.get;
+        defineNavProp('language', createNativeGetter(function language() {
+          if (!languageNavigatorActive()) {
+            if (nativeLangGet) return nativeLangGet.call(this);
+            return this === targetWin.navigator ? nativeLangValue : undefined;
+          }
+          return shieldConfig.languageTarget;
+        }, 'language', navProto));
+        defineNavProp('languages', createNativeGetter(function languages() {
+          if (!languageNavigatorActive()) {
+            if (nativeLangsGet) return nativeLangsGet.call(this);
+            return this === targetWin.navigator ? nativeLangsValue : undefined;
+          }
+          return languageList();
+        }, 'languages', navProto));
+
         // webdriver: patch ONLY when automation is actually reported. A normal
         // browser already returns false, and any getter replacement is
         // detectable on its own (empirically: replacing it — even with an
@@ -3294,6 +3337,18 @@
             if (typeof c.fontProtection === 'boolean') {
               shieldConfig.fontProtection = c.fontProtection;
             }
+            if (typeof c.languageProtection === 'boolean') {
+              shieldConfig.languageProtection = c.languageProtection;
+            }
+            if (typeof c.languageTarget === 'string' && /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(c.languageTarget)) {
+              shieldConfig.languageTarget = c.languageTarget;
+            }
+            if (typeof c.languageNavigator === 'boolean') {
+              shieldConfig.languageNavigator = c.languageNavigator;
+            }
+            if (typeof c.languageIntl === 'boolean') {
+              shieldConfig.languageIntl = c.languageIntl;
+            }
             for (const name of [
               'canvas2dExport', 'canvas2dPixels', 'canvasWebglExport',
               'audioGetChannelData', 'audioCopyFromChannel',
@@ -3536,25 +3591,25 @@
         // toLocaleString
         OrigDate.prototype.toLocaleString = createNativeFunction(function toLocaleString(locales, options) {
           checkDateReceiver(this, 'toLocaleString');
+          const localeArg = pickLocales(locales);
           if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
-            return origDateToLocaleString.apply(this, arguments);
+            return origDateToLocaleString.call(this, localeArg, options);
           }
           const t = origGetTime.call(this);
           if (isNaN(t)) return 'Invalid Date';
-          // Locale passes through natively (entropy-reduction strategy); only
-          // the timezone is aligned with the exit IP.
           const opts = Object.assign({}, options);
           if (!opts.timeZone) {
             opts.timeZone = activeTimezone;
           }
-          return origDateToLocaleString.call(this, locales, opts);
+          return origDateToLocaleString.call(this, localeArg, opts);
         }, 'toLocaleString', 0);
 
         // toLocaleDateString
         OrigDate.prototype.toLocaleDateString = createNativeFunction(function toLocaleDateString(locales, options) {
           checkDateReceiver(this, 'toLocaleDateString');
+          const localeArg = pickLocales(locales);
           if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
-            return origDateToLocaleDateString.apply(this, arguments);
+            return origDateToLocaleDateString.call(this, localeArg, options);
           }
           const t = origGetTime.call(this);
           if (isNaN(t)) return 'Invalid Date';
@@ -3562,14 +3617,15 @@
           if (!opts.timeZone) {
             opts.timeZone = activeTimezone;
           }
-          return origDateToLocaleDateString.call(this, locales, opts);
+          return origDateToLocaleDateString.call(this, localeArg, opts);
         }, 'toLocaleDateString', 0);
 
         // toLocaleTimeString
         OrigDate.prototype.toLocaleTimeString = createNativeFunction(function toLocaleTimeString(locales, options) {
           checkDateReceiver(this, 'toLocaleTimeString');
+          const localeArg = pickLocales(locales);
           if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
-            return origDateToLocaleTimeString.apply(this, arguments);
+            return origDateToLocaleTimeString.call(this, localeArg, options);
           }
           const t = origGetTime.call(this);
           if (isNaN(t)) return 'Invalid Date';
@@ -3577,7 +3633,7 @@
           if (!opts.timeZone) {
             opts.timeZone = activeTimezone;
           }
-          return origDateToLocaleTimeString.call(this, locales, opts);
+          return origDateToLocaleTimeString.call(this, localeArg, opts);
         }, 'toLocaleTimeString', 0);
 
         // Local Date getters
@@ -3805,6 +3861,50 @@
         }
       }
 
+      // Language: default-locale alignment for Number/BigInt/String helpers.
+      try {
+        if (targetWin.Number && targetWin.Number.prototype && typeof targetWin.Number.prototype.toLocaleString === 'function') {
+          const origNumLocale = targetWin.Number.prototype.toLocaleString;
+          Object.defineProperty(targetWin.Number.prototype, 'toLocaleString', {
+            value: createNativeFunction(function toLocaleString(locales, options) {
+              return origNumLocale.call(this, pickLocales(locales), options);
+            }, 'toLocaleString', 0),
+            writable: true, enumerable: false, configurable: true
+          });
+        }
+        if (targetWin.BigInt && targetWin.BigInt.prototype && typeof targetWin.BigInt.prototype.toLocaleString === 'function') {
+          const origBigLocale = targetWin.BigInt.prototype.toLocaleString;
+          Object.defineProperty(targetWin.BigInt.prototype, 'toLocaleString', {
+            value: createNativeFunction(function toLocaleString(locales, options) {
+              return origBigLocale.call(this, pickLocales(locales), options);
+            }, 'toLocaleString', 0),
+            writable: true, enumerable: false, configurable: true
+          });
+        }
+        if (targetWin.String && targetWin.String.prototype) {
+          const strProto = targetWin.String.prototype;
+          if (typeof strProto.localeCompare === 'function') {
+            const origLocaleCompare = strProto.localeCompare;
+            Object.defineProperty(strProto, 'localeCompare', {
+              value: createNativeFunction(function localeCompare(that, locales, options) {
+                return origLocaleCompare.call(this, that, pickLocales(locales), options);
+              }, 'localeCompare', 1),
+              writable: true, enumerable: false, configurable: true
+            });
+          }
+          ['toLocaleLowerCase', 'toLocaleUpperCase'].forEach(fnName => {
+            if (typeof strProto[fnName] !== 'function') return;
+            const origFn = strProto[fnName];
+            Object.defineProperty(strProto, fnName, {
+              value: createNativeFunction(function(locales) {
+                return origFn.call(this, pickLocales(locales));
+              }, fnName, 0),
+              writable: true, enumerable: false, configurable: true
+            });
+          });
+        }
+      } catch (_) {}
+
       // Native Intl Hooking
       if (targetWin.Intl) {
         const OrigIntl = targetWin.Intl;
@@ -3814,20 +3914,21 @@
         if (OrigIntl.DateTimeFormat) {
           const OrigDTF = OrigIntl.DateTimeFormat;
           function DateTimeFormat(locales, options) {
+            const localeArg = pickLocales(locales);
             if (!isShieldActive('timezoneProtection') || !tzSpoofNeeded) {
               // Target zone == real system zone (or protection off): construct
               // through the original constructor so the instance, its resolved
               // options and every formatted string are exactly native.
-              return new.target ? Reflect.construct(OrigDTF, arguments, new.target) : OrigDTF.apply(this, arguments);
+              return new.target ? Reflect.construct(OrigDTF, [localeArg, options], new.target) : OrigDTF(localeArg, options);
             }
-            // Locale passes through natively (entropy-reduction strategy); only
-            // the timezone is aligned with the exit IP.
+            // Timezone is aligned with the exit IP; the locale is either the
+            // language module target (default locale) or the explicit value.
             const hasExplicitTz = !!(options && options.timeZone);
             const opts = Object.assign({}, options);
             if (!opts.timeZone) {
               opts.timeZone = activeTimezone;
             }
-            const inst = new.target ? Reflect.construct(OrigDTF, [locales, opts], new.target) : OrigDTF(locales, opts);
+            const inst = new.target ? Reflect.construct(OrigDTF, [localeArg, opts], new.target) : OrigDTF(localeArg, opts);
             if (!hasExplicitTz) {
               defaultTzInstances.add(inst);
             }
@@ -3890,6 +3991,22 @@
 
           OrigIntl.DateTimeFormat = DateTimeFormat;
         }
+
+        // Default-locale alignment for the other Intl constructors. Explicit
+        // locales still pass through; only the no-locale/empty-array default
+        // is substituted when the language module is active.
+        ['NumberFormat', 'Collator', 'PluralRules', 'RelativeTimeFormat', 'ListFormat', 'DisplayNames', 'Segmenter'].forEach(name => {
+          const Orig = OrigIntl[name];
+          if (!Orig) return;
+          function Wrapped(locales, options) {
+            const localeArg = pickLocales(locales);
+            return new.target ? Reflect.construct(Orig, [localeArg, options], new.target) : Orig.call(this, localeArg, options);
+          }
+          Wrapped.prototype = Orig.prototype;
+          if (Orig.supportedLocalesOf) Wrapped.supportedLocalesOf = Orig.supportedLocalesOf;
+          makeNative(Wrapped, name, Orig.length);
+          OrigIntl[name] = Wrapped;
+        });
       }
     } catch (_) {}
 
@@ -3994,6 +4111,18 @@
       }
     };
 
+    // Language module snapshot for this worker. The navigator getters and
+    // Intl/Date default-locale hooks use the same target as the page.
+    const langNavigatorShield = ${languageNavigatorActive()};
+    const langIntlShield = ${languageIntlActive()};
+    const langTarget = ${jsonLit(shieldConfig.languageTarget)};
+    const langList = ${jsonLit(languageList())};
+    if (langNavigatorShield && nav) {
+      const langArr = Object.freeze(langList.slice());
+      defineProp(navProto, nav, 'language', () => langTarget);
+      defineProp(navProto, nav, 'languages', () => langArr);
+    }
+
     // navigator.deviceMemory / hardwareConcurrency are native on both the
     // main thread and workers (a degraded fixed value cannot stay consistent
     // across realms because SharedWorker cannot be safely wrapped — see the
@@ -4026,7 +4155,8 @@
         const hasExplicitTz = !!(options && options.timeZone);
         const opts = Object.assign({}, options);
         if (!opts.timeZone) opts.timeZone = targetTz;
-        const inst = origDTF.call(this, locales, opts);
+        const localeArg = (langIntlShield && (locales === undefined || (Array.isArray(locales) && locales.length === 0))) ? langTarget : locales;
+        const inst = origDTF.call(this, localeArg, opts);
         if (!hasExplicitTz) {
           try { defaultTzInstances.add(inst); } catch (_) {}
         }
@@ -4046,6 +4176,70 @@
         return res;
       }, 'resolvedOptions');
     }
+
+    // Default-locale alignment for the remaining Intl constructors.
+    if (self.Intl) {
+      ['NumberFormat', 'Collator', 'PluralRules', 'RelativeTimeFormat', 'ListFormat', 'DisplayNames', 'Segmenter'].forEach(name => {
+        const Orig = self.Intl[name];
+        if (!Orig) return;
+        function Wrapped(locales, options) {
+          const localeArg = (langIntlShield && (locales === undefined || (Array.isArray(locales) && locales.length === 0))) ? langTarget : locales;
+          return new.target ? Reflect.construct(Orig, [localeArg, options], new.target) : Orig.call(this, localeArg, options);
+        }
+        Wrapped.prototype = Orig.prototype;
+        if (Orig.supportedLocalesOf) Wrapped.supportedLocalesOf = Orig.supportedLocalesOf;
+        makeNative(Wrapped, name, Orig.length);
+        self.Intl[name] = Wrapped;
+      });
+    }
+
+    // Number/BigInt/String default-locale helpers in worker.
+    try {
+      if (self.Number && self.Number.prototype && typeof self.Number.prototype.toLocaleString === 'function') {
+        const origNumLocale = self.Number.prototype.toLocaleString;
+        Object.defineProperty(self.Number.prototype, 'toLocaleString', {
+          value: makeNative(function toLocaleString(locales, options) {
+            const localeArg = (langIntlShield && (locales === undefined || (Array.isArray(locales) && locales.length === 0))) ? langTarget : locales;
+            return origNumLocale.call(this, localeArg, options);
+          }, 'toLocaleString'),
+          writable: true, enumerable: false, configurable: true
+        });
+      }
+      if (self.BigInt && self.BigInt.prototype && typeof self.BigInt.prototype.toLocaleString === 'function') {
+        const origBigLocale = self.BigInt.prototype.toLocaleString;
+        Object.defineProperty(self.BigInt.prototype, 'toLocaleString', {
+          value: makeNative(function toLocaleString(locales, options) {
+            const localeArg = (langIntlShield && (locales === undefined || (Array.isArray(locales) && locales.length === 0))) ? langTarget : locales;
+            return origBigLocale.call(this, localeArg, options);
+          }, 'toLocaleString'),
+          writable: true, enumerable: false, configurable: true
+        });
+      }
+      if (self.String && self.String.prototype) {
+        const strProto = self.String.prototype;
+        if (typeof strProto.localeCompare === 'function') {
+          const origLocaleCompare = strProto.localeCompare;
+          Object.defineProperty(strProto, 'localeCompare', {
+            value: makeNative(function localeCompare(that, locales, options) {
+              const localeArg = (langIntlShield && (locales === undefined || (Array.isArray(locales) && locales.length === 0))) ? langTarget : locales;
+              return origLocaleCompare.call(this, that, localeArg, options);
+            }, 'localeCompare'),
+            writable: true, enumerable: false, configurable: true
+          });
+        }
+        ['toLocaleLowerCase', 'toLocaleUpperCase'].forEach(fnName => {
+          if (typeof strProto[fnName] !== 'function') return;
+          const origFn = strProto[fnName];
+          Object.defineProperty(strProto, fnName, {
+            value: makeNative(function(locales) {
+              const localeArg = (langIntlShield && (locales === undefined || (Array.isArray(locales) && locales.length === 0))) ? langTarget : locales;
+              return origFn.call(this, localeArg);
+            }, fnName),
+            writable: true, enumerable: false, configurable: true
+          });
+        });
+      }
+    } catch (_) {}
 
     // Date timezone and string formatting in worker: mirrors the main-thread
     // Date hooks (local getters, setters, toLocale*, constructor) on top of
@@ -4163,12 +4357,13 @@
         const origFn = entry[1];
         self.Date.prototype[fnName] = makeNative(function(locales, options) {
           checkDateReceiver(this, fnName);
-          if (!tzSpoofNeeded) return origFn.apply(this, arguments);
+          const localeArg = (langIntlShield && (locales === undefined || (Array.isArray(locales) && locales.length === 0))) ? langTarget : locales;
+          if (!tzSpoofNeeded) return origFn.call(this, localeArg, options);
           const t = origGetTime.call(this);
           if (isNaN(t)) return 'Invalid Date';
           const opts = Object.assign({}, options);
           if (!opts.timeZone) opts.timeZone = targetTz;
-          return origFn.call(this, locales, opts);
+          return origFn.call(this, localeArg, opts);
         }, fnName, 0);
       });
 

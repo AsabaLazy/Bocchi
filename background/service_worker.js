@@ -10,10 +10,10 @@
  *    cache it in chrome.storage.local for content scripts.
  *  - Answer GET_TIMEZONE runtime messages.
  *
- * The extension no longer spoofs any identity headers (User-Agent,
- * Client-Hints, Accept-Language): low-entropy signals are left native.
+ * User-Agent and Client-Hints stay native. Accept-Language is opt-in via the
+ * language module; the dynamic DNR rule below is the only header managed here.
  * High-entropy fingerprint vector randomization is handled entirely by the
- * content-script engine, so no dynamic DNR rules are managed here.
+ * content-script engine.
  */
 
 const DEFAULT_TIMEZONE = 'America/Los_Angeles';
@@ -249,8 +249,74 @@ function setupPeriodicTimezoneAlarm() {
   }
 }
 
+const LANGUAGE_RULE_ID = 9001;
+const LANGUAGE_DEFAULT = 'en-US';
+
+function normalizeLanguageTarget(value) {
+  return (typeof value === 'string' && /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(value)) ? value : LANGUAGE_DEFAULT;
+}
+
+function languageList(target) {
+  const base = target.split('-')[0];
+  return base && base !== target ? [target, base] : [target];
+}
+
+function acceptLanguageValue(target) {
+  return languageList(target).map((lang, i) => i === 0 ? lang : lang + ';q=' + (1 - i * 0.1).toFixed(1)).join(',');
+}
+
+/**
+ * Dynamic Accept-Language header. Kept separate from the static DNT/GPC rule
+ * so it can follow the selected language and the site-bypass list. The
+ * navigator/Intl spoofing in the content engine uses the same target list.
+ */
+async function applyLanguageHeader() {
+  if (typeof chrome === 'undefined' || !chrome.declarativeNetRequest ||
+      !chrome.declarativeNetRequest.getDynamicRules || !chrome.declarativeNetRequest.updateDynamicRules) {
+    return;
+  }
+  try {
+    const res = await chrome.storage.local.get([
+      'globalShieldEnabled', 'languageProtection', 'languageHeader', 'languageTarget', 'siteBypassList'
+    ]);
+    const enabled = res.globalShieldEnabled !== false &&
+      res.languageProtection === true &&
+      res.languageHeader !== false;
+    const existing = await chrome.declarativeNetRequest.getDynamicRules();
+    const removeRuleIds = existing.filter(r => r.id === LANGUAGE_RULE_ID).map(r => r.id);
+    if (!enabled) {
+      await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds });
+      return;
+    }
+    const target = normalizeLanguageTarget(res.languageTarget);
+    const bypass = (Array.isArray(res.siteBypassList) ? res.siteBypassList : [])
+      .map(d => String(d || '').trim().toLowerCase()
+        .replace(/^https?:\/\//, '').replace(/^\*\.?/, '').replace(/^\.+/, '')
+        .split('/')[0].split(':')[0])
+      .filter(Boolean);
+    const condition = {
+      urlFilter: '*',
+      resourceTypes: ['main_frame', 'sub_frame', 'stylesheet', 'script', 'image', 'font', 'object', 'xmlhttprequest', 'ping', 'csp_report', 'media', 'websocket', 'other']
+    };
+    if (bypass.length) condition.excludedRequestDomains = bypass;
+    const rule = {
+      id: LANGUAGE_RULE_ID,
+      priority: 2,
+      action: {
+        type: 'modifyHeaders',
+        requestHeaders: [{ header: 'Accept-Language', operation: 'set', value: acceptLanguageValue(target) }]
+      },
+      condition
+    };
+    await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds, addRules: [rule] });
+  } catch (err) {
+    console.error('[Bocchi Privacy Shield] Failed to apply Accept-Language rule:', err);
+  }
+}
+
 function init() {
   applyWebRTCPolicy();
+  applyLanguageHeader();
   syncTimezone();
   setupPeriodicTimezoneAlarm();
   syncContentScripts();
@@ -282,6 +348,9 @@ if (typeof chrome !== 'undefined' && chrome.runtime) {
       }
       if (area === 'local' && changes.siteBypassList) {
         syncContentScripts();
+      }
+      if (area === 'local' && (changes.globalShieldEnabled || changes.languageProtection || changes.languageHeader || changes.languageTarget || changes.siteBypassList)) {
+        applyLanguageHeader();
       }
     });
   }
@@ -318,6 +387,9 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     DEFAULT_TIMEZONE,
     applyWebRTCPolicy,
+    applyLanguageHeader,
+    normalizeLanguageTarget,
+    acceptLanguageValue,
     fetchEgressInfo,
     fetchEgressTimezone,
     syncTimezone

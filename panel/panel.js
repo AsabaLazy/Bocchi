@@ -643,6 +643,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
       if ($cityNameLanguage) $cityNameLanguage.value = changes.cityNameLanguage.newValue || 'system';
       applyCityLanguage(changes.cityNameLanguage.newValue || 'system');
     }
+    if (changes.languageTarget && $languageTarget) {
+      $languageTarget.value = normalizeLanguageTarget(changes.languageTarget.newValue);
+    }
     for (const key of MODULE_OPTION_KEYS) {
       if (changes[key]) updateModuleOptionUI(key, changes[key].newValue);
     }
@@ -654,7 +657,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 // ── 设置页:模块开关 / 侧栏导航 / 时区信息 ──
-const MODULE_KEYS = ['canvasProtection', 'webrtcProtection', 'audioProtection', 'timezoneProtection', 'geolocationProtection', 'hardwareProtection', 'fontProtection'];
+const MODULE_KEYS = ['canvasProtection', 'webrtcProtection', 'audioProtection', 'timezoneProtection', 'geolocationProtection', 'hardwareProtection', 'fontProtection', 'languageProtection'];
 const moduleInputs = {};
 for (const key of MODULE_KEYS) {
   const el = document.getElementById(key);
@@ -681,7 +684,8 @@ const MODULE_OPTION_KEYS = [
   'canvas2dExport', 'canvas2dPixels', 'canvasWebglExport',
   'audioGetChannelData', 'audioCopyFromChannel',
   'hardwareGpu', 'hardwareScreen', 'hardwareTimer', 'hardwareGamepad',
-  'webrtcDevices', 'webrtcLocalIp', 'webrtcUdp'
+  'webrtcDevices', 'webrtcLocalIp', 'webrtcUdp',
+  'languageNavigator', 'languageIntl', 'languageHeader'
 ];
 
 function updateModuleOptionUI(key, value) {
@@ -910,6 +914,12 @@ const $geoLng = document.getElementById('geoLng');
 const $tzSelect = document.getElementById('tzSelect');
 const $citySearch = document.getElementById('citySearch');
 const $cityNameLanguage = document.getElementById('cityNameLanguage');
+const $languageTarget = document.getElementById('languageTarget');
+
+function normalizeLanguageTarget(value) {
+  if ($languageTarget && Array.from($languageTarget.options).some(o => o.value === value)) return value;
+  return 'en-US';
+}
 const $cityResults = document.getElementById('cityResults');
 const $cursorReadout = document.getElementById('cursorReadout');
 const $coordsPop = document.getElementById('coordsPop');
@@ -1650,7 +1660,7 @@ async function init() {
 
   allFonts.sort((a, b) => a.localeCompare(b));
 
-  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone', 'geolocationLatitude', 'geolocationLongitude', 'ipLatitude', 'ipLongitude', 'ipCity', 'cityNameLanguage', 'theme', ...MODULE_KEYS, ...MODULE_OPTION_KEYS], (res) => {
+  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone', 'geolocationLatitude', 'geolocationLongitude', 'ipLatitude', 'ipLongitude', 'ipCity', 'cityNameLanguage', 'languageTarget', 'theme', ...MODULE_KEYS, ...MODULE_OPTION_KEYS], (res) => {
     fontMode = res.fontMode === 'whitelist' ? 'whitelist' : 'blacklist';
     customHiddenFonts = Array.isArray(res.customHiddenFonts) ? res.customHiddenFonts : [];
     customAllowedFonts = Array.isArray(res.customAllowedFonts) ? res.customAllowedFonts : [];
@@ -1660,7 +1670,7 @@ async function init() {
     // 模块开关默认:位置伪装默认关闭,其余默认开启
     for (const key of MODULE_KEYS) {
       if (!moduleInputs[key]) continue;
-      moduleInputs[key].checked = key === 'geolocationProtection' ? res[key] === true : res[key] !== false;
+      moduleInputs[key].checked = (key === 'geolocationProtection' || key === 'languageProtection') ? res[key] === true : res[key] !== false;
     }
     syncNavDotsFromInputs();
     applyTzUI(res);
@@ -1668,6 +1678,7 @@ async function init() {
     applyIpUI(res);
     if ($cityNameLanguage) $cityNameLanguage.value = res.cityNameLanguage || 'system';
     applyCityLanguage(res.cityNameLanguage || 'system');
+    if ($languageTarget) $languageTarget.value = normalizeLanguageTarget(res.languageTarget);
     for (const key of MODULE_OPTION_KEYS) {
       updateModuleOptionUI(key, res[key]);
     }
@@ -1688,6 +1699,11 @@ if ($cityNameLanguage) {
   $cityNameLanguage.addEventListener('change', () => {
     chrome.storage.local.set({ cityNameLanguage: $cityNameLanguage.value });
     applyCityLanguage($cityNameLanguage.value);
+  });
+}
+if ($languageTarget) {
+  $languageTarget.addEventListener('change', () => {
+    chrome.storage.local.set({ languageTarget: normalizeLanguageTarget($languageTarget.value) });
   });
 }
 

@@ -90,11 +90,22 @@
 
       <div class="module-item">
         <div class="module-info">
-          <span class="module-name">动态时区与语言对齐</span>
-          <span class="module-desc">按出站 IP 自动伪装 Date / Intl 本地化参数</span>
+          <span class="module-name">动态时区对齐</span>
+          <span class="module-desc">按出站 IP 自动对齐 Date / Intl 时区</span>
         </div>
-        <label class="switch switch-sm" title="切换时区与语言对齐">
+        <label class="switch switch-sm" title="切换动态时区对齐">
           <input type="checkbox" id="timezoneProtection" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="module-item">
+        <div class="module-info">
+          <span class="module-name">语言伪装</span>
+          <span class="module-desc">统一 navigator、Intl 与 Accept-Language</span>
+        </div>
+        <label class="switch switch-sm" title="切换语言伪装">
+          <input type="checkbox" id="languageProtection">
           <span class="slider"></span>
         </label>
       </div>

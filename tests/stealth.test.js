@@ -78,8 +78,22 @@ let mockFetchReturn = null;
 let mockFetchError = false;
 const installedListeners = [];
 const startupListeners = [];
+let dynamicRules = [];
+const dynamicRuleUpdates = [];
 
 const mockChrome = {
+  declarativeNetRequest: {
+    async getDynamicRules() { return dynamicRules.slice(); },
+    async updateDynamicRules(opts) {
+      dynamicRuleUpdates.push(opts);
+      if (Array.isArray(opts.removeRuleIds)) {
+        dynamicRules = dynamicRules.filter(r => !opts.removeRuleIds.includes(r.id));
+      }
+      if (Array.isArray(opts.addRules)) {
+        dynamicRules = dynamicRules.concat(opts.addRules);
+      }
+    }
+  },
   privacy: {
     network: {
       webRTCIPHandlingPolicy: {
@@ -165,6 +179,27 @@ assert.strictEqual(startupListeners.length, 1, 'Service worker must register onS
   await swModule.exports.applyWebRTCPolicy();
   assert.strictEqual(policySet, 'default', 'Disabled WebRTC protection must restore the browser default');
   storageData.webrtcProtection = true;
+
+  // Dynamic Accept-Language header follows the opt-in language module and
+  // excludes bypassed domains.
+  storageData.globalShieldEnabled = true;
+  storageData.languageProtection = true;
+  storageData.languageHeader = true;
+  storageData.languageTarget = 'ja-JP';
+  storageData.siteBypassList = ['https://figma.com', 'example.com'];
+  await swModule.exports.applyLanguageHeader();
+  let langRule = dynamicRules.find(r => r.id === 9001);
+  assert(langRule, 'Language module must install a dynamic Accept-Language rule');
+  assert.strictEqual(langRule.action.requestHeaders[0].header, 'Accept-Language', 'Rule must set Accept-Language');
+  assert.strictEqual(langRule.action.requestHeaders[0].value, 'ja-JP,ja;q=0.9', 'Accept-Language must match the target language list');
+  assert.deepStrictEqual(langRule.condition.excludedRequestDomains, ['figma.com', 'example.com'], 'Bypassed domains must be excluded from header spoofing');
+  storageData.languageHeader = false;
+  await swModule.exports.applyLanguageHeader();
+  assert(!dynamicRules.some(r => r.id === 9001), 'Disabling languageHeader must remove the dynamic rule');
+  storageData.languageHeader = true;
+  storageData.languageProtection = false;
+  await swModule.exports.applyLanguageHeader();
+  assert(!dynamicRules.some(r => r.id === 9001), 'Disabling languageProtection must remove the dynamic rule');
 
   const { fetchEgressInfo, fetchEgressTimezone, syncTimezone } = swModule.exports;
   assert(typeof fetchEgressInfo === 'function', 'fetchEgressInfo must be a function');
@@ -2614,6 +2649,31 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     const allFontsEnabled = await winFeat.queryLocalFonts();
     assert(!allFontsEnabled.some(f => f.family === 'SimSun'), 'With fontProtection=true, SimSun must be filtered from queryLocalFonts');
     console.log('✓ Independent feature toggles correctly control individual modules.');
+
+    // 9.3b Language module: navigator and Intl default locale spoofing.
+    const winLang = createMockWindow('language-test.example', 'Linux x86_64');
+    vm.runInContext(stealthCode, vm.createContext(winLang));
+    assert.strictEqual(winLang.navigator.language, 'zh-CN', 'Language module off: navigator.language stays native');
+    driveConfig(winLang, { cfg: { languageProtection: true, languageTarget: 'ja-JP', languageNavigator: true, languageIntl: true } });
+    assert.strictEqual(winLang.navigator.language, 'ja-JP', 'Language module must spoof navigator.language');
+    assert.deepStrictEqual([...winLang.navigator.languages], ['ja-JP', 'ja'], 'Language module must spoof navigator.languages');
+    assert.strictEqual(winLang.navigator.languages, winLang.navigator.languages, 'navigator.languages must have a stable array reference');
+    assert.strictEqual(new winLang.Intl.DateTimeFormat().resolvedOptions().locale, 'ja-JP', 'Intl.DateTimeFormat default locale must follow the target');
+    assert.strictEqual(new winLang.Intl.NumberFormat().resolvedOptions().locale, 'ja-JP', 'Intl.NumberFormat default locale must follow the target');
+    assert.strictEqual(new winLang.Intl.Collator().resolvedOptions().locale, new Intl.Collator('ja-JP').resolvedOptions().locale, 'Intl.Collator default locale must follow the target');
+    assert.strictEqual(new winLang.Intl.NumberFormat([]).resolvedOptions().locale, 'ja-JP', 'Empty locale arrays must use the target default');
+    assert.strictEqual(new winLang.Intl.DateTimeFormat('en-US').resolvedOptions().locale, 'en-US', 'Explicit locales must pass through');
+    driveConfig(winLang, { cfg: { languageTarget: 'de-DE' } });
+    assert.deepStrictEqual([...winLang.navigator.languages], ['de-DE', 'de'], 'Language target changes must update navigator.languages');
+    assert.strictEqual(new winLang.Intl.NumberFormat().resolvedOptions().locale, 'de-DE', 'Language target changes must update Intl defaults');
+    driveConfig(winLang, { cfg: { languageNavigator: false } });
+    assert.strictEqual(winLang.navigator.language, 'zh-CN', 'Disabling languageNavigator must restore native navigator.language');
+    assert.strictEqual(new winLang.Intl.NumberFormat().resolvedOptions().locale, 'de-DE', 'Disabling navigator spoofing must not disable Intl spoofing');
+    driveConfig(winLang, { cfg: { languageIntl: false } });
+    assert.strictEqual(new winLang.Intl.NumberFormat().resolvedOptions().locale, new Intl.NumberFormat().resolvedOptions().locale, 'Disabling languageIntl must restore the native Intl default');
+    driveConfig(winLang, { cfg: { languageProtection: false, languageNavigator: true, languageIntl: true } });
+    assert.strictEqual(winLang.navigator.language, 'zh-CN', 'Language module off must restore native navigator.language');
+    assert.strictEqual(new winLang.Intl.DateTimeFormat().resolvedOptions().locale, nativeDefaultDTFLocale, 'Language module off must restore the native Intl locale');
 
     // 9.4 Other Minority Scripts & Symbol Fonts Batch Toggles (blockOtherScripts / blockSymbols)
     const winOther = createMockWindow('fonts-test.com', 'Linux x86_64');
