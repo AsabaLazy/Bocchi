@@ -9,19 +9,73 @@ const OTHER_SCRIPTS_REGEX = /(?:arabic|kufi|naskh|nastaliq|urdu|hebrew|amiri|ald
 // Regex for identifying symbol/dingbat fonts (independent category)
 const SYMBOLS_REGEX = /(?:math|symbol|emoji|d050000l|z003|standard[ _-]?symbols|wingdings|webdings|dingbats?)/i;
 
+// Must stay in sync with GENERIC_CSS_FAMILIES in content/stealth_engine.js:
+// the engine always lets these through, so the panel must never report them as hidden.
+const GENERIC_CSS_FAMILIES = new Set([
+  'serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui',
+  'ui-sans-serif', 'ui-serif', 'ui-monospace', 'emoji', 'math', 'fangsong'
+]);
+
+// Public suffixes that must never become bypass entries: accepting one would
+// turn the background-generated exclude pattern into "*://*.com/*" and disable
+// injection on every site under that suffix.
+const PUBLIC_SUFFIX_SINGLE = new Set([
+  'com', 'net', 'org', 'edu', 'gov', 'mil', 'int', 'arpa',
+  'info', 'biz', 'name', 'mobi', 'asia', 'pro', 'tel', 'cat', 'jobs', 'aero', 'coop', 'museum', 'travel',
+  'app', 'dev', 'xyz', 'top', 'site', 'online', 'shop', 'store', 'tech', 'cloud', 'club', 'live',
+  'fun', 'icu', 'vip', 'work', 'space', 'website', 'agency', 'digital', 'email', 'media', 'news',
+  'blog', 'page', 'link', 'click', 'download', 'stream', 'review', 'support', 'solutions', 'services',
+  'systems', 'network', 'zone', 'world', 'today', 'life', 'style', 'art', 'design', 'studio',
+  'company', 'center', 'academy', 'education', 'school', 'university', 'institute', 'foundation',
+  'community', 'social', 'global', 'international', 'group', 'team', 'plus', 'one'
+]);
+const PUBLIC_SUFFIX_MULTI = new Set([
+  'co.uk', 'org.uk', 'me.uk', 'ltd.uk', 'plc.uk', 'net.uk', 'ac.uk', 'gov.uk', 'nhs.uk', 'police.uk',
+  'com.cn', 'net.cn', 'org.cn', 'gov.cn', 'edu.cn', 'ac.cn',
+  'co.jp', 'ne.jp', 'or.jp', 'ac.jp', 'go.jp', 'ed.jp', 'gr.jp', 'lg.jp',
+  'co.kr', 'or.kr', 'ne.kr', 're.kr', 'go.kr', 'ac.kr',
+  'com.au', 'net.au', 'org.au', 'edu.au', 'gov.au', 'asn.au', 'id.au',
+  'co.nz', 'net.nz', 'org.nz', 'govt.nz', 'ac.nz',
+  'co.in', 'net.in', 'org.in', 'firm.in', 'gen.in', 'ind.in', 'gov.in', 'ac.in', 'edu.in',
+  'co.za', 'net.za', 'org.za', 'gov.za', 'ac.za',
+  'com.br', 'net.br', 'org.br', 'gov.br', 'edu.br',
+  'com.tw', 'net.tw', 'org.tw', 'idv.tw', 'gov.tw', 'edu.tw',
+  'com.hk', 'net.hk', 'org.hk', 'gov.hk', 'edu.hk', 'idv.hk',
+  'com.sg', 'net.sg', 'org.sg', 'gov.sg', 'edu.sg',
+  'com.mx', 'net.mx', 'org.mx', 'gob.mx', 'edu.mx',
+  'com.ar', 'net.ar', 'org.ar', 'gob.ar', 'edu.ar',
+  'com.tr', 'net.tr', 'org.tr', 'gov.tr', 'edu.tr',
+  'com.ru', 'net.ru', 'org.ru', 'pp.ru',
+  'com.ua', 'net.ua', 'org.ua', 'gov.ua', 'edu.ua',
+  'co.il', 'org.il', 'net.il', 'ac.il', 'gov.il',
+  'com.my', 'net.my', 'org.my', 'gov.my', 'edu.my',
+  'com.ph', 'net.ph', 'org.ph', 'gov.ph', 'edu.ph',
+  'co.th', 'in.th', 'or.th', 'ac.th', 'go.th', 'net.th',
+  'com.vn', 'net.vn', 'org.vn', 'gov.vn', 'edu.vn',
+  'co.id', 'net.id', 'or.id', 'web.id', 'ac.id', 'go.id', 'sch.id',
+  'com.co', 'net.co', 'org.co', 'gov.co', 'edu.co',
+  'com.pe', 'net.pe', 'org.pe', 'gob.pe', 'edu.pe',
+  'com.ng', 'net.ng', 'org.ng', 'gov.ng', 'edu.ng',
+  'github.io', 'pages.dev', 'workers.dev', 'vercel.app', 'netlify.app', 'herokuapp.com',
+  'blogspot.com', 'appspot.com', 'firebaseapp.com', 'web.app', 'onrender.com', 'fly.dev',
+  'glitch.me', 'repl.co', 'replit.app', 'surge.sh', 'ngrok.io', 'ngrok-free.app',
+  'trycloudflare.com', 'azurewebsites.net', 'cloudfront.net', 's3.amazonaws.com',
+  'wordpress.com', 'tumblr.com', 'wixsite.com', 'weebly.com', 'notion.site', 'gitlab.io'
+]);
+
 // DOM Elements
 const $modeControl = document.getElementById('modeControl');
 const $searchInput = document.getElementById('searchInput');
+const $langSelect = document.getElementById('langSelect');
+const $langSelectMenu = document.getElementById('langSelectMenu');
+const $langSelectSummary = document.getElementById('langSelectSummary');
 const $fontCount = document.getElementById('fontCount');
 const $headerToggle = document.getElementById('headerToggle');
 const $iconToggle = document.getElementById('iconToggle');
 const $headerName = document.getElementById('headerName');
 const $iconName = document.getElementById('iconName');
-const $headerCategory = document.getElementById('headerCategory');
-const $iconCategory = document.getElementById('iconCategory');
 const $fontRows = document.getElementById('fontRows');
 const $globalShieldEnabled = document.getElementById('globalShieldEnabled');
-const $statusText = document.getElementById('statusText');
 const $barVis = document.getElementById('barVis');
 const $barHid = document.getElementById('barHid');
 const $nVis = document.getElementById('nVis');
@@ -32,31 +86,79 @@ const $btnSelectAll = document.getElementById('btnSelectAll');
 const $btnInvert = document.getElementById('btnInvert');
 const $btnHideSel = document.getElementById('btnHideSel');
 const $btnShowSel = document.getElementById('btnShowSel');
-const $btnClearSel = document.getElementById('btnClearSel');
 const $btnResetDefaults = document.getElementById('btnResetDefaults');
+const $bypassInput = document.getElementById('bypassInput');
+const $bypassAdd = document.getElementById('bypassAdd');
+const $bypassList = document.getElementById('bypassList');
+const $bypassEmpty = document.getElementById('bypassEmpty');
+const $bypassStatus = document.getElementById('bypassStatus');
+const $exportSettings = document.getElementById('exportSettings');
+const $importSettings = document.getElementById('importSettings');
+const $importSettingsFile = document.getElementById('importSettingsFile');
+const $backupStatus = document.getElementById('backupStatus');
+const $settingsErrorBanner = document.getElementById('settingsErrorBanner');
+const $settingsErrorText = document.getElementById('settingsErrorText');
+const $settingsRetry = document.getElementById('settingsRetry');
 
 // 眼睛图标:可见=睁眼,隐藏=眼斜杠,无需读表头即可理解
 const EYE_ON = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>';
 const EYE_OFF = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><path d="M4 4l16 16"/></svg>';
 
-// 语系徽章:分类识别用文字(图标适合动作,分类需要词汇)
-const CAT_LABEL = { cjk: '中文', latin: '西文', other: '小语种', symbol: '符号' };
-const CAT_TITLE = { cjk: '中文字体', latin: '西文字体', other: '其他语系', symbol: '符号字体' };
+// Language coverage generated from fontconfig into panel/font-language-coverage.json.
+// It powers the multi-select language font selection helper.
+const FONT_LANGUAGE_NAMES = {
+  'zh-Hans': '简体中文', 'zh-Hant': '繁体中文', en: '英文', ja: '日文',
+  ko: '韩文', fr: '法文', pt: '葡萄牙文', ar: '阿拉伯文',
+  fa: '波斯文', ur: '乌尔都文', he: '希伯来文'
+};
 
 // State
 let allFonts = [];
 let customHiddenFonts = [];
 let customAllowedFonts = [];
-let blockBuiltinChineseFonts = true;
+let blockBuiltinChineseFonts = false;
 let blockOtherScripts = false;
 let blockSymbols = false;
 let fontMode = 'blacklist'; // 'blacklist' | 'whitelist'
 let searchQuery = '';
+let fontLanguageCoverage = null;
+const fontIdsByName = new Map();
 let globalShieldEnabled = true; // 与 popup 共用的全局开关(chrome.storage.local.globalShieldEnabled)
 let selectedFonts = new Set(); // 选择集:仅用于批量操作,与每行的隐藏/可见状态互相独立
+let bypassSites = [];
+let settingsLoaded = false; // 初始 storage 读取完成前,禁止任何写入
+let settingsLoadFailed = false;
+const MAX_BYPASS_SITES = 500;
+const MAX_FONT_LIST_ITEMS = 2000;
+const MAX_FONT_ENTRY_LENGTH = 200;
+let currentProcessedFonts = []; // 最近一次渲染的列表,供就地更新复用
+
+document.body.classList.add('settings-loading');
+
+function showSettingsLoadError(detail) {
+  settingsLoadFailed = true;
+  settingsLoaded = false;
+  document.body.classList.remove('settings-loading');
+  document.body.classList.add('settings-error');
+  document.querySelector('.settings-body')?.setAttribute('inert', '');
+  document.querySelector('.masthead-actions')?.setAttribute('inert', '');
+  if ($globalShieldEnabled) $globalShieldEnabled.disabled = true;
+  if ($btnResetDefaults) $btnResetDefaults.disabled = true;
+  if ($fontCount) $fontCount.textContent = '读取设置失败';
+  if ($fontRows) $fontRows.innerHTML = '<div class="no-result">无法读取扩展设置，请刷新页面重试。</div>';
+  if ($settingsErrorBanner) $settingsErrorBanner.hidden = false;
+  if ($settingsErrorText) {
+    $settingsErrorText.textContent = detail || '当前页面不会保存任何修改。请检查扩展状态后刷新重试。';
+  }
+}
+
+if ($settingsRetry) {
+  $settingsRetry.addEventListener('click', () => location.reload());
+}
+
 
 // Sorting State
-let sortField = 'none'; // 'none' | 'toggle' | 'name' | 'category'
+let sortField = 'none'; // 'none' | 'toggle' | 'name'
 let sortOrder = 'default';
 
 function getFontCategory(name) {
@@ -66,20 +168,159 @@ function getFontCategory(name) {
   return 'latin';
 }
 
+function isGenericCssFamily(name) {
+  return GENERIC_CSS_FAMILIES.has(String(name || '').trim().toLowerCase());
+}
+
+function normalizeFontKey(value) {
+  return String(value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function isTypingTarget(target) {
+  if (!target || typeof target !== 'object') return false;
+  const tag = target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  return target.isContentEditable === true;
+}
+
+function sameStringArray(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function normalizeStoredFontList(value) {
+  return Array.isArray(value) ? value.filter(item => typeof item === 'string') : [];
+}
+
+function fontEntryEquals(entry, lowerName) {
+  return typeof entry === 'string' && entry.trim().toLowerCase() === lowerName;
+}
+
+// 导入时使用:去重、过滤空值/超长项,并限制数量。
+function sanitizeFontList(value) {
+  if (!Array.isArray(value)) return [];
+  const result = [];
+  const seen = new Set();
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const trimmed = item.trim();
+    if (!trimmed || item.length > MAX_FONT_ENTRY_LENGTH) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(trimmed);
+    if (result.length >= MAX_FONT_LIST_ITEMS) break;
+  }
+  return result;
+}
+
+function getFontLanguages(name) {
+  if (!fontLanguageCoverage) return [];
+  const id = fontIdsByName.get(name);
+  for (const value of [id, name]) {
+    const raw = String(value || '').trim().toLowerCase();
+    if (raw && Array.isArray(fontLanguageCoverage[raw])) return fontLanguageCoverage[raw];
+    const key = normalizeFontKey(value);
+    if (!key) continue;
+    const languages = fontLanguageCoverage[key];
+    if (Array.isArray(languages)) return languages;
+  }
+  return [];
+}
+
+let languageCountCache = null;
+
+async function loadFontLanguageCoverage() {
+  try {
+    const url = chrome.runtime && chrome.runtime.getURL
+      ? chrome.runtime.getURL('panel/font-language-coverage.json')
+      : 'panel/font-language-coverage.json';
+    const res = await fetch(url);
+    if (res.ok) {
+      fontLanguageCoverage = await res.json();
+      languageCountCache = null;
+      updateLanguageSelectionMenu();
+    }
+  } catch (_) {}
+}
+
+function getLanguageCounts() {
+  if (languageCountCache) return languageCountCache;
+  const counts = Object.create(null);
+  for (const code of Object.keys(FONT_LANGUAGE_NAMES)) counts[code] = 0;
+  for (const name of allFonts) {
+    for (const code of getFontLanguages(name)) {
+      if (Object.prototype.hasOwnProperty.call(counts, code)) counts[code] += 1;
+    }
+  }
+  languageCountCache = counts;
+  return counts;
+}
+
+function updateLanguageSelectionMenu() {
+  if (!$langSelectMenu) return;
+  const checked = [...$langSelectMenu.querySelectorAll('input[data-lang]:checked')].length;
+  if ($langSelectSummary) $langSelectSummary.textContent = checked ? `${checked} 种` : '多选';
+  const counts = getLanguageCounts();
+  $langSelectMenu.querySelectorAll('input[data-lang]').forEach(cb => {
+    const code = cb.dataset.lang;
+    const name = FONT_LANGUAGE_NAMES[code] || code;
+    const count = fontLanguageCoverage ? (counts[code] || 0) : 0;
+    const countEl = cb.closest('.lang-pref-option')?.querySelector('.lang-select-count');
+    if (countEl) countEl.textContent = count ? String(count) : '';
+    cb.disabled = !fontLanguageCoverage || count === 0;
+    cb.title = !fontLanguageCoverage
+      ? '语言覆盖数据未加载'
+      : count
+        ? `支持${name}的字体（${count} 款）`
+        : `未收录${name}字体`;
+  });
+}
+
+function applyLanguageSelection() {
+  if (!$langSelectMenu) return;
+  const checked = [...$langSelectMenu.querySelectorAll('input[data-lang]:checked')].map(cb => cb.dataset.lang);
+  const matched = new Set();
+  if (checked.length) {
+    for (const f of allFonts) {
+      if (getFontLanguages(f).some(code => checked.includes(code))) matched.add(f);
+    }
+  }
+  selectedFonts = matched;
+  refreshAllRowSelection();
+  updateSelectionUI();
+}
+
+function clearLanguageChecks() {
+  if (!$langSelectMenu) return;
+  $langSelectMenu.querySelectorAll('input[data-lang]').forEach(cb => { cb.checked = false; });
+  updateLanguageSelectionMenu();
+}
+
 function isFontChecked(name) {
   const lower = name.toLowerCase();
   if (fontMode === 'blacklist') {
     // 黑名单模式：勾选 = 加入黑名单（隐藏，字体仍正常渲染）
-    if (customAllowedFonts.some(f => f.toLowerCase() === lower)) {
+    if (isGenericCssFamily(name)) return false;
+    if (customAllowedFonts.some(f => fontEntryEquals(f, lower))) {
       return false;
     }
     if (customHiddenFonts.some(r => {
-      const s = r && r.trim();
+      if (typeof r !== 'string') return false;
+      const s = r.trim();
       if (!s) return false;
       if (s.startsWith('/') && s.length > 2 && s.endsWith('/')) {
         try { return new RegExp(s.slice(1, -1), 'i').test(name); } catch (_) {}
       }
-      return lower === s.toLowerCase() || lower.includes(s.toLowerCase());
+      // 与引擎的精确匹配语义保持一致,不做子串匹配
+      return lower === s.toLowerCase();
     })) {
       return true;
     }
@@ -88,12 +329,15 @@ function isFontChecked(name) {
     if (blockSymbols && SYMBOLS_REGEX.test(name)) return true;
     return false;
   } else {
-    // 白名单模式：勾选 = 加入白名单（仅放行勾选字体，不被隐藏）
-    return customAllowedFonts.some(f => f.toLowerCase() === lower);
+    // 白名单模式：勾选 = 加入白名单（仅放行勾选字体，不被隐藏）；通用族始终可见
+    if (isGenericCssFamily(name)) return true;
+    return customAllowedFonts.some(f => fontEntryEquals(f, lower));
   }
 }
 
 function isFontHidden(name) {
+  // 引擎对通用 CSS 族始终放行（见 GENERIC_CSS_FAMILIES），面板不得显示为已隐藏。
+  if (isGenericCssFamily(name)) return false;
   if (fontMode === 'blacklist') {
     return isFontChecked(name);
   } else {
@@ -103,6 +347,8 @@ function isFontHidden(name) {
 }
 
 function saveState() {
+  // 初始 storage 尚未读回时,绝不写入,避免用默认值覆盖已有规则
+  if (!settingsLoaded || settingsLoadFailed) return;
   chrome.storage.local.set({
     fontMode,
     customHiddenFonts,
@@ -132,7 +378,7 @@ function getProcessedFonts() {
       const cat = getFontCategory(f);
       if (searchQuery === '中文' && cat === 'cjk') return true;
       if (searchQuery === '西文' && cat === 'latin') return true;
-      if ((searchQuery === '其他' || searchQuery === '其他语种' || searchQuery === '多语种' || searchQuery === '小语种' || searchQuery === '冷门') && cat === 'other') return true;
+      if ((searchQuery === '其他' || searchQuery === '其他语种' || searchQuery === '多语种' || searchQuery === '小语种' || searchQuery === '其他文字' || searchQuery === '冷门') && cat === 'other') return true;
       if ((searchQuery === '符号' || searchQuery === 'symbol' || searchQuery === 'symbols') && cat === 'symbol') return true;
       return false;
     });
@@ -155,21 +401,6 @@ function getProcessedFonts() {
       if (sortOrder === 'desc') {
         return b.localeCompare(a);
       }
-      return a.localeCompare(b);
-    }
-
-    if (sortField === 'category') {
-      const catA = getFontCategory(a);
-      const catB = getFontCategory(b);
-      const rank = {
-        'cjk-first': { cjk: 0, latin: 1, other: 2, symbol: 3 },
-        'latin-first': { latin: 0, cjk: 1, other: 2, symbol: 3 },
-        'other-first': { other: 0, cjk: 1, latin: 2, symbol: 3 },
-        'symbol-first': { symbol: 0, cjk: 1, latin: 2, other: 3 }
-      }[sortOrder] || { cjk: 0, latin: 1, other: 2, symbol: 3 };
-
-      const diff = rank[catA] - rank[catB];
-      if (diff !== 0) return diff;
       return a.localeCompare(b);
     }
 
@@ -207,33 +438,31 @@ function updateSortHeaders() {
     }
   }
 
-  if ($headerCategory && $iconCategory) {
-    if (sortField === 'category') {
-      // 三种语系优先序视为该列的排序形态,统一报 ascending
-      $iconCategory.textContent = '↑';
-      $headerCategory.classList.add('active');
-      $headerCategory.setAttribute('aria-sort', 'ascending');
-    } else {
-      $iconCategory.textContent = '↕';
-      $headerCategory.classList.remove('active');
-      $headerCategory.setAttribute('aria-sort', 'none');
-    }
-  }
 }
 
-function renderList() {
-  updateSortHeaders();
+function isFontProtectionOn() {
+  const input = moduleInputs['fontProtection'];
+  return input ? input.checked : true;
+}
 
-  // Update font mode UI (点阵按钮的 active 态即当前模式). Scope this to the
-  // font control: module mode buttons reuse .mode-btn and have their own state.
-  if ($modeControl) {
-    $modeControl.querySelectorAll('.mode-btn').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.mode === fontMode);
-    });
-  }
+function isFontEngineActive() {
+  return settingsLoaded && globalShieldEnabled && isFontProtectionOn();
+}
 
-  // 比例条:全库可见/隐藏统计(全局关闭时一切都是"可见"的诚实呈现)
-  const engineActive = globalShieldEnabled;
+function updateEngineClasses() {
+  document.body.classList.toggle('off', !globalShieldEnabled);
+  document.body.classList.toggle('font-off', globalShieldEnabled && !isFontProtectionOn());
+}
+
+function fontEyeTooltip(hidden) {
+  if (!globalShieldEnabled) return '防护已全局关闭：当前没有任何字体被隐藏';
+  if (!isFontProtectionOn()) return '字体防护已关闭：当前没有任何字体被隐藏';
+  return hidden ? '已隐藏，点击恢复可见' : '网站可见，点击隐藏';
+}
+
+// 比例条与计数:全库可见/隐藏统计(引擎未激活时一切都是"可见"的诚实呈现)
+function updateFontStats(matchCount) {
+  const engineActive = isFontEngineActive();
   const nHid = engineActive ? allFonts.filter(f => isFontHidden(f)).length : 0;
   const nVis = allFonts.length - nHid;
   if ($nVis && $nHid && $barVis && $barHid) {
@@ -243,36 +472,79 @@ function renderList() {
     $barVis.style.width = (nVis / tot * 100) + '%';
     $barHid.style.width = (nHid / tot * 100) + '%';
   }
-
-  const list = getProcessedFonts();
-
   if ($fontCount) {
     if (searchQuery) {
-      $fontCount.textContent = `匹配 ${list.length} / ${allFonts.length} 款`;
+      $fontCount.textContent = `匹配 ${matchCount} / ${allFonts.length} 款`;
     } else {
       $fontCount.textContent = `共 ${allFonts.length} 款字体`;
     }
   }
+}
+
+function updateRowElement(row, fontName) {
+  const active = isFontEngineActive();
+  const hidden = active && isFontHidden(fontName);
+  const selected = selectedFonts.has(fontName);
+  const tooltip = fontEyeTooltip(hidden);
+  row.classList.toggle('is-hidden', hidden);
+  row.classList.toggle('selected', selected);
+  row.setAttribute('aria-label', `${fontName}，${hidden ? '已对网站隐藏' : '网站可见'}${selected ? '，已选中' : ''}，点击选择`);
+  const eye = row.querySelector('.eye');
+  if (eye) {
+    eye.innerHTML = hidden ? EYE_OFF : EYE_ON;
+    eye.title = tooltip;
+    eye.setAttribute('aria-label', tooltip);
+  }
+  const cb = row.querySelector('.row-select');
+  if (cb) cb.checked = selected;
+}
+
+function refreshRowsInPlace(fontNames) {
+  const target = fontNames instanceof Set ? fontNames : new Set(fontNames);
+  for (const row of $fontRows.querySelectorAll('.font-row')) {
+    if (!target.has(row.dataset.font)) continue;
+    updateRowElement(row, row.dataset.font);
+  }
+}
+
+function refreshAllRowSelection() {
+  for (const row of $fontRows.querySelectorAll('.font-row')) {
+    const selected = selectedFonts.has(row.dataset.font);
+    row.classList.toggle('selected', selected);
+    const cb = row.querySelector('.row-select');
+    if (cb) cb.checked = selected;
+  }
+}
+
+function renderList(providedList) {
+  if (!settingsLoaded) return;
+  updateSortHeaders();
+  updateEngineClasses();
+
+  // Update font mode UI (点阵按钮的 active 态即当前模式). Scope this to the
+  // font control: module mode buttons reuse .mode-btn and have their own state.
+  if ($modeControl) {
+    $modeControl.querySelectorAll('.mode-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mode === fontMode);
+    });
+  }
+
+  const list = Array.isArray(providedList) ? providedList : getProcessedFonts();
+  currentProcessedFonts = list;
+  updateFontStats(list.length);
 
   if (list.length === 0) {
     $fontRows.innerHTML = `<div class="no-result">${searchQuery ? '未找到匹配的字体' : '未检索到已安装字体'}</div>`;
-    updateSelectionUI();
+    updateSelectionUI(list);
+    updateLanguageSelectionMenu();
     return;
   }
 
+  const engineActive = isFontEngineActive();
   $fontRows.innerHTML = list.map(f => {
-    const checked = isFontChecked(f);
     const hidden = engineActive && isFontHidden(f);
-    const cat = getFontCategory(f);
     const selected = selectedFonts.has(f);
-
-    const badgeClass = 'glyph-badge';
-    const badgeHtml = `<span class="${badgeClass}" title="${CAT_TITLE[cat]}">${CAT_LABEL[cat]}</span>`;
-
-    // 眼睛按钮的语义随模式翻转,但对用户永远只有"可见/隐藏"两种呈现
-    const eyeTooltip = !engineActive
-      ? '防护已全局关闭：当前没有任何字体被隐藏'
-      : (hidden ? '已隐藏，点击恢复可见' : '网站可见，点击隐藏');
+    const eyeTooltip = fontEyeTooltip(hidden);
 
     const rowAria = `${f}，${hidden ? '已对网站隐藏' : '网站可见'}${selected ? '，已选中' : ''}，点击选择`;
 
@@ -281,33 +553,30 @@ function renderList() {
         <div class="col-select">
           <input type="checkbox" class="row-select" data-font="${escapeHtml(f)}" ${selected ? 'checked' : ''} aria-label="选择 ${escapeHtml(f)}">
         </div>
-        <button type="button" class="eye" data-font="${escapeHtml(f)}" title="${eyeTooltip}" aria-label="${eyeTooltip}">${hidden ? EYE_OFF : EYE_ON}</button>
+        <button type="button" class="eye" data-font="${escapeHtml(f)}" title="${eyeTooltip}" aria-label="${eyeTooltip}"${engineActive ? '' : ' disabled'}>${hidden ? EYE_OFF : EYE_ON}</button>
         <div class="col-name">
           <span class="font-title" style="font-family: '${escapeHtml(f)}', sans-serif;">${escapeHtml(f)}</span>
-        </div>
-        <div class="col-badge">
-          ${badgeHtml}
         </div>
       </div>
     `;
   }).join('');
 
-  updateSelectionUI();
+  updateSelectionUI(list);
+  updateLanguageSelectionMenu();
 }
 
 // 选择集 UI:计数、批量按钮可用性、表头全选/半选
-function updateSelectionUI() {
+function updateSelectionUI(list = currentProcessedFonts) {
   const n = selectedFonts.size;
   if ($selCount) $selCount.textContent = n ? `已选 ${n} 项` : '未选择';
-  const actionsDisabled = n === 0 || !globalShieldEnabled;
+  const engineActive = isFontEngineActive();
+  const actionsDisabled = n === 0 || !engineActive;
   if ($btnHideSel) $btnHideSel.disabled = actionsDisabled;
   if ($btnShowSel) $btnShowSel.disabled = actionsDisabled;
-  if ($btnClearSel) $btnClearSel.disabled = n === 0;
 
-  const list = getProcessedFonts();
   if ($selectAllBox) {
     const selCount = list.filter(f => selectedFonts.has(f)).length;
-    $selectAllBox.disabled = list.length === 0 || !globalShieldEnabled;
+    $selectAllBox.disabled = list.length === 0 || !engineActive;
     $selectAllBox.checked = list.length > 0 && selCount === list.length;
     $selectAllBox.indeterminate = selCount > 0 && selCount < list.length;
   }
@@ -316,6 +585,7 @@ function updateSelectionUI() {
 // 选择(不改变可见状态)
 function toggleSelection(fontName) {
   if (!fontName) return;
+  clearLanguageChecks();
   if (selectedFonts.has(fontName)) selectedFonts.delete(fontName);
   else selectedFonts.add(fontName);
   // 就地更新,不重绘列表,保住键盘焦点
@@ -330,34 +600,63 @@ function toggleSelection(fontName) {
 }
 
 function selectAllFiltered() {
-  for (const f of getProcessedFonts()) selectedFonts.add(f);
-  renderList();
+  clearLanguageChecks();
+  const list = getProcessedFonts();
+  currentProcessedFonts = list;
+  for (const f of list) selectedFonts.add(f);
+  refreshAllRowSelection();
+  updateSelectionUI(list);
 }
 
 function invertFiltered() {
-  for (const f of getProcessedFonts()) {
+  clearLanguageChecks();
+  const list = getProcessedFonts();
+  currentProcessedFonts = list;
+  for (const f of list) {
     if (selectedFonts.has(f)) selectedFonts.delete(f);
     else selectedFonts.add(f);
   }
-  renderList();
+  refreshAllRowSelection();
+  updateSelectionUI(list);
 }
 
 function clearSelection() {
+  clearLanguageChecks();
   selectedFonts = new Set();
-  renderList();
+  refreshAllRowSelection();
+  updateSelectionUI();
 }
 
-// Search input
+// Search input: 防抖,避免每个按键都全量过滤+排序
+let searchRenderTimer = null;
 if ($searchInput) {
   $searchInput.addEventListener('input', () => {
     searchQuery = $searchInput.value.trim().toLowerCase();
-    renderList();
+    clearTimeout(searchRenderTimer);
+    searchRenderTimer = setTimeout(() => {
+      searchRenderTimer = null;
+      renderList();
+    }, 100);
   });
 }
+
+// Multi-select languages: checking a language selects every font supporting it.
+if ($langSelectMenu) {
+  $langSelectMenu.addEventListener('change', (e) => {
+    if (e.target.closest('input[data-lang]')) applyLanguageSelection();
+  });
+}
+
+document.addEventListener('click', (e) => {
+  if ($langSelect && $langSelect.open && !e.target.closest('.lang-pref')) {
+    $langSelect.open = false;
+  }
+});
 
 // Mode selector click
 if ($modeControl) {
   $modeControl.addEventListener('click', (e) => {
+    if (!settingsLoaded) return;
     const btn = e.target.closest('.mode-btn');
     if (!btn) return;
     const targetMode = btn.dataset.mode;
@@ -369,6 +668,7 @@ if ($modeControl) {
     }
     // 模式语义翻转后旧选择不再有意义,清空避免批量操作误伤
     selectedFonts = new Set();
+    clearLanguageChecks();
     saveState();
     renderList();
   });
@@ -406,26 +706,6 @@ if ($headerName) {
   });
 }
 
-// Header sorting: Category
-if ($headerCategory) {
-  $headerCategory.addEventListener('click', () => {
-    if (sortField !== 'category') {
-      sortField = 'category';
-      sortOrder = 'cjk-first';
-    } else if (sortOrder === 'cjk-first') {
-      sortOrder = 'latin-first';
-    } else if (sortOrder === 'latin-first') {
-      sortOrder = 'other-first';
-    } else if (sortOrder === 'other-first') {
-      sortOrder = 'symbol-first';
-    } else {
-      sortField = 'none';
-      sortOrder = 'default';
-    }
-    renderList();
-  });
-}
-
 // 表头键盘操作:Enter/Space 触发与点击相同的排序
 document.querySelector('.cols').addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -437,29 +717,31 @@ document.querySelector('.cols').addEventListener('keydown', (e) => {
 
 // 设置单个字体的真实可见状态(黑/白名单模式各自映射回原有存储语义)
 function setFontHidden(fontName, hidden) {
+  // 通用族不受配置影响，绝不写入隐藏/放行列表。
+  if (!fontName || isGenericCssFamily(fontName)) return;
   const lower = fontName.toLowerCase();
   if (fontMode === 'blacklist') {
     if (hidden) {
       // 加入黑名单(隐藏)
-      if (!customHiddenFonts.some(f => f.toLowerCase() === lower)) {
+      if (!customHiddenFonts.some(f => fontEntryEquals(f, lower))) {
         customHiddenFonts.push(fontName);
       }
-      customAllowedFonts = customAllowedFonts.filter(f => f.toLowerCase() !== lower);
+      customAllowedFonts = customAllowedFonts.filter(f => !fontEntryEquals(f, lower));
     } else {
-      // 移出黑名单(可见);被内建规则覆盖的需显式放行
-      customHiddenFonts = customHiddenFonts.filter(f => f.toLowerCase() !== lower);
-      if (CHINESE_FONTS_REGEX.test(fontName) || (blockOtherScripts && OTHER_SCRIPTS_REGEX.test(fontName))) {
-        if (!customAllowedFonts.some(f => f.toLowerCase() === lower)) {
+      // 移出黑名单(可见);正则/内建/符号规则若仍命中,用 allowed 显式放行
+      customHiddenFonts = customHiddenFonts.filter(f => !fontEntryEquals(f, lower));
+      if (isFontHidden(fontName)) {
+        if (!customAllowedFonts.some(f => fontEntryEquals(f, lower))) {
           customAllowedFonts.push(fontName);
         }
       }
     }
   } else {
-    // 白名单模式: allowed 列表 = 可见集合
+    // 白名单模式: allowed 列表 = 可见集合;只移除/添加当前字体,绝不动其他条目
     if (hidden) {
-      customAllowedFonts = customAllowedFonts.filter(f => f.toLowerCase() !== lower);
+      customAllowedFonts = customAllowedFonts.filter(f => !fontEntryEquals(f, lower));
     } else {
-      if (!customAllowedFonts.some(f => f.toLowerCase() === lower)) {
+      if (!customAllowedFonts.some(f => fontEntryEquals(f, lower))) {
         customAllowedFonts.push(fontName);
       }
     }
@@ -468,20 +750,33 @@ function setFontHidden(fontName, hidden) {
 
 // 单行眼睛:直接翻转可见状态
 function toggleFont(fontName) {
-  if (!fontName || !globalShieldEnabled) return; // 全局关闭时不改配置,只读
+  if (!fontName || !isFontEngineActive()) return; // 全局/字体防护关闭时不改配置,只读
   setFontHidden(fontName, !isFontHidden(fontName));
   saveState();
-  renderList();
+  if (sortField === 'toggle') {
+    renderList();
+    return;
+  }
+  refreshRowsInPlace([fontName]);
+  updateFontStats(currentProcessedFonts.length);
+  updateSelectionUI();
 }
 
 // 批量:隐藏/显示所选
 function applyToSelection(hidden) {
-  if (!globalShieldEnabled || selectedFonts.size === 0) return;
-  for (const fontName of selectedFonts) {
+  if (!isFontEngineActive() || selectedFonts.size === 0) return;
+  const affected = [...selectedFonts];
+  for (const fontName of affected) {
     setFontHidden(fontName, hidden);
   }
   saveState();
-  renderList();
+  if (sortField === 'toggle') {
+    renderList();
+    return;
+  }
+  refreshRowsInPlace(affected);
+  updateFontStats(currentProcessedFonts.length);
+  updateSelectionUI();
 }
 
 // 行内交互:眼睛=翻状态,其余区域=选择;复选框走 change
@@ -513,7 +808,6 @@ if ($btnSelectAll) $btnSelectAll.addEventListener('click', selectAllFiltered);
 if ($btnInvert) $btnInvert.addEventListener('click', invertFiltered);
 if ($btnHideSel) $btnHideSel.addEventListener('click', () => applyToSelection(true));
 if ($btnShowSel) $btnShowSel.addEventListener('click', () => applyToSelection(false));
-if ($btnClearSel) $btnClearSel.addEventListener('click', clearSelection);
 if ($selectAllBox) {
   $selectAllBox.addEventListener('change', () => {
     if ($selectAllBox.checked) selectAllFiltered();
@@ -521,25 +815,46 @@ if ($selectAllBox) {
   });
 }
 
-// '/' 聚焦搜索
+// '/' 聚焦当前视图的搜索框;输入控件聚焦时不抢字符(例如在例外输入框里输入 https://)
 document.addEventListener('keydown', (e) => {
-  if (e.key === '/' && document.activeElement !== $searchInput) {
-    e.preventDefault();
-    $searchInput && $searchInput.focus();
-  }
+  if (e.key !== '/' || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (isTypingTarget(e.target)) return;
+  const fontsView = document.getElementById('view-fonts');
+  if (!fontsView || fontsView.hidden || !$searchInput) return;
+  e.preventDefault();
+  $searchInput.focus();
 });
 
-// 恢复默认:字体配置回到初始态(不动全局总开关)
+// 恢复扩展全局默认设置:保护模块、字体、时区、位置、语言回到默认。
+// 保留主题、站点旁路名单、IP 缓存等用户数据。
 function restoreDefaults() {
-  fontMode = 'blacklist';
-  customHiddenFonts = [];
-  customAllowedFonts = [];
-  blockBuiltinChineseFonts = true;
-  blockOtherScripts = false;
-  blockSymbols = false;
-  selectedFonts = new Set();
-  saveState();
-  renderList();
+  const defaults = {
+    globalShieldEnabled: true,
+    fontMode: 'blacklist',
+    customHiddenFonts: [],
+    customAllowedFonts: [],
+    blockBuiltinChineseFonts: false,
+    blockOtherScripts: false,
+    blockSymbols: false,
+    fontProtection: true,
+    canvasProtection: true,
+    webrtcProtection: true,
+    audioProtection: true,
+    timezoneProtection: true,
+    geolocationProtection: false,
+    hardwareProtection: true,
+    languageProtection: false,
+    timezoneMode: 'auto',
+    languageTarget: 'en-US'
+  };
+  for (const key of MODULE_OPTION_KEYS) defaults[key] = true;
+  for (const key of DEFAULT_OFF_OPTION_KEYS) defaults[key] = false;
+  chrome.storage.local.set(defaults, () => {
+    chrome.storage.local.remove([
+      'manualTimezone', 'geoTimezone', 'targetTimezone',
+      'geolocationLatitude', 'geolocationLongitude', 'fontLanguages'
+    ], () => location.reload());
+  });
 }
 
 // 恢复默认按钮:两步确认,防误触清空配置
@@ -551,6 +866,7 @@ function resetButtonIdle() {
 }
 if ($btnResetDefaults) {
   $btnResetDefaults.addEventListener('click', () => {
+    if (!settingsLoaded) return;
     if (!$btnResetDefaults.classList.contains('confirm')) {
       $btnResetDefaults.classList.add('confirm');
       $btnResetDefaults.textContent = '确认恢复？';
@@ -567,18 +883,19 @@ if ($btnResetDefaults) {
 // 全局总开关:与 popup 共用 chrome.storage.local.globalShieldEnabled
 function applyShieldState(enabled) {
   globalShieldEnabled = !!enabled;
-  document.body.classList.toggle('off', !globalShieldEnabled);
+  updateEngineClasses();
   if ($globalShieldEnabled) {
     $globalShieldEnabled.checked = globalShieldEnabled;
-  }
-  if ($statusText) {
-    $statusText.textContent = globalShieldEnabled ? '防护运行中' : '防护已关闭';
   }
   updateLanguagePreview();
 }
 
 if ($globalShieldEnabled) {
   $globalShieldEnabled.addEventListener('change', () => {
+    if (!settingsLoaded) {
+      $globalShieldEnabled.checked = globalShieldEnabled;
+      return;
+    }
     globalShieldEnabled = $globalShieldEnabled.checked;
     chrome.storage.local.set({ globalShieldEnabled });
     applyShieldState(globalShieldEnabled);
@@ -586,76 +903,240 @@ if ($globalShieldEnabled) {
   });
 }
 
+
+// ── 站点旁路管理 ──
+function isValidIpv6Host(host) {
+  try {
+    return new URL('http://' + host).hostname === host;
+  } catch (_) {
+    return false;
+  }
+}
+
+function isPublicSuffixHost(host) {
+  const value = String(host || '').trim().toLowerCase();
+  if (!value || value === 'localhost') return false;
+  if (value.startsWith('[') || value.includes(':')) return false;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(value)) return false;
+  if (PUBLIC_SUFFIX_MULTI.has(value)) return true;
+  if (value.includes('.')) return false;
+  // 所有两字母标签都是 ccTLD；其余单标签只拒绝已知 gTLD，
+  // 保留 localhost 与普通内网主机名。
+  return PUBLIC_SUFFIX_SINGLE.has(value) || /^[a-z]{2}$/.test(value);
+}
+
+function parseBypassSite(raw) {
+  let value = String(raw || '').trim().toLowerCase();
+  if (!value) return { site: '', reason: 'empty' };
+  if (/^[a-z][a-z0-9+.-]*:\/\//.test(value)) {
+    value = value.replace(/^[a-z][a-z0-9+.-]*:\/\//, '').split(/[/?#]/)[0];
+    const at = value.lastIndexOf('@');
+    if (at >= 0) value = value.slice(at + 1);
+  }
+  value = value.replace(/^\*\.?/, '').replace(/^\.+/, '');
+  if (value.startsWith('[')) {
+    const end = value.indexOf(']');
+    if (end < 0) return { site: '', reason: 'invalid' };
+    const host = value.slice(0, end + 1);
+    return /^\[[0-9a-f:.]+\]$/.test(host) && host.includes(':') && isValidIpv6Host(host)
+      ? { site: host, reason: '' }
+      : { site: '', reason: 'invalid' };
+  }
+  value = value.split('/')[0].split(':')[0];
+  if (!value) return { site: '', reason: 'invalid' };
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(value)) {
+    return value.split('.').every(part => Number(part) <= 255)
+      ? { site: value, reason: '' }
+      : { site: '', reason: 'invalid' };
+  }
+  const valid = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value);
+  if (!valid) return { site: '', reason: 'invalid' };
+  if (isPublicSuffixHost(value)) return { site: '', reason: 'public-suffix' };
+  return { site: value, reason: '' };
+}
+
+function normalizeBypassSite(raw) {
+  return parseBypassSite(raw).site;
+}
+
+function setBypassStatus(message, isError = false) {
+  if (!$bypassStatus) return;
+  $bypassStatus.textContent = message || '';
+  $bypassStatus.classList.toggle('error', isError);
+}
+
+function renderBypassList() {
+  if (!$bypassList || !$bypassEmpty) return;
+  const sites = [...new Set(bypassSites.map(normalizeBypassSite).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  $bypassList.replaceChildren();
+  $bypassList.hidden = sites.length === 0;
+  $bypassEmpty.hidden = sites.length > 0;
+  for (const site of sites) {
+    const row = document.createElement('div');
+    row.className = 'opt-row opt-row-select';
+    const copy = document.createElement('span');
+    copy.className = 'opt-copy';
+    const name = document.createElement('span');
+    name.className = 'opt-title bypass-domain';
+    name.textContent = site;
+    copy.appendChild(name);
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'sel-btn';
+    remove.textContent = '移除';
+    remove.setAttribute('aria-label', `移除例外网站 ${site}`);
+    remove.addEventListener('click', () => removeBypassSite(site));
+    row.append(copy, remove);
+    $bypassList.appendChild(row);
+  }
+}
+
+function saveBypassList(message) {
+  chrome.storage.local.set({ siteBypassList: bypassSites }, () => {
+    if (chrome.runtime.lastError) {
+      setBypassStatus('保存失败，请重试。', true);
+      return;
+    }
+    renderBypassList();
+    setBypassStatus(message || '');
+  });
+}
+
+function addBypassSite() {
+  if (!$bypassInput) return;
+  if (!settingsLoaded) {
+    setBypassStatus('设置仍在加载，请稍候。', true);
+    return;
+  }
+  const parsedBypass = parseBypassSite($bypassInput.value);
+  if (!parsedBypass.site) {
+    setBypassStatus(
+      parsedBypass.reason === 'public-suffix'
+        ? '不能加入公共后缀（如 com、co.uk、com.cn），请输入完整域名，例如 example.com。'
+        : '请输入有效的域名或网址，例如 example.com。',
+      true
+    );
+    $bypassInput.focus();
+    return;
+  }
+  const site = parsedBypass.site;
+  if (bypassSites.includes(site)) {
+    setBypassStatus('该网站已在例外名单中。', true);
+    return;
+  }
+  if (bypassSites.length >= MAX_BYPASS_SITES) {
+    setBypassStatus(`例外名单最多 ${MAX_BYPASS_SITES} 个网站，请先移除部分条目。`, true);
+    return;
+  }
+  bypassSites = [...bypassSites, site].sort((a, b) => a.localeCompare(b));
+  $bypassInput.value = '';
+  saveBypassList(`已加入例外：${site}`);
+}
+
+function removeBypassSite(site) {
+  if (!settingsLoaded) return;
+  bypassSites = bypassSites.filter(item => item !== site);
+  saveBypassList(`已移除例外：${site}`);
+}
+
+if ($bypassAdd) $bypassAdd.addEventListener('click', addBypassSite);
+if ($bypassInput) {
+  $bypassInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      addBypassSite();
+    }
+  });
+}
+
 // Cross-tab / storage sync
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local') {
-    let changed = false;
-    if (changes.fontMode) {
-      fontMode = changes.fontMode.newValue === 'whitelist' ? 'whitelist' : 'blacklist';
-      changed = true;
-    }
-    if (changes.customHiddenFonts) {
-      customHiddenFonts = Array.isArray(changes.customHiddenFonts.newValue) ? changes.customHiddenFonts.newValue : [];
-      changed = true;
-    }
-    if (changes.customAllowedFonts) {
-      customAllowedFonts = Array.isArray(changes.customAllowedFonts.newValue) ? changes.customAllowedFonts.newValue : [];
-      changed = true;
-    }
-    if (changes.blockBuiltinChineseFonts) {
-      blockBuiltinChineseFonts = typeof changes.blockBuiltinChineseFonts.newValue === 'boolean' ? changes.blockBuiltinChineseFonts.newValue : true;
-      changed = true;
-    }
-    if (changes.blockOtherScripts) {
-      blockOtherScripts = typeof changes.blockOtherScripts.newValue === 'boolean' ? changes.blockOtherScripts.newValue : false;
-      changed = true;
-    }
-    if (changes.blockSymbols) {
-      blockSymbols = typeof changes.blockSymbols.newValue === 'boolean' ? changes.blockSymbols.newValue : false;
-      changed = true;
-    }
-    if (changes.globalShieldEnabled) {
-      applyShieldState(changes.globalShieldEnabled.newValue !== false);
-      changed = true;
-    }
-    // 模块开关跨上下文同步(popup ↔ 设置页)
-    let moduleChanged = false;
-    for (const key of MODULE_KEYS) {
-      if (changes[key]) {
-        const val = changes[key].newValue !== false;
-        if (moduleInputs[key]) moduleInputs[key].checked = val;
-        moduleChanged = true;
-      }
-    }
-    if (moduleChanged) {
-      syncNavDotsFromInputs();
-      renderConsole();
-    }
-    if (changes.timezone || changes.targetTimezone || changes.timezoneMode || changes.manualTimezone || changes.geoTimezone) {
-      chrome.storage.local.get(['timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone'], applyTzUI);
-    }
-    if (changes.geolocationLatitude || changes.geolocationLongitude) {
-      chrome.storage.local.get(['geolocationLatitude', 'geolocationLongitude'], applyGeoUI);
-    }
-    if (changes.ipLatitude || changes.ipLongitude || changes.ipCity) {
-      chrome.storage.local.get(['ipLatitude', 'ipLongitude', 'ipCity'], applyIpUI);
-    }
-    if (changes.cityNameLanguage) {
-      if ($cityNameLanguage) $cityNameLanguage.value = changes.cityNameLanguage.newValue || 'system';
-      applyCityLanguage(changes.cityNameLanguage.newValue || 'system');
-    }
-    if (changes.languageTarget && $languageTarget) {
-      $languageTarget.value = normalizeLanguageTarget(changes.languageTarget.newValue);
-      updateLanguagePreview();
-    }
-    for (const key of MODULE_OPTION_KEYS) {
-      if (changes[key]) updateModuleOptionUI(key, changes[key].newValue);
-    }
-    if (changes.theme) {
-      applyTheme(changes.theme.newValue);
-    }
-    if (changed) renderList();
+  if (area !== 'local') return;
+  // 初始读取完成前的变更由初始快照覆盖,不在这里重绘/回写
+  if (!settingsLoaded) return;
+  let changed = false;
+  if (changes.fontMode) {
+    const next = changes.fontMode.newValue === 'whitelist' ? 'whitelist' : 'blacklist';
+    if (next !== fontMode) { fontMode = next; changed = true; }
   }
+  if (changes.customHiddenFonts) {
+    const next = normalizeStoredFontList(changes.customHiddenFonts.newValue);
+    if (!sameStringArray(customHiddenFonts, next)) { customHiddenFonts = next; changed = true; }
+  }
+  if (changes.customAllowedFonts) {
+    const next = normalizeStoredFontList(changes.customAllowedFonts.newValue);
+    if (!sameStringArray(customAllowedFonts, next)) { customAllowedFonts = next; changed = true; }
+  }
+  if (changes.blockBuiltinChineseFonts) {
+    const next = changes.blockBuiltinChineseFonts.newValue === true;
+    if (next !== blockBuiltinChineseFonts) { blockBuiltinChineseFonts = next; changed = true; }
+  }
+  if (changes.blockOtherScripts) {
+    const next = changes.blockOtherScripts.newValue === true;
+    if (next !== blockOtherScripts) { blockOtherScripts = next; changed = true; }
+  }
+  if (changes.blockSymbols) {
+    const next = changes.blockSymbols.newValue === true;
+    if (next !== blockSymbols) { blockSymbols = next; changed = true; }
+  }
+  if (changes.globalShieldEnabled) {
+    const next = changes.globalShieldEnabled.newValue !== false;
+    if (next !== globalShieldEnabled) {
+      applyShieldState(next);
+      changed = true;
+    }
+  }
+  // 模块开关跨上下文同步(popup ↔ 设置页)
+  let moduleChanged = false;
+  let fontEngineChanged = false;
+  for (const key of MODULE_KEYS) {
+    if (!changes[key]) continue;
+    const val = changes[key].newValue !== false;
+    const input = moduleInputs[key];
+    const wasChecked = input ? input.checked : undefined;
+    if (input && wasChecked !== val) input.checked = val;
+    if (key === 'fontProtection' && wasChecked !== val) fontEngineChanged = true;
+    if (wasChecked !== val) moduleChanged = true;
+  }
+  if (moduleChanged) {
+    syncNavDotsFromInputs();
+    renderConsole();
+  }
+  if (changes.timezone || changes.targetTimezone || changes.timezoneMode || changes.manualTimezone || changes.geoTimezone) {
+    storageGet(['timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone'])
+      .then(applyTzUI)
+      .catch(() => {});
+  }
+  if (changes.geolocationLatitude || changes.geolocationLongitude) {
+    storageGet(['geolocationLatitude', 'geolocationLongitude'])
+      .then(applyGeoUI)
+      .catch(() => {});
+  }
+  if (changes.ipLatitude || changes.ipLongitude || changes.ipCity) {
+    storageGet(['ipLatitude', 'ipLongitude', 'ipCity'])
+      .then(applyIpUI)
+      .catch(() => {});
+  }
+  if (changes.languageTarget && $languageTarget) {
+    $languageTarget.value = normalizeLanguageTarget(changes.languageTarget.newValue);
+    updateLanguagePreview();
+  }
+  for (const key of MODULE_OPTION_KEYS) {
+    if (changes[key]) updateModuleOptionUI(key, changes[key].newValue);
+  }
+  if (changes.theme) {
+    applyTheme(changes.theme.newValue);
+  }
+  if (changes.siteBypassList) {
+    const rawList = Array.isArray(changes.siteBypassList.newValue) ? changes.siteBypassList.newValue : [];
+    const cleaned = sanitizeBypassSites(rawList);
+    bypassSites = cleaned;
+    renderBypassList();
+    if (!sameStringArray(rawList, cleaned)) {
+      chrome.storage.local.set({ siteBypassList: cleaned }, () => { void chrome.runtime.lastError; });
+    }
+  }
+  if (changed || fontEngineChanged) renderList();
 });
 
 // ── 设置页:模块开关 / 侧栏导航 / 时区信息 ──
@@ -678,8 +1159,10 @@ function syncNavDotsFromInputs() {
 
 for (const [key, el] of Object.entries(moduleInputs)) {
   el.addEventListener('change', () => {
+    if (!settingsLoaded) return;
     chrome.storage.local.set({ [key]: el.checked });
     onModuleToggle(key, el.checked);
+    if (key === 'fontProtection') renderList();
   });
 }
 
@@ -687,9 +1170,225 @@ const MODULE_OPTION_KEYS = [
   'canvas2dExport', 'canvas2dPixels', 'canvasWebglExport',
   'audioGetChannelData', 'audioCopyFromChannel',
   'hardwareGpu', 'hardwareScreen', 'hardwareTimer', 'hardwareGamepad',
+  'webrtcBlockSupport', 'webrtcBlockDevices', 'webrtcBlockObjects',
   'webrtcDevices', 'webrtcLocalIp', 'webrtcUdp',
   'languageNavigator', 'languageIntl', 'languageHeader'
 ];
+const DEFAULT_OFF_OPTION_KEYS = new Set(['webrtcBlockSupport', 'webrtcBlockDevices', 'webrtcBlockObjects', 'webrtcUdp', 'hardwareGamepad']);
+
+const SETTINGS_EXPORT_KEYS = [
+  'globalShieldEnabled', ...MODULE_KEYS, ...MODULE_OPTION_KEYS,
+  'fontMode', 'customHiddenFonts', 'customAllowedFonts',
+  'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols',
+  'languageTarget', 'timezoneMode', 'manualTimezone', 'geoTimezone', 'targetTimezone',
+  'geolocationLatitude', 'geolocationLongitude', 'siteBypassList', 'theme'
+];
+const SETTINGS_BOOLEAN_KEYS = new Set([
+  'globalShieldEnabled', ...MODULE_KEYS, ...MODULE_OPTION_KEYS,
+  'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols'
+]);
+const SETTINGS_STRING_KEYS = new Set([
+  'fontMode', 'languageTarget', 'timezoneMode', 'manualTimezone',
+  'geoTimezone', 'targetTimezone', 'theme'
+]);
+const SETTINGS_NUMBER_KEYS = new Set(['geolocationLatitude', 'geolocationLongitude']);
+
+function storageGet(keys) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get(keys, (res) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message || 'storage read failed'));
+        return;
+      }
+      resolve(res || {});
+    });
+  });
+}
+
+function setBackupStatus(message, isError = false) {
+  if (!$backupStatus) return;
+  $backupStatus.textContent = message || '';
+  $backupStatus.classList.toggle('error', isError);
+}
+
+async function exportSettings() {
+  try {
+    const values = await storageGet(SETTINGS_EXPORT_KEYS);
+    const payload = {
+      format: 'bocchi-settings',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      settings: values
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `bocchi-settings-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setBackupStatus('设置已导出。');
+  } catch (err) {
+    console.error('Failed to export settings:', err);
+    setBackupStatus('导出失败，请重试。', true);
+  }
+}
+
+const ALLOWED_FONT_MODES = new Set(['blacklist', 'whitelist']);
+const ALLOWED_TIMEZONE_MODES = new Set(['auto', 'geo', 'manual']);
+const ALLOWED_THEMES = new Set(['system', 'dark', 'light']);
+
+function sanitizeTimezone(value) {
+  if (typeof value !== 'string') return null;
+  const zone = value.trim();
+  if (!zone || zone.length > 100) return null;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: zone }).format(new Date(0));
+    return zone;
+  } catch (_) {
+    return null;
+  }
+}
+
+function sanitizeLanguageTargetValue(value) {
+  if (typeof value !== 'string' || !value) return null;
+  if ($languageTarget) {
+    return Array.from($languageTarget.options).some(o => o.value === value) ? value : null;
+  }
+  // 严格 BCP 47 结构(语言-脚本-地区-变体),避免写入任意字符串
+  return /^[A-Za-z]{2,3}(?:-[A-Za-z]{4})?(?:-(?:[A-Za-z]{2}|\d{3}))?(?:-[A-Za-z0-9]{5,8})*$/.test(value) ? value : null;
+}
+
+function sanitizeCoordinate(key, value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  if (key === 'geolocationLatitude') return value >= -90 && value <= 90 ? value : null;
+  return value >= -180 && value <= 180 ? value : null;
+}
+
+function sanitizeBypassSites(value) {
+  const sites = [];
+  const seen = new Set();
+  for (const raw of value) {
+    if (typeof raw !== 'string') continue;
+    const site = normalizeBypassSite(raw);
+    if (!site || seen.has(site)) continue;
+    seen.add(site);
+    sites.push(site);
+    if (sites.length >= MAX_BYPASS_SITES) break;
+  }
+  return sites;
+}
+
+function sanitizeImportedSettings(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  if (data.settings !== undefined &&
+      (data.settings === null || typeof data.settings !== 'object' || Array.isArray(data.settings))) {
+    return null;
+  }
+  const source = data.settings && typeof data.settings === 'object' ? data.settings : data;
+  const result = {};
+  const dropped = new Set();
+  const rejectedPublicSuffixes = new Set();
+  for (const key of SETTINGS_EXPORT_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+    const value = source[key];
+    let accepted = false;
+
+    if (SETTINGS_BOOLEAN_KEYS.has(key)) {
+      if (typeof value === 'boolean') { result[key] = value; accepted = true; }
+    } else if (key === 'fontMode') {
+      if (ALLOWED_FONT_MODES.has(value)) { result[key] = value; accepted = true; }
+    } else if (key === 'timezoneMode') {
+      if (ALLOWED_TIMEZONE_MODES.has(value)) { result[key] = value; accepted = true; }
+    } else if (key === 'theme') {
+      if (ALLOWED_THEMES.has(value)) { result[key] = value; accepted = true; }
+    } else if (key === 'languageTarget') {
+      const target = sanitizeLanguageTargetValue(value);
+      if (target) { result[key] = target; accepted = true; }
+    } else if (key === 'manualTimezone' || key === 'geoTimezone' || key === 'targetTimezone') {
+      const zone = sanitizeTimezone(value);
+      if (zone) { result[key] = zone; accepted = true; }
+    } else if (SETTINGS_NUMBER_KEYS.has(key)) {
+      const coordinate = sanitizeCoordinate(key, value);
+      if (coordinate !== null) { result[key] = coordinate; accepted = true; }
+    } else if (key === 'customHiddenFonts' || key === 'customAllowedFonts') {
+      if (Array.isArray(value)) {
+        result[key] = sanitizeFontList(value);
+        if (result[key].length !== value.length) dropped.add(key);
+        accepted = true;
+      }
+    } else if (key === 'siteBypassList') {
+      if (Array.isArray(value)) {
+        for (const raw of value) {
+          if (typeof raw !== 'string') continue;
+          if (parseBypassSite(raw).reason === 'public-suffix') {
+            rejectedPublicSuffixes.add(raw.trim());
+          }
+        }
+        result[key] = sanitizeBypassSites(value);
+        if (result[key].length !== value.length) dropped.add(key);
+        accepted = true;
+      }
+    } else if (SETTINGS_STRING_KEYS.has(key) && typeof value === 'string') {
+      result[key] = value;
+      accepted = true;
+    }
+
+    if (!accepted) dropped.add(key);
+  }
+  return Object.keys(result).length
+    ? { settings: result, dropped: [...dropped], rejectedPublicSuffixes: [...rejectedPublicSuffixes] }
+    : null;
+}
+
+async function importSettings(file) {
+  if (!file) return;
+  try {
+    if (file.size > 1024 * 1024) {
+      setBackupStatus('文件过大，设置备份应小于 1 MB。', true);
+      return;
+    }
+    const parsed = JSON.parse(await file.text());
+    const sanitized = sanitizeImportedSettings(parsed);
+    if (!sanitized) {
+      setBackupStatus('没有找到可导入的有效 Bocchi 设置。', true);
+      return;
+    }
+    if (!window.confirm('导入会覆盖当前防护设置和网站例外名单，是否继续？')) return;
+    chrome.storage.local.set(sanitized.settings, () => {
+      if (chrome.runtime.lastError) {
+        setBackupStatus('导入失败，请重试。', true);
+        return;
+      }
+      const notes = [];
+      if (sanitized.rejectedPublicSuffixes.length) {
+        const preview = sanitized.rejectedPublicSuffixes.slice(0, 3).join('、');
+        notes.push(`已拒绝公共后缀 ${preview}${sanitized.rejectedPublicSuffixes.length > 3 ? ' 等' : ''}`);
+      }
+      if (sanitized.dropped.length) {
+        notes.push(`已忽略 ${sanitized.dropped.length} 项无效设置`);
+      }
+      const ignored = notes.length ? `（${notes.join('；')}）` : '';
+      setBackupStatus(`设置已导入${ignored}，正在刷新…`);
+      setTimeout(() => location.reload(), 350);
+    });
+  } catch (err) {
+    console.error('Failed to import settings:', err);
+    setBackupStatus('无法读取该文件，请选择有效的 JSON 设置备份。', true);
+  }
+}
+
+if ($exportSettings) $exportSettings.addEventListener('click', exportSettings);
+if ($importSettings && $importSettingsFile) {
+  $importSettings.addEventListener('click', () => $importSettingsFile.click());
+  $importSettingsFile.addEventListener('change', () => {
+    const file = $importSettingsFile.files && $importSettingsFile.files[0];
+    importSettings(file).finally(() => { $importSettingsFile.value = ''; });
+  });
+}
+
 
 function updateModuleOptionUI(key, value) {
   const el = document.getElementById(key);
@@ -702,6 +1401,7 @@ function setupModuleOptions() {
     const el = document.getElementById(key);
     if (!el) continue;
     el.addEventListener('change', () => {
+      if (!settingsLoaded) return;
       chrome.storage.local.set({ [key]: el.checked });
       updateLanguagePreview();
     });
@@ -719,7 +1419,7 @@ function showView(name) {
     v.hidden = !match;
     if (match) found = true;
   });
-  if (!found) name = 'fonts';
+  if (!found) name = 'canvas';
   document.querySelectorAll('.nav-item').forEach(b => {
     b.setAttribute('aria-current', b.dataset.view === name ? 'page' : 'false');
   });
@@ -729,7 +1429,7 @@ function showView(name) {
 document.querySelectorAll('.nav-item').forEach(btn => {
   btn.addEventListener('click', () => showView(btn.dataset.view));
 });
-window.addEventListener('hashchange', () => showView((location.hash || '#fonts').slice(1)));
+window.addEventListener('hashchange', () => showView((location.hash || '#canvas').slice(1)));
 
 // 时区 / 位置控制台:地图是唯一交互面,两个眼睛是信号层
 const GEO_DEFAULT = { lat: 34.0522, lng: -118.2437 };
@@ -847,6 +1547,10 @@ function loadOnlineCityNames(lang) {
   updateCityNameStatus('在线获取中…');
   chrome.storage.local.get(['cityNameCache'], (cached) => {
     if (token !== onlineNamesToken) return;
+    if (chrome.runtime.lastError) {
+      fetchOnlineCityNames(lang, token);
+      return;
+    }
     const cache = (cached && cached.cityNameCache) || {};
     if (cache[lang] && Object.keys(cache[lang]).length) {
       onlineCityNames = cache[lang];
@@ -899,6 +1603,7 @@ async function fetchOnlineCityNames(lang, token) {
   updateCityNameStatus(count === 0 ? '在线获取失败，已回退英文' : (missing > 0 || failed ? '部分回退英文' : ''));
   if (count) {
     chrome.storage.local.get(['cityNameCache'], (cached) => {
+      if (chrome.runtime.lastError) return;
       const cache = (cached && cached.cityNameCache) || {};
       cache[lang] = result;
       chrome.storage.local.set({ cityNameCache: cache });
@@ -918,7 +1623,6 @@ const $geoLat = document.getElementById('geoLat');
 const $geoLng = document.getElementById('geoLng');
 const $tzSelect = document.getElementById('tzSelect');
 const $citySearch = document.getElementById('citySearch');
-const $cityNameLanguage = document.getElementById('cityNameLanguage');
 const $languageTarget = document.getElementById('languageTarget');
 
 function normalizeLanguageTarget(value) {
@@ -1006,7 +1710,12 @@ function timeIn(zone) {
 }
 function dateIn(zone) {
   try {
-    return formatter(dateFmtCache, zone, { locale: 'zh-CN', options: { month: 'long', day: 'numeric', weekday: 'short' } }).format(new Date());
+    const parts = formatter(dateFmtCache, zone, {
+      locale: 'zh-CN',
+      options: { year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' }
+    }).formatToParts(new Date());
+    const part = type => (parts.find(p => p.type === type) || {}).value || '';
+    return `${part('year')}-${part('month')}-${part('day')} ${part('weekday')}`.trim();
   } catch (_) { return ''; }
 }
 function tzOffsetLabel(zone) {
@@ -1160,10 +1869,12 @@ function refreshGeoTimezone() {
 }
 
 function saveGeo() {
+  if (!settingsLoaded) return;
   chrome.storage.local.set({ geolocationLatitude: geoLat, geolocationLongitude: geoLng });
 }
 
 function commitPin() {
+  if (!settingsLoaded) return;
   saveGeo();
   if (tzMode === 'geo') {
     const derived = nearestTz(geoLat, geoLng);
@@ -1203,7 +1914,7 @@ function renderConsole() {
   const pinLabel = $pin.querySelector('.tp-pin-label');
   if (pinLabel) pinLabel.textContent = placeDisplay;
 
-  // 虚线圆 = 当前出口 IP 的大致位置;粉点 = 伪装坐标。
+  // 虚线圆 = 当前出口 IP 的大致位置;定位点 = 伪装坐标。
   // 精确坐标缺失时,用出口 IP 的时区代表城市估算,保证这个参考始终可见。
   let ipRef = null;
   let ipExact = false;
@@ -1216,7 +1927,7 @@ function renderConsole() {
   if (ipRef) {
     const ipP = toXY(ipRef.lat, ipRef.lng);
     const near = Math.hypot(ipP.x - pinP.x, ipP.y - pinP.y) <= 8;
-    // 粉点已经落在出口 IP 上时，不再叠加虚线圈、标签和连线。
+    // 定位点已经落在出口 IP 上时，不再叠加虚线圈、标签和连线。
     if (near) {
       $ipMarker.classList.add('off');
       $ipArc.setAttribute('hidden', '');
@@ -1232,8 +1943,8 @@ function renderConsole() {
       }
       if ($ipTitle) {
         $ipTitle.textContent = ipExact
-          ? '当前出口 IP 的大致位置' + (ipCity ? ' · ' + ipCity : '') + ` · ${ipLat.toFixed(2)}, ${ipLng.toFixed(2)}`
-          : '按出口 IP 的时区估算 · ' + autoTzValue;
+          ? '当前出口 IP 的大致位置' + (ipCity ? '，' + ipCity : '') + `，${ipLat.toFixed(2)}, ${ipLng.toFixed(2)}`
+          : '按出口 IP 的时区估算，' + autoTzValue;
       }
       drawArc({ lat: geoLat, lng: geoLng }, ipRef);
     }
@@ -1245,7 +1956,7 @@ function renderConsole() {
   const placeName = document.getElementById('tpPlace');
   const placeEn = document.getElementById('tpPlaceEn');
   if (placeName) placeName.textContent = placeDisplay;
-  if (placeEn) placeEn.textContent = placeSecondary;
+  if (placeEn) placeEn.textContent = placeSecondary ? `(${placeSecondary})` : '';
   setClock(timeIn(zone));
   const dateLine = document.getElementById('tpDate');
   if (dateLine) dateLine.textContent = dateIn(zone);
@@ -1262,27 +1973,21 @@ function renderConsole() {
     chip.classList.toggle('active', on);
     chip.setAttribute('aria-pressed', on ? 'true' : 'false');
   });
-  document.querySelectorAll('.tp-layer').forEach(layer => {
-    const on = layer.dataset.layer === 'tz' ? tzOn : geoOn;
-    layer.classList.toggle('on', on);
-    layer.setAttribute('aria-pressed', on ? 'true' : 'false');
-  });
   if ($tzSelect) $tzSelect.hidden = tzMode !== 'manual';
 
   const mismatch = tzOn && geoOn && tzMode !== 'geo' && !!derived && zone !== derived;
   if ($tzMismatch) $tzMismatch.hidden = !mismatch;
 
+  // Normal mode is already legible from the active source chip; only surface exceptions.
   let note = '';
   if (!tzOn) note = '时区层已关闭，网站看到真实时区';
   else if (!geoOn && tzMode === 'geo') note = '位置层已关闭，时区回退出口 IP';
-  else if (tzMode === 'geo') note = '时区跟随位置';
-  else if (tzMode === 'auto') note = '时区由出口 IP 决定';
-  else note = '时区已手动锁定';
   if ($tzNote) $tzNote.textContent = note;
 }
 
 // 时区来源
 function setTzSource(mode) {
+  if (!settingsLoaded) return;
   if (mode === 'geo') {
     if (!geoLayerOn()) {
       const input = moduleInputs['geolocationProtection'];
@@ -1317,20 +2022,10 @@ document.querySelectorAll('.tp-chip').forEach(chip => {
 if ($tzMismatch) $tzMismatch.addEventListener('click', () => setTzSource('geo'));
 if ($tzSelect) {
   $tzSelect.addEventListener('change', () => {
+    if (!settingsLoaded) return;
     chrome.storage.local.set({ manualTimezone: $tzSelect.value, timezoneMode: 'manual' });
   });
 }
-
-// 图层眼睛:直接切换现有模块开关
-document.querySelectorAll('.tp-layer').forEach(layer => {
-  layer.addEventListener('click', () => {
-    const key = layer.dataset.layer === 'tz' ? 'timezoneProtection' : 'geolocationProtection';
-    const input = moduleInputs[key];
-    if (!input) return;
-    input.checked = !input.checked;
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-  });
-});
 
 // 模块开关变化:开启位置层时,时区默认跟随位置(仅从自动切换)
 function onModuleToggle(key, on) {
@@ -1364,7 +2059,7 @@ function setPin(lat, lng) {
   renderConsole();
 }
 
-// 拖动粉点:实时预览,松手提交
+// 拖动定位点:实时预览,松手提交
 if ($pin) {
   $pin.addEventListener('pointerdown', (e) => {
     e.preventDefault();
@@ -1472,6 +2167,7 @@ function renderCityResults(query) {
 }
 
 function selectCity(city) {
+  if (!settingsLoaded) return;
   if ($citySearch) $citySearch.value = '';
   if ($cityResults) $cityResults.hidden = true;
   if (!geoLayerOn()) {
@@ -1547,10 +2243,12 @@ if ($citySearch) {
   });
 }
 document.addEventListener('keydown', (e) => {
-  if (e.key === '/' && e.target !== $citySearch && !/^(INPUT|SELECT|TEXTAREA)$/.test((e.target && e.target.tagName) || '')) {
-    e.preventDefault();
-    if ($citySearch) $citySearch.focus();
-  }
+  if (e.key !== '/' || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (isTypingTarget(e.target)) return;
+  const tzView = document.getElementById('view-timezone');
+  if (!tzView || tzView.hidden || !$citySearch) return;
+  e.preventDefault();
+  $citySearch.focus();
 });
 document.addEventListener('click', (e) => {
   if ($cityResults && !$cityResults.hidden && !e.target.closest('.tp-search-wrap')) {
@@ -1563,6 +2261,7 @@ const $tpCoords = document.getElementById('tpCoords');
 const $coordsApply = document.getElementById('coordsApply');
 const $coordsClose = document.getElementById('coordsClose');
 function applyCoordsInputs() {
+  if (!settingsLoaded) return;
   const lat = parseFloat($geoLat && $geoLat.value);
   const lng = parseFloat($geoLng && $geoLng.value);
   if (!isFinite(lat) || !isFinite(lng)) return;
@@ -1599,8 +2298,9 @@ if ($coordsClose) $coordsClose.addEventListener('click', () => { if ($coordsPop)
 const $geoProtection = document.getElementById('geolocationProtection');
 if ($geoProtection) {
   $geoProtection.addEventListener('change', () => {
-    if (!$geoProtection.checked) return;
+    if (!settingsLoaded || !$geoProtection.checked) return;
     chrome.storage.local.get(['geolocationLatitude', 'geolocationLongitude'], (r) => {
+      if (chrome.runtime.lastError) return;
       if (typeof r.geolocationLatitude !== 'number' || typeof r.geolocationLongitude !== 'number') {
         chrome.storage.local.set({ geolocationLatitude: geoLat, geolocationLongitude: geoLng });
       }
@@ -1666,6 +2366,7 @@ function applyTheme(pref) {
 
 if ($themeToggle) {
   $themeToggle.addEventListener('click', () => {
+    if (!settingsLoaded) return;
     const next = THEME_CYCLE[(THEME_CYCLE.indexOf(themePref) + 1) % THEME_CYCLE.length];
     chrome.storage.local.set({ theme: next });
     applyTheme(next);
@@ -1679,72 +2380,257 @@ themeMedia.addEventListener('change', () => {
 
 // Initialize
 async function init() {
-  await loadCityData();
   try {
-    if (chrome.fontSettings && chrome.fontSettings.getFontList) {
-      const list = await chrome.fontSettings.getFontList();
-      allFonts = list.map(f => f.displayName || f.fontId).filter(Boolean);
+    await loadCityData();
+    await loadFontLanguageCoverage();
+    try {
+      if (chrome.fontSettings && chrome.fontSettings.getFontList) {
+        const list = await chrome.fontSettings.getFontList();
+        const records = list
+          .map(f => ({ name: f.displayName || f.fontId, id: f.fontId }))
+          .filter(r => r.name);
+        allFonts = records.map(r => r.name);
+        fontIdsByName.clear();
+        for (const record of records) fontIdsByName.set(record.name, record.id);
+      }
+    } catch (err) {
+      console.error('Failed to get fonts via chrome.fontSettings:', err);
     }
-  } catch (err) {
-    console.error('Failed to get fonts via chrome.fontSettings:', err);
-  }
 
-  if (!allFonts || allFonts.length === 0) {
-    allFonts = [
-      'Arial', 'Arimo', 'Courier New', 'DejaVu Sans', 'DejaVu Serif', 'Liberation Mono',
-      'Liberation Sans', 'Liberation Serif', 'Microsoft YaHei', 'Noto Sans CJK SC',
-      'Noto Serif CJK SC', 'Noto Sans Arabic', 'PingFang SC', 'SimSun', 'SimHei', 'WenQuanYi Micro Hei'
-    ];
-  }
-
-  allFonts.sort((a, b) => a.localeCompare(b));
-
-  chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone', 'geolocationLatitude', 'geolocationLongitude', 'ipLatitude', 'ipLongitude', 'ipCity', 'cityNameLanguage', 'languageTarget', 'theme', ...MODULE_KEYS, ...MODULE_OPTION_KEYS], (res) => {
-    fontMode = res.fontMode === 'whitelist' ? 'whitelist' : 'blacklist';
-    customHiddenFonts = Array.isArray(res.customHiddenFonts) ? res.customHiddenFonts : [];
-    customAllowedFonts = Array.isArray(res.customAllowedFonts) ? res.customAllowedFonts : [];
-    blockBuiltinChineseFonts = typeof res.blockBuiltinChineseFonts === 'boolean' ? res.blockBuiltinChineseFonts : true;
-    blockOtherScripts = typeof res.blockOtherScripts === 'boolean' ? res.blockOtherScripts : false;
-    blockSymbols = typeof res.blockSymbols === 'boolean' ? res.blockSymbols : false;
-    // 模块开关默认:位置伪装默认关闭,其余默认开启
-    for (const key of MODULE_KEYS) {
-      if (!moduleInputs[key]) continue;
-      moduleInputs[key].checked = (key === 'geolocationProtection' || key === 'languageProtection') ? res[key] === true : res[key] !== false;
+    if (!allFonts || allFonts.length === 0) {
+      allFonts = [
+        'Arial', 'Arimo', 'Courier New', 'DejaVu Sans', 'DejaVu Serif', 'Liberation Mono',
+        'Liberation Sans', 'Liberation Serif', 'Microsoft YaHei', 'Noto Sans CJK SC',
+        'Noto Serif CJK SC', 'Noto Sans Arabic', 'PingFang SC', 'SimSun', 'SimHei', 'WenQuanYi Micro Hei'
+      ];
     }
-    syncNavDotsFromInputs();
-    applyTzUI(res);
-    applyGeoUI(res);
-    applyIpUI(res);
-    if ($cityNameLanguage) $cityNameLanguage.value = res.cityNameLanguage || 'system';
-    applyCityLanguage(res.cityNameLanguage || 'system');
-    if ($languageTarget) $languageTarget.value = normalizeLanguageTarget(res.languageTarget);
-    for (const key of MODULE_OPTION_KEYS) {
-      updateModuleOptionUI(key, res[key]);
-    }
-    if (!(typeof res.ipLatitude === 'number' && typeof res.ipLongitude === 'number') &&
-        typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+
+    allFonts.sort((a, b) => a.localeCompare(b));
+    languageCountCache = null;
+
+    chrome.storage.local.get(['customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'blockOtherScripts', 'blockSymbols', 'fontMode', 'globalShieldEnabled', 'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone', 'geolocationLatitude', 'geolocationLongitude', 'ipLatitude', 'ipLongitude', 'ipCity', 'languageTarget', 'theme', 'siteBypassList', ...MODULE_KEYS, ...MODULE_OPTION_KEYS], (res) => {
+      if (chrome.runtime.lastError) {
+        console.error('Failed to read settings:', chrome.runtime.lastError);
+        showSettingsLoadError('扩展设置读取失败，当前页面不会保存任何修改。请刷新设置页重试。');
+        return;
+      }
       try {
-        chrome.runtime.sendMessage({ type: 'SYNC_EGRESS' }, () => { void chrome.runtime.lastError; });
-      } catch (_) {}
-    }
-    applyTheme(res.theme);
-    applyShieldState(res.globalShieldEnabled !== false);
-    showView((location.hash || '#fonts').slice(1));
-    renderList();
-  });
+        // 读回成功前 settingsLoaded 保持 false,saveState 与交互入口全部拒绝写入。
+        fontMode = res.fontMode === 'whitelist' ? 'whitelist' : 'blacklist';
+        customHiddenFonts = normalizeStoredFontList(res.customHiddenFonts);
+        customAllowedFonts = normalizeStoredFontList(res.customAllowedFonts);
+        blockBuiltinChineseFonts = typeof res.blockBuiltinChineseFonts === 'boolean' ? res.blockBuiltinChineseFonts : false;
+        blockOtherScripts = typeof res.blockOtherScripts === 'boolean' ? res.blockOtherScripts : false;
+        blockSymbols = typeof res.blockSymbols === 'boolean' ? res.blockSymbols : false;
+        settingsLoaded = true;
+        // 模块开关默认:位置伪装默认关闭,其余默认开启
+        for (const key of MODULE_KEYS) {
+          if (!moduleInputs[key]) continue;
+          moduleInputs[key].checked = (key === 'geolocationProtection' || key === 'languageProtection') ? res[key] === true : res[key] !== false;
+        }
+        syncNavDotsFromInputs();
+        applyTzUI(res);
+        applyGeoUI(res);
+        applyIpUI(res);
+        applyCityLanguage('system');
+        if ($languageTarget) $languageTarget.value = normalizeLanguageTarget(res.languageTarget);
+        const storedBypass = Array.isArray(res.siteBypassList) ? res.siteBypassList : [];
+        bypassSites = sanitizeBypassSites(storedBypass);
+        if (!sameStringArray(storedBypass, bypassSites)) {
+          chrome.storage.local.set({ siteBypassList: bypassSites }, () => { void chrome.runtime.lastError; });
+        }
+        renderBypassList();
+        for (const key of MODULE_OPTION_KEYS) {
+          updateModuleOptionUI(key, DEFAULT_OFF_OPTION_KEYS.has(key) ? res[key] === true : res[key]);
+        }
+        if (!(typeof res.ipLatitude === 'number' && typeof res.ipLongitude === 'number') &&
+            typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+          try {
+            chrome.runtime.sendMessage({ type: 'SYNC_EGRESS' }, () => { void chrome.runtime.lastError; });
+          } catch (_) {}
+        }
+        applyTheme(res.theme);
+        applyShieldState(res.globalShieldEnabled !== false);
+        showView((location.hash || '#canvas').slice(1));
+        renderList();
+        if ($settingsErrorBanner) $settingsErrorBanner.hidden = true;
+        document.body.classList.remove('settings-loading', 'settings-error');
+      } catch (err) {
+        console.error('Failed to apply settings:', err);
+        showSettingsLoadError('扩展设置已读取，但页面初始化失败。请刷新设置页重试。');
+      }
+    });
+  } catch (err) {
+    console.error('Failed to initialize settings panel:', err);
+    showSettingsLoadError('扩展设置初始化失败，当前页面不会保存任何修改。请刷新设置页重试。');
+  }
 }
 
-if ($cityNameLanguage) {
-  $cityNameLanguage.addEventListener('change', () => {
-    chrome.storage.local.set({ cityNameLanguage: $cityNameLanguage.value });
-    applyCityLanguage($cityNameLanguage.value);
-  });
-}
 if ($languageTarget) {
   $languageTarget.addEventListener('change', () => {
+    if (!settingsLoaded) return;
     chrome.storage.local.set({ languageTarget: normalizeLanguageTarget($languageTarget.value) });
     updateLanguagePreview();
   });
 }
+
+// ── 模块帮助：标题旁的小问号，点击列出每个子选项的具体影响 ──
+const helpPopover = document.createElement('div');
+helpPopover.className = 'help-popover';
+helpPopover.hidden = true;
+helpPopover.setAttribute('role', 'dialog');
+helpPopover.setAttribute('aria-modal', 'false');
+document.body.appendChild(helpPopover);
+let activeHelpTrigger = null;
+
+function escapeHelpText(value) {
+  return String(value).replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[ch]));
+}
+
+function normalizeHelpLabel(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function collectHelpEntries(viewId) {
+  const view = document.getElementById('view-' + viewId);
+  if (!view) return [];
+  const entries = [];
+  const push = (title, text) => {
+    const cleanTitle = normalizeHelpLabel(title);
+    const cleanText = normalizeHelpLabel(text);
+    if (cleanTitle && cleanText) entries.push({ title: cleanTitle, text: cleanText });
+  };
+
+  if (viewId === 'fonts') {
+    view.querySelectorAll('.mode-btn[data-help]').forEach(btn => {
+      push('默认行为：' + normalizeHelpLabel(btn.textContent), btn.dataset.help);
+    });
+    const langTrigger = view.querySelector('.lang-pref-trigger[data-help]');
+    if (langTrigger) {
+      push(normalizeHelpLabel(langTrigger.querySelector('.ctl-label')?.textContent) || '按语言选择', langTrigger.dataset.help);
+    }
+    view.querySelectorAll('.sel-btn[data-help]').forEach(btn => {
+      push(btn.textContent, btn.dataset.help);
+    });
+    const resetBtn = document.getElementById('btnResetDefaults');
+    if (resetBtn?.dataset.help) push('恢复默认', resetBtn.dataset.help);
+    return entries;
+  }
+
+  if (viewId === 'bypass') {
+    return [
+      { title: '网站例外', text: '加入例外后，该网站不会加载防护脚本，页面级保护会停用；全局追踪拦截和视频通话网络策略仍会生效。' },
+      { title: '添加网站', text: '输入域名或网址即可，支持子域；保存后刷新该网站即可生效。' },
+      { title: '移除网站', text: '从名单移除后，刷新该网站即可恢复防护。' },
+      { title: '导出设置', text: '导出防护开关、子选项、字体、语言、时区、设备和网站例外名单；不包含 IP 与时区缓存。' },
+      { title: '导入设置', text: '从 JSON 备份恢复设置；导入前会再次确认，导入后刷新设置页。' }
+    ];
+  }
+
+  if (viewId === 'timezone') {
+    view.querySelectorAll('.tp-layer-switch').forEach(label => {
+      push(label.firstElementChild?.textContent, label.querySelector('.switch[data-help]')?.dataset.help);
+    });
+    view.querySelectorAll('.tp-chip[data-help]').forEach(btn => {
+      push(btn.textContent, btn.dataset.help);
+    });
+    return entries;
+  }
+
+  view.querySelectorAll('.opt-row').forEach(row => {
+    const help = row.dataset.help || row.querySelector('[data-help]')?.dataset.help;
+    push(row.querySelector('.opt-title')?.textContent, help);
+  });
+  return entries;
+}
+
+function closeHelpPopover(restoreFocus = false) {
+  const trigger = activeHelpTrigger;
+  if (trigger) trigger.setAttribute('aria-expanded', 'false');
+  activeHelpTrigger = null;
+  helpPopover.hidden = true;
+  if (restoreFocus && trigger) trigger.focus();
+}
+
+function openHelpPopover(trigger) {
+  const viewId = trigger.dataset.helpView;
+  const entries = collectHelpEntries(viewId);
+  if (!entries.length) return;
+
+  closeHelpPopover(false);
+  const title = normalizeHelpLabel(trigger.closest('.view-title')?.querySelector('h2')?.textContent) || '选项';
+  helpPopover.innerHTML = `
+    <div class="help-popover-head">
+      <span>${escapeHelpText(title)} 选项说明</span>
+      <button type="button" class="help-popover-close" aria-label="关闭说明">×</button>
+    </div>
+    <div class="help-popover-body">
+      ${entries.map(entry => `
+        <div class="help-entry">
+          <div class="help-entry-title">${escapeHelpText(entry.title)}</div>
+          <div class="help-entry-note"><b>说明：</b>${escapeHelpText(entry.text)}</div>
+        </div>
+      `).join('')}
+    </div>`;
+  helpPopover.setAttribute('aria-label', title + ' 选项说明');
+  helpPopover.hidden = false;
+  helpPopover.style.visibility = 'hidden';
+  activeHelpTrigger = trigger;
+  trigger.setAttribute('aria-expanded', 'true');
+  helpPopover.querySelector('.help-popover-close')?.addEventListener('click', () => closeHelpPopover(true));
+
+  const triggerRect = trigger.getBoundingClientRect();
+  const popRect = helpPopover.getBoundingClientRect();
+  const margin = 12;
+  let left = triggerRect.left;
+  if (left + popRect.width > window.innerWidth - margin) {
+    left = window.innerWidth - popRect.width - margin;
+  }
+  left = Math.max(margin, left);
+  let top = triggerRect.bottom + 8;
+  if (top + popRect.height > window.innerHeight - margin) {
+    top = Math.max(margin, triggerRect.top - popRect.height - 8);
+  }
+  helpPopover.style.left = Math.round(left) + 'px';
+  helpPopover.style.top = Math.round(top) + 'px';
+  helpPopover.style.visibility = 'visible';
+  requestAnimationFrame(() => { if (!helpPopover.hidden) helpPopover.querySelector('.help-popover-close')?.focus({ preventScroll: true }); });
+}
+
+document.querySelectorAll('.help-trigger').forEach(trigger => {
+  trigger.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (activeHelpTrigger === trigger) closeHelpPopover(true);
+    else openHelpPopover(trigger);
+  });
+});
+
+document.addEventListener('click', event => {
+  if (helpPopover.hidden) return;
+  if (!(event.target instanceof Element)) return;
+  if (event.target.closest('.help-popover') || event.target.closest('.help-trigger')) return;
+  closeHelpPopover();
+});
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !helpPopover.hidden) {
+    event.preventDefault();
+    closeHelpPopover(true);
+  }
+});
+
+window.addEventListener('resize', () => {
+  if (!helpPopover.hidden) closeHelpPopover();
+});
+
+window.addEventListener('scroll', event => {
+  if (helpPopover.hidden) return;
+  if (event.target instanceof Node && helpPopover.contains(event.target)) return;
+  closeHelpPopover();
+}, true);
+
 
 init();

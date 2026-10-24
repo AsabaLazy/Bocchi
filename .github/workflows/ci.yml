@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# tests/lib/live_harness.js uses the global WebSocket (Node >= 22). Keep every
+# job on the same supported major so the unit and browser gates exercise the
+# same runtime.
+env:
+  CHROME_FOR_TESTING_VERSION: '156.0.8078.47'
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check
+        run: |
+          node --check background/service_worker.js
+          node --check content/bridge.js
+          node --check content/stealth_engine.js
+          node --check panel/panel.js
+          node --check panel/world-map.js
+          node --check popup/popup.js
+
+      # Explicit gates. `npm test` alone is not sufficient evidence: the
+      # runner also requires the suite's success marker and a non-zero
+      # assertion count, so a swallowed async failure cannot pass.
+      - name: Unit tests (exit code + success marker + assertion count)
+        run: node tests/run_all.js unit
+
+      - name: Timezone matrix (gated per timezone)
+        run: node tests/run_all.js tz
+
+      # Exact store-zip allowlist plus manifest/package.json/CHANGELOG version
+      # agreement. No browser required.
+      - name: Package allowlist and version verification
+        run: node tests/run_all.js package
+
+      # The live/benchmark/soak suites need Chromium with --load-extension.
+      # They are optional diagnostics and are intentionally NOT part of this
+      # job: no unstable third-party network tests gate merges.
+
+  extension:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The font whitelist/prefix assertions need both families installed.
+      # tests/extension_smoke.js intentionally fails instead of silently
+      # skipping when they are absent.
+      - name: Install Noto fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-noto-core
+          fc-match -f '%{family}\n' 'Noto Sans' | grep -qx 'Noto Sans'
+          fc-match -f '%{family}\n' 'Noto Sans Arabic' | grep -qx 'Noto Sans Arabic'
+
+      # Branded Chrome 137+ ignores --load-extension; Chrome for Testing still
+      # supports it. Pin the exact CfT build (verified locally) instead of
+      # `chrome@stable`, so a fresh upstream release cannot silently change
+      # native surfaces between runs.
+      - name: Install pinned Chrome for Testing
+        run: npx --yes @puppeteer/browsers install "chrome@${CHROME_FOR_TESTING_VERSION}" --path /tmp/cft
+      - name: Extension registration/injection smoke
+        run: |
+          CHROME_BIN="$(find /tmp/cft -type f -name chrome | head -n 1)"
+          test -n "$CHROME_BIN"
+          echo "CHROME_BIN=$CHROME_BIN"
+          "$CHROME_BIN" --version
+          "$CHROME_BIN" --version | grep -F "${CHROME_FOR_TESTING_VERSION}"
+          CHROME_BIN="$CHROME_BIN" node tests/run_all.js extension

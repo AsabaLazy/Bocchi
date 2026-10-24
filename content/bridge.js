@@ -48,6 +48,7 @@
     'canvas2dExport', 'canvas2dPixels', 'canvasWebglExport',
     'audioGetChannelData', 'audioCopyFromChannel',
     'hardwareGpu', 'hardwareScreen', 'hardwareTimer', 'hardwareGamepad',
+    'webrtcBlockSupport', 'webrtcBlockDevices', 'webrtcBlockObjects',
     'webrtcDevices', 'webrtcLocalIp'
   ];
 
@@ -59,13 +60,117 @@
     'canvas2dExport', 'canvas2dPixels', 'canvasWebglExport',
     'audioGetChannelData', 'audioCopyFromChannel',
     'hardwareGpu', 'hardwareScreen', 'hardwareTimer', 'hardwareGamepad',
+    'webrtcBlockSupport', 'webrtcBlockDevices', 'webrtcBlockObjects',
     'webrtcDevices', 'webrtcLocalIp',
     'blockOtherScripts', 'blockSymbols'
   ];
 
+  const LANGUAGE_DEFAULT = 'en-US';
+
+  // Keep in sync with background/service_worker.js: a public suffix is not a
+  // bypassable site. Forwarding `com`/`co.uk` would make the engine treat
+  // every site under that suffix as bypassed.
+  const PUBLIC_SUFFIX_SINGLE = new Set([
+    'com', 'net', 'org', 'edu', 'gov', 'mil', 'int', 'arpa',
+    'info', 'biz', 'name', 'mobi', 'asia', 'pro', 'tel', 'cat', 'jobs', 'aero', 'coop', 'museum', 'travel',
+    'app', 'dev', 'xyz', 'top', 'site', 'online', 'shop', 'store', 'tech', 'cloud', 'club', 'live',
+    'fun', 'icu', 'vip', 'work', 'space', 'website', 'agency', 'digital', 'email', 'media', 'news',
+    'blog', 'page', 'link', 'click', 'download', 'stream', 'review', 'support', 'solutions', 'services',
+    'systems', 'network', 'zone', 'world', 'today', 'life', 'style', 'art', 'design', 'studio',
+    'company', 'center', 'academy', 'education', 'school', 'university', 'institute', 'foundation',
+    'community', 'social', 'global', 'international', 'group', 'team', 'plus', 'one'
+  ]);
+
+  const PUBLIC_SUFFIX_ONLY_HOSTS = new Set([
+    'ac.uk', 'co.uk', 'gov.uk', 'ltd.uk', 'me.uk', 'net.uk', 'nhs.uk', 'org.uk', 'plc.uk', 'police.uk', 'sch.uk',
+    'ac.cn', 'com.cn', 'edu.cn', 'gov.cn', 'mil.cn', 'net.cn', 'org.cn',
+    'ac.jp', 'ad.jp', 'co.jp', 'ed.jp', 'go.jp', 'gr.jp', 'lg.jp', 'ne.jp', 'or.jp',
+    'asn.au', 'com.au', 'edu.au', 'gov.au', 'id.au', 'net.au', 'org.au',
+    'ac.nz', 'co.nz', 'geek.nz', 'gen.nz', 'govt.nz', 'kiwi.nz', 'maori.nz', 'net.nz', 'org.nz', 'school.nz',
+    'co.kr', 'go.kr', 'mil.kr', 'ne.kr', 'or.kr', 'pe.kr', 're.kr',
+    'com.br', 'edu.br', 'gov.br', 'net.br', 'org.br',
+    'ac.in', 'co.in', 'edu.in', 'firm.in', 'gen.in', 'gov.in', 'ind.in', 'mil.in', 'net.in', 'org.in',
+    'com.tw', 'edu.tw', 'gov.tw', 'idv.tw', 'net.tw', 'org.tw',
+    'com.hk', 'edu.hk', 'gov.hk', 'idv.hk', 'net.hk', 'org.hk',
+    'com.sg', 'edu.sg', 'gov.sg', 'net.sg', 'org.sg', 'per.sg',
+    'ac.za', 'co.za', 'edu.za', 'gov.za', 'net.za', 'org.za',
+    'com.mx', 'edu.mx', 'gob.mx', 'net.mx', 'org.mx',
+    'com.tr', 'edu.tr', 'gov.tr', 'net.tr', 'org.tr',
+    'ac.il', 'co.il', 'gov.il', 'muni.il', 'net.il', 'org.il',
+    'com.ar', 'edu.ar', 'gob.ar', 'gov.ar', 'net.ar', 'org.ar',
+    'com.co', 'edu.co', 'gov.co', 'net.co', 'org.co',
+    'com.pe', 'edu.pe', 'gob.pe', 'net.pe', 'org.pe',
+    'com.cl', 'edu.cl', 'gob.cl', 'gov.cl', 'net.cl', 'org.cl',
+    'ac.id', 'co.id', 'go.id', 'mil.id', 'net.id', 'or.id', 'web.id',
+    'ac.th', 'co.th', 'go.th', 'in.th', 'net.th', 'or.th',
+    'ac.ke', 'co.ke', 'go.ke', 'ne.ke', 'or.ke', 'sc.ke',
+    'com.ng', 'edu.ng', 'gov.ng', 'net.ng', 'org.ng',
+    'com.eg', 'edu.eg', 'gov.eg', 'net.eg', 'org.eg',
+    'github.io', 'gitlab.io', 'herokuapp.com', 'netlify.app', 'pages.dev', 'vercel.app'
+  ]);
+
+  function isBarePublicSuffix(host) {
+    if (host === 'localhost' || host.endsWith('.localhost')) return false;
+    // Keep ordinary single-label intranet hosts; only bare TLDs are rejected.
+    if (!host.includes('.')) {
+      return /^[a-z]{2}$/.test(host) || PUBLIC_SUFFIX_SINGLE.has(host);
+    }
+    return PUBLIC_SUFFIX_ONLY_HOSTS.has(host);
+  }
+
   function normalizeDomain(d) {
     if (!d || typeof d !== 'string') return '';
-    return d.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^\*\.?/, '').replace(/^\.+/, '').split('/')[0].split(':')[0];
+    let s = d.trim().toLowerCase();
+    if (!s) return '';
+    // Strip scheme/credentials/path without relying on URL.hostname (also
+    // keeps bracket IPv6 literals intact for exclusion matching).
+    if (/^[a-z][a-z0-9+.-]*:\/\//.test(s)) {
+      s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//, '').split(/[/?#]/)[0];
+      const at = s.lastIndexOf('@');
+      if (at >= 0) s = s.slice(at + 1);
+    }
+    s = s.replace(/^\*\.?/, '').replace(/^\.+/, '');
+    if (s.startsWith('[')) {
+      const end = s.indexOf(']');
+      if (end < 0) return '';
+      const host = s.slice(0, end + 1);
+      return /^\[[0-9a-f:.]+\]$/.test(host) && host.includes(':') ? host : '';
+    }
+    s = s.split('/')[0].split(':')[0].replace(/\.+$/, '');
+    if (!s) return '';
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(s)) {
+      return s.split('.').every(part => Number(part) <= 255) ? s : '';
+    }
+    if (!/^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(s)) return '';
+    return isBarePublicSuffix(s) ? '' : s;
+  }
+
+  // Strict validators for values that cross into the MAIN world. The engine
+  // trusts authenticated payloads, so a malformed storage value must be
+  // normalized here rather than forwarded as-is.
+  function normalizeLanguageTarget(value) {
+    if (typeof value !== 'string') return LANGUAGE_DEFAULT;
+    const v = value.trim();
+    return /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(v) ? v : LANGUAGE_DEFAULT;
+  }
+
+  function normalizeTimezone(value) {
+    if (typeof value !== 'string') return '';
+    const tz = value.trim();
+    if (!tz || tz.length > 64) return '';
+    if (!/^[A-Za-z][A-Za-z0-9_+\-]*(?:\/[A-Za-z0-9_+\-]+)*$/.test(tz)) return '';
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: tz });
+      return tz;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function normalizeCoordinate(value, min, max) {
+    return (typeof value === 'number' && isFinite(value) && value >= min && value <= max)
+      ? value
+      : undefined;
   }
 
   function calculateIsBypassed(siteBypassList) {
@@ -129,7 +234,7 @@
     return {
       customFonts: Array.isArray(res && res.customHiddenFonts) ? res.customHiddenFonts : [],
       allowedFonts: Array.isArray(res && res.customAllowedFonts) ? res.customAllowedFonts : [],
-      blockBuiltin: res && typeof res.blockBuiltinChineseFonts === 'boolean' ? res.blockBuiltinChineseFonts : true,
+      blockBuiltin: res && typeof res.blockBuiltinChineseFonts === 'boolean' ? res.blockBuiltinChineseFonts : false,
       fontMode: res && typeof res.fontMode === 'string' ? res.fontMode : 'blacklist',
       blockOtherScripts: res && typeof res.blockOtherScripts === 'boolean' ? res.blockOtherScripts : false,
       blockSymbols: res && typeof res.blockSymbols === 'boolean' ? res.blockSymbols : false,
@@ -140,13 +245,18 @@
   function buildGeoDetail(res) {
     return {
       enabled: res ? res.geolocationProtection === true : false,
-      latitude: res && typeof res.geolocationLatitude === 'number' ? res.geolocationLatitude : undefined,
-      longitude: res && typeof res.geolocationLongitude === 'number' ? res.geolocationLongitude : undefined
+      latitude: normalizeCoordinate(res && res.geolocationLatitude, -90, 90),
+      longitude: normalizeCoordinate(res && res.geolocationLongitude, -180, 180)
     };
   }
 
   function buildCfgDetail(res) {
-    const bypassList = Array.isArray(res && res.siteBypassList) ? res.siteBypassList : [];
+    // Drop invalid and public-suffix entries before they reach the engine:
+    // the engine's own matcher only checks host suffix semantics, so a
+    // stored `com` would bypass every .com site if forwarded.
+    const bypassList = Array.isArray(res && res.siteBypassList)
+      ? res.siteBypassList.filter(site => !!normalizeDomain(site))
+      : [];
     return {
       globalShieldEnabled: res ? res.globalShieldEnabled !== false : true,
       isBypassed: calculateIsBypassed(bypassList),
@@ -158,7 +268,7 @@
       hardwareProtection: res ? res.hardwareProtection !== false : true,
       fontProtection: res ? res.fontProtection !== false : true,
       languageProtection: res ? res.languageProtection === true : false,
-      languageTarget: res && typeof res.languageTarget === 'string' ? res.languageTarget : 'en-US',
+      languageTarget: normalizeLanguageTarget(res && res.languageTarget),
       languageNavigator: res ? res.languageNavigator !== false : true,
       languageIntl: res ? res.languageIntl !== false : true,
       canvas2dExport: res ? res.canvas2dExport !== false : true,
@@ -169,7 +279,10 @@
       hardwareGpu: res ? res.hardwareGpu !== false : true,
       hardwareScreen: res ? res.hardwareScreen !== false : true,
       hardwareTimer: res ? res.hardwareTimer !== false : true,
-      hardwareGamepad: res ? res.hardwareGamepad !== false : true,
+      hardwareGamepad: res ? res.hardwareGamepad === true : false,
+      webrtcBlockSupport: res ? res.webrtcBlockSupport === true : false,
+      webrtcBlockDevices: res ? res.webrtcBlockDevices === true : false,
+      webrtcBlockObjects: res ? res.webrtcBlockObjects === true : false,
       webrtcDevices: res ? res.webrtcDevices !== false : true,
       webrtcLocalIp: res ? res.webrtcLocalIp !== false : true,
       blockOtherScripts: res ? !!res.blockOtherScripts : false,
@@ -204,13 +317,15 @@
     const mode = res && res.timezoneMode === 'manual' ? 'manual' : (res && res.timezoneMode === 'geo' ? 'geo' : 'auto');
     const manual = res && typeof res.manualTimezone === 'string' ? res.manualTimezone : '';
     const ipTz = (res && (res.timezone || res.targetTimezone)) || '';
-    if (mode === 'manual') return manual;
+    if (mode === 'manual') return normalizeTimezone(manual);
     if (mode === 'geo') {
       // 位置模块关闭时与面板一致:回退出口 IP,不跟随一个并未生效的位置
       const geoOn = res && res.geolocationProtection === true;
-      return (geoOn && typeof res.geoTimezone === 'string' && res.geoTimezone) || ipTz;
+      return (geoOn && typeof res.geoTimezone === 'string' && res.geoTimezone)
+        ? normalizeTimezone(res.geoTimezone)
+        : normalizeTimezone(ipTz);
     }
-    return ipTz;
+    return normalizeTimezone(ipTz);
   }
 
   // ------------------------------------------------------------------
@@ -228,15 +343,19 @@
         if (!tz && typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
           try {
             chrome.runtime.sendMessage({ type: 'GET_TIMEZONE' }, (response) => {
-              if (response && response.timezone) {
-                sendPayload({ tz: response.timezone });
+              const responseTz = response && normalizeTimezone(response.timezone);
+              if (responseTz) {
+                sendPayload({ tz: responseTz });
               }
             });
           } catch (_) {}
         }
 
         const payload = {
-          tz: tz || undefined,
+          // Explicit null means "no target": the engine must clear any
+          // previously applied zone and stay native (e.g. after switching
+          // from manual back to auto with no GeoIP cache yet).
+          tz: tz || null,
           fonts: buildFontsDetail(res),
           cfg: buildCfgDetail(res),
           geo: buildGeoDetail(res)
@@ -255,13 +374,20 @@
       if (area !== 'local' || !changes) {
         return;
       }
+      // No handshake yet means there is no authenticated channel: return
+      // before doing any storage reads whose results would only be dropped.
+      if (handshakeToken === null || configEventName === null) {
+        return;
+      }
+      if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local || !chrome.storage.local.get) {
+        return;
+      }
 
       if (changes.timezone || changes.targetTimezone || changes.timezoneMode || changes.manualTimezone || changes.geoTimezone || changes.geolocationProtection) {
         chrome.storage.local.get(['timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone', 'geolocationProtection'], (res) => {
-          const newTz = resolveTimezone(res);
-          if (newTz) {
-            sendPayload({ tz: newTz });
-          }
+          // Always send: an empty resolution is an explicit null reset, not
+          // "leave the previous manual zone in place".
+          sendPayload({ tz: resolveTimezone(res) || null });
         });
       }
       if (changes.geolocationProtection || changes.geolocationLatitude || changes.geolocationLongitude) {
@@ -275,7 +401,7 @@
         });
       }
       if (SHIELD_KEYS.some(k => k in changes)) {
-        chrome.storage.local.get(ALL_KEYS, (res) => {
+        chrome.storage.local.get(SHIELD_KEYS, (res) => {
           sendPayload({ cfg: buildCfgDetail(res) });
         });
       }

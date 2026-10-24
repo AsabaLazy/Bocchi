@@ -143,10 +143,10 @@ const AUDIT_EXPRESSION = `(() => {
 //    installed — which is exactly what this probe exercises.
 //  * The bootstrap hooks: Function.prototype.toString disguise, worker
 //    navigator, performance.memory.jsHeapSizeLimit (:3858-3870), Intl/Date
-//    timezone, fonts.check, OffscreenCanvas **WebGL** getParameter
-//    (:4303-4331) and WebGPU (:4333-4383). It does NOT hook OffscreenCanvas
-//    2D getImageData — there is no 2D canvas farble in the worker bootstrap,
-//    so worker-side 2D reads are native BY DESIGN.
+//    timezone, fonts.check, OffscreenCanvas 2D canvas/font hooks,
+//    OffscreenCanvas **WebGL** getParameter (:4303-4331) and WebGPU
+//    (:4333-4383). Worker-side 2D reads are therefore farbled exactly like
+//    main-thread reads.
 //  * Worker OffscreenCanvas WebGL getParameter(37446
 //    UNMASKED_RENDERER_WEBGL) returns the SAME pooled gpuProfile.renderer
 //    the main thread reports — the profile is interpolated into the
@@ -162,16 +162,13 @@ const AUDIT_EXPRESSION = `(() => {
 //    (deterministic perturbPixel :579-585 — for an input of 255 the output
 //    is 255-step, step in [1,25], so never 255), alpha untouched when
 //    already opaque. A pure rgb(255,0,0) fill therefore reads back as
-//    [R!=255, 0, 0, 255] on the main thread and exactly [255,0,0,255] in
-//    the worker.
+//    [R!=255, 0, 0, 255] on both the main thread and in the worker.
 //
-// Chosen assertion semantics (the source shows a THIRD case — neither
-// "cross-context deterministic farble" nor "per-context noise": the engine
-// farbles 2D on the main thread only):
+// Chosen assertion semantics: 2D farbling is applied in both realms.
 //    - workerGpu === mainGpu (plus vendor and 0x8B4D)  -> asserted, gated
 //    - main pixel deviates from the pure red fill        -> asserted, gated
-//    - worker pixel === pure red fill (native by design) -> asserted, gated
-//    - worker pixel === main pixel is NOT asserted — they differ by design.
+//    - worker pixel deviates from the pure red fill      -> asserted, gated
+//    - worker pixel === main pixel is not required (independent salts).
 //  * performance.now(): the main thread clamps to whole milliseconds while
 //    hardwareProtection is active (Math.floor, :2685-2706) -> main
 //    fractional part is always 0 (asserted). The bootstrap does NOT hook
@@ -588,7 +585,7 @@ async function runAudit(ctx) {
 
   // ---- Gate evaluation ----------------------------------------------------
   // Gated: engine applied, lies budget, audio self-consistency, worker/main
-  // GPU consistency, main-thread 2D farble + worker 2D nativeness, main
+  // GPU consistency, main-thread and worker 2D farble, main
   // timer clamp, in-page canvas determinism, cross-reload GPU persona
   // stability, engine re-applied after reload.
   // NOT gated (info only): headlessGrade/stealthGrade (environment-bound),
@@ -629,9 +626,11 @@ async function runAudit(ctx) {
       wMain.pixelA[1] === 0 && wMain.pixelA[2] === 0 && wMain.pixelA[3] === 255 &&
       wMain.pixelA[0] !== 255,
     { pixel: wMain.pixelA, pureFill: PURE_RED_FILL });
-  // Worker 2D is native by design — the worker bootstrap has no 2D hook.
-  addCheck('workerOffscreenCanvasNative',
-    pixelEquals(wWork.pixel, PURE_RED_FILL),
+  // Worker 2D is farbled by the worker bootstrap's OffscreenCanvas hooks.
+  addCheck('workerOffscreenCanvasFarbled',
+    Array.isArray(wWork.pixel) && wWork.pixel.length === 4 &&
+      wWork.pixel[1] === 0 && wWork.pixel[2] === 0 && wWork.pixel[3] === 255 &&
+      wWork.pixel[0] !== 255,
     { pixel: wWork.pixel, pureFill: PURE_RED_FILL });
   addCheck('mainNowClampedToMs',
     Array.isArray(wMain.nowFractions) && wMain.nowFractions.length > 0 &&

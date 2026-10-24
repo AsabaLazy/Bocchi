@@ -3,7 +3,32 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
-const assert = require('assert');
+
+// Count every assertion so the runner can reject a "green" run that executed
+// no assertions (e.g. an early error swallowed by a promise chain). The Proxy
+// keeps the familiar `assert(...)` / `assert.strictEqual(...)` call sites.
+const rawAssert = require('assert');
+let assertionCount = 0;
+const COUNTED_ASSERT_METHODS = new Set([
+  'strictEqual', 'notStrictEqual', 'deepStrictEqual', 'notDeepStrictEqual',
+  'throws', 'doesNotThrow', 'rejects', 'doesNotReject', 'ok', 'fail'
+]);
+const assert = new Proxy(rawAssert, {
+  apply(target, thisArg, args) {
+    assertionCount++;
+    return Reflect.apply(target, thisArg, args);
+  },
+  get(target, prop, receiver) {
+    const value = Reflect.get(target, prop, receiver);
+    if (typeof value === 'function' && COUNTED_ASSERT_METHODS.has(prop)) {
+      return function countedAssert(...args) {
+        assertionCount++;
+        return value.apply(target, args);
+      };
+    }
+    return value;
+  }
+});
 
 console.log('=== Running Bocchi Privacy Shield Comprehensive Test Suite ===\n');
 
@@ -80,8 +105,51 @@ const installedListeners = [];
 const startupListeners = [];
 let dynamicRules = [];
 const dynamicRuleUpdates = [];
+const storageChangedListeners = [];
+const rulesetUpdates = [];
+let enabledRulesets = ['cyt_rules'];
+let messageListener = null;
+
+// chrome.scripting mock: records both registration calls and the currently
+// registered set so the service worker's dynamic content-script path actually
+// executes (and can be asserted) instead of silently returning early.
+const scriptingCalls = { register: [], update: [], unregister: [] };
+let scriptingRegistered = [];
+function cloneScripts(scripts) {
+  return JSON.parse(JSON.stringify(scripts));
+}
 
 const mockChrome = {
+  scripting: {
+    async getRegisteredContentScripts() {
+      return cloneScripts(scriptingRegistered);
+    },
+    async registerContentScripts(scripts) {
+      scriptingCalls.register.push(cloneScripts(scripts));
+      const next = cloneScripts(scriptingRegistered);
+      for (const script of scripts) {
+        const idx = next.findIndex(s => s.id === script.id);
+        if (idx >= 0) next[idx] = cloneScripts([script])[0];
+        else next.push(cloneScripts([script])[0]);
+      }
+      scriptingRegistered = next;
+    },
+    async updateContentScripts(scripts) {
+      scriptingCalls.update.push(cloneScripts(scripts));
+      const next = cloneScripts(scriptingRegistered);
+      for (const script of scripts) {
+        const idx = next.findIndex(s => s.id === script.id);
+        if (idx >= 0) next[idx] = cloneScripts([script])[0];
+        else next.push(cloneScripts([script])[0]);
+      }
+      scriptingRegistered = next;
+    },
+    async unregisterContentScripts(opts) {
+      scriptingCalls.unregister.push(cloneScripts(opts || {}));
+      const ids = opts && Array.isArray(opts.ids) ? opts.ids : [];
+      scriptingRegistered = scriptingRegistered.filter(s => !ids.includes(s.id));
+    }
+  },
   declarativeNetRequest: {
     async getDynamicRules() { return dynamicRules.slice(); },
     async updateDynamicRules(opts) {
@@ -91,6 +159,16 @@ const mockChrome = {
       }
       if (Array.isArray(opts.addRules)) {
         dynamicRules = dynamicRules.concat(opts.addRules);
+      }
+    },
+    async getEnabledRulesets() { return enabledRulesets.slice(); },
+    async updateEnabledRulesets(opts) {
+      rulesetUpdates.push(opts);
+      if (Array.isArray(opts.disableRulesetIds)) {
+        enabledRulesets = enabledRulesets.filter(id => !opts.disableRulesetIds.includes(id));
+      }
+      if (Array.isArray(opts.enableRulesetIds)) {
+        for (const id of opts.enableRulesetIds) if (!enabledRulesets.includes(id)) enabledRulesets.push(id);
       }
     }
   },
@@ -116,13 +194,16 @@ const mockChrome = {
         if (cb) { cb(); return; }
         return Promise.resolve();
       }
+    },
+    onChanged: {
+      addListener(fn) { storageChangedListeners.push(fn); }
     }
   },
   runtime: {
     lastError: null,
     onInstalled: { addListener(fn) { installedListeners.push(fn); } },
     onStartup: { addListener(fn) { startupListeners.push(fn); } },
-    onMessage: { addListener(fn) {} }
+    onMessage: { addListener(fn) { messageListener = fn; } }
   }
 };
 
@@ -154,27 +235,134 @@ vm.runInContext(swCode, swContext);
 assert.strictEqual(installedListeners.length, 1, 'Service worker must register onInstalled listener');
 assert.strictEqual(startupListeners.length, 1, 'Service worker must register onStartup listener');
 
-(async () => {
+const serviceWorkerTests = (async () => {
   // applyWebRTCPolicy now always reads chrome.storage.local through a Promise
   // (the old synchronous callback shortcut was dead code and was removed), so
   // the policy write lands in a microtask; flush the queue before asserting.
   await new Promise(resolve => setImmediate(resolve));
 
-  assert.strictEqual(policySet, 'disable_non_proxied_udp', 'Service worker must set webRTCIPHandlingPolicy to disable_non_proxied_udp');
+  // Ordinary-user default: local-IP cleaning is on, non-proxied UDP blocking is off.
+  assert.strictEqual(policySet, 'default_public_interface_only', 'Default WebRTC policy must keep local-IP cleaning on and UDP blocking off');
+
+  // --- Dynamic content-script registration (chrome.scripting) -------------
+  // init() runs on service-worker load, so the real registration path must
+  // have executed against the mock. Call batching is an implementation detail
+  // (one call with both specs or one call per spec); assertions aggregate the
+  // recorded calls so they stay strict about WHAT was registered.
+  const waitForCondition = async (predicate, label, timeoutMs = 3000) => {
+    const start = Date.now();
+    while (!predicate()) {
+      if (Date.now() - start > timeoutMs) throw new Error(`Timed out waiting for ${label} (register=${scriptingCalls.register.length}, update=${scriptingCalls.update.length})`);
+      await new Promise(resolve => setImmediate(resolve));
+    }
+  };
+  const definitionsFromCalls = (calls) => {
+    const byId = new Map();
+    for (const call of calls) for (const script of call) byId.set(script.id, script);
+    return byId;
+  };
+  const registeredDefinitions = () => definitionsFromCalls(scriptingCalls.register);
+  const updatedDefinitions = () => definitionsFromCalls(scriptingCalls.update);
+  const registeredDefinitionCount = () => scriptingCalls.register.reduce((n, call) => n + call.length, 0);
+
+  await waitForCondition(() => registeredDefinitions().size === 2, 'initial content-script registration');
+
+  // Assert the exact registration arguments rather than trusting that the
+  // code path was reached.
+  assert.strictEqual(storageChangedListeners.length, 1, 'Service worker must subscribe to chrome.storage.onChanged');
+  assert.strictEqual(registeredDefinitionCount(), 2, 'Initial load must register exactly the two content scripts');
+  assert.strictEqual(scriptingCalls.update.length, 0, 'Initial load must not call updateContentScripts before anything is registered');
+
+  const initialDefs = registeredDefinitions();
+  const engineScript = initialDefs.get('bocchi-engine');
+  const bridgeScript = initialDefs.get('bocchi-bridge');
+  assert(engineScript, 'bocchi-engine must be registered');
+  assert(bridgeScript, 'bocchi-bridge must be registered');
+  assert.deepStrictEqual(engineScript.js, ['content/stealth_engine.js'], 'Engine registration must point at content/stealth_engine.js');
+  assert.deepStrictEqual(bridgeScript.js, ['content/bridge.js'], 'Bridge registration must point at content/bridge.js');
+  assert.strictEqual(engineScript.world, 'MAIN', 'Engine must be registered in the MAIN world');
+  assert.strictEqual(bridgeScript.world, 'ISOLATED', 'Bridge must be registered in the ISOLATED world');
+  for (const script of [engineScript, bridgeScript]) {
+    assert.deepStrictEqual(script.matches, ['<all_urls>'], `${script.id} must match <all_urls>`);
+    assert.deepStrictEqual(script.excludeMatches, [], `${script.id} must start with no exclusions`);
+    assert.strictEqual(script.runAt, 'document_start', `${script.id} must run at document_start`);
+    assert.strictEqual(script.allFrames, true, `${script.id} must run in all frames`);
+    assert.strictEqual(script.matchOriginAsFallback, true, `${script.id} must fall back to the initiator origin`);
+    assert.strictEqual(script.persistAcrossSessions, true, `${script.id} must persist across sessions`);
+  }
+
+  // Bypass-list changes re-run syncContentScripts(). Re-registering the same
+  // IDs would throw in Chrome, so the second pass MUST update, not register.
+  const notifyStorageChanged = async (changes) => {
+    for (const listener of storageChangedListeners) listener(changes, 'local');
+    await new Promise(resolve => setImmediate(resolve));
+  };
+  const expectedExcludes = [
+    '*://figma.com/*', '*://*.figma.com/*',
+    '*://example.com/*', '*://*.example.com/*'
+  ];
+  storageData.siteBypassList = ['https://figma.com', 'example.com', 'https://*.Example.COM/path'];
+  await notifyStorageChanged({ siteBypassList: { newValue: storageData.siteBypassList } });
+  await waitForCondition(() => updatedDefinitions().size === 2, 'first content-script update');
+  assert.strictEqual(registeredDefinitionCount(), 2, 'A repeat sync must not register content scripts again (duplicate IDs throw in Chrome)');
+  assert(scriptingCalls.update.length >= 1, 'A repeat sync must update the existing registrations');
+
+  const updatedDefs = updatedDefinitions();
+  assert.strictEqual(updatedDefs.size, 2, 'Update must carry both scripts');
+  for (const script of updatedDefs.values()) {
+    assert.deepStrictEqual(
+      [...script.excludeMatches].sort(),
+      [...expectedExcludes].sort(),
+      `${script.id} excludeMatches must cover exact hosts and subdomains from the bypass list`
+    );
+  }
+  assert.strictEqual(scriptingRegistered.length, 2, 'The registered set must still contain exactly two scripts');
+  assert.strictEqual(new Set(scriptingRegistered.map(s => s.id)).size, 2, 'Registered script IDs must stay unique after an update');
+
+  // A second identical sync must stay idempotent: update again, never register.
+  const defsSnapshot = () => [...updatedDefinitions().values()]
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const beforeSecondSync = defsSnapshot();
+  const updateCallsBefore = scriptingCalls.update.length;
+  await notifyStorageChanged({ siteBypassList: { newValue: storageData.siteBypassList } });
+  await waitForCondition(() => scriptingCalls.update.length > updateCallsBefore, 'second content-script update');
+  assert.strictEqual(registeredDefinitionCount(), 2, 'Repeated syncs must never call registerContentScripts again');
+  assert.deepStrictEqual(defsSnapshot(), beforeSecondSync, 'Identical bypass lists must produce identical update payloads (idempotent)');
+  assert.strictEqual(scriptingRegistered.length, 2, 'Repeated syncs must not duplicate registrations');
+
+  // IPv6 literals must be fully valid, not merely bracket/character shaped.
+  assert.strictEqual(swModule.exports.normalizeBypassHost('[a:b]'), null,
+    'Malformed bracketed IPv6 must be rejected before it reaches excludeMatches');
+  assert.strictEqual(swModule.exports.normalizeBypassHost('[:::]'), null,
+    'Over-compressed IPv6 must be rejected');
+  assert.strictEqual(swModule.exports.normalizeBypassHost('[::1]'), '[::1]',
+    'Valid IPv6 literals must remain supported');
+  assert.strictEqual(swModule.exports.normalizeBypassHost('com'), null,
+    'Bare public suffixes must never become bypass entries');
+  assert.strictEqual(swModule.exports.normalizeBypassHost('co.uk'), null,
+    'Multi-label public suffixes must never become bypass entries');
+  assert.strictEqual(swModule.exports.normalizeBypassHost('myserver'), 'myserver',
+    'Ordinary single-label intranet hosts must remain usable');
+  assert.deepStrictEqual([...swModule.exports.bypassExcludeMatches(['[a:b]', '[::1]', 'example.com'])],
+    ['*://[::1]/*', '*://example.com/*', '*://*.example.com/*'],
+    'Malformed IPv6 entries must be omitted from content-script exclusion patterns');
+
+  console.log('✓ chrome.scripting registration path verified (params, exclusions, idempotent updates).\n');
+
+  // Enabling UDP blocking is the strongest setting and uses disable_non_proxied_udp.
+  storageData.webrtcUdp = true;
+  storageData.webrtcLocalIp = true;
+  await swModule.exports.applyWebRTCPolicy();
+  assert.strictEqual(policySet, 'disable_non_proxied_udp', 'UDP blocking on must use disable_non_proxied_udp');
 
   // Turning off UDP blocking while keeping local-IP cleaning keeps video calls
   // working and still hides private interfaces.
   storageData.webrtcUdp = false;
-  storageData.webrtcLocalIp = true;
   await swModule.exports.applyWebRTCPolicy();
   assert.strictEqual(policySet, 'default_public_interface_only', 'UDP off + local IP cleaning must use default_public_interface_only');
   storageData.webrtcLocalIp = false;
   await swModule.exports.applyWebRTCPolicy();
   assert.strictEqual(policySet, 'default', 'UDP off + local IP cleaning off must restore the browser default');
-  storageData.webrtcUdp = true;
-  storageData.webrtcLocalIp = true;
-  await swModule.exports.applyWebRTCPolicy();
-  assert.strictEqual(policySet, 'disable_non_proxied_udp', 'UDP blocking on must use disable_non_proxied_udp');
   storageData.webrtcProtection = false;
   await swModule.exports.applyWebRTCPolicy();
   assert.strictEqual(policySet, 'default', 'Disabled WebRTC protection must restore the browser default');
@@ -193,6 +381,7 @@ assert.strictEqual(startupListeners.length, 1, 'Service worker must register onS
   assert.strictEqual(langRule.action.requestHeaders[0].header, 'Accept-Language', 'Rule must set Accept-Language');
   assert.strictEqual(langRule.action.requestHeaders[0].value, 'ja-JP,ja;q=0.9', 'Accept-Language must match the target language list');
   assert.deepStrictEqual(langRule.condition.excludedRequestDomains, ['figma.com', 'example.com'], 'Bypassed domains must be excluded from header spoofing');
+  assert.deepStrictEqual(langRule.condition.excludedInitiatorDomains, ['figma.com', 'example.com'], 'Bypassed pages must not have their subresource headers rewritten');
   storageData.languageHeader = false;
   await swModule.exports.applyLanguageHeader();
   assert(!dynamicRules.some(r => r.id === 9001), 'Disabling languageHeader must remove the dynamic rule');
@@ -200,6 +389,17 @@ assert.strictEqual(startupListeners.length, 1, 'Service worker must register onS
   storageData.languageProtection = false;
   await swModule.exports.applyLanguageHeader();
   assert(!dynamicRules.some(r => r.id === 9001), 'Disabling languageProtection must remove the dynamic rule');
+
+  // Invalid/IP bypass entries must be skipped instead of invalidating the
+  // whole DNR update (Chrome rejects non-domain excludedRequestDomains).
+  storageData.languageProtection = true;
+  storageData.siteBypassList = ['[::1]', 'bad host', 'https://Example.com/path', 'example.com'];
+  await swModule.exports.applyLanguageHeader();
+  langRule = dynamicRules.find(r => r.id === 9001);
+  assert(langRule, 'A valid bypass entry must keep the language rule installable');
+  assert.deepStrictEqual(langRule.condition.excludedRequestDomains, ['[::1]', 'example.com'], 'Invalid entries must be dropped; valid IP exceptions must stay');
+  assert.deepStrictEqual(langRule.condition.excludedInitiatorDomains, ['[::1]', 'example.com'], 'Initiator exclusions must use the same validated list');
+  storageData.siteBypassList = ['https://figma.com', 'example.com'];
 
   const { fetchEgressInfo, fetchEgressTimezone, syncTimezone } = swModule.exports;
   assert(typeof fetchEgressInfo === 'function', 'fetchEgressInfo must be a function');
@@ -233,14 +433,68 @@ assert.strictEqual(startupListeners.length, 1, 'Service worker must register onS
   const fallbackTz = await fetchEgressTimezone();
   assert.strictEqual(fallbackTz, 'America/Los_Angeles', 'fetchEgressTimezone should fallback to America/Los_Angeles on error');
 
-  // syncTimezone stores the timezone and the IP location
+  // syncTimezone stores the timezone and the IP location. Force it because the
+  // preceding service-worker init may already have cached a fresh LA lookup.
   mockFetchError = false;
   mockFetchReturn = { timezone: { id: 'America/Denver' }, latitude: 39.74, longitude: -104.99, city: 'Denver' };
-  await syncTimezone();
+  await syncTimezone(true);
   assert.strictEqual(storageData.timezone, 'America/Denver', 'syncTimezone should store the timezone');
   assert.strictEqual(storageData.ipLatitude, 39.74, 'syncTimezone should store the IP latitude');
   assert.strictEqual(storageData.ipLongitude, -104.99, 'syncTimezone should store the IP longitude');
   assert.strictEqual(storageData.ipCity, 'Denver', 'syncTimezone should store the IP city');
+
+  // GeoIP is a third-party request and must never run while timezone protection
+  // or the global shield is disabled.
+  let geoFetchCount = 0;
+  mockFetchHandler = async () => {
+    geoFetchCount += 1;
+    return { json: async () => ({ timezone: { id: 'Europe/London' } }) };
+  };
+  storageData.globalShieldEnabled = true;
+  storageData.timezoneProtection = false;
+  await syncTimezone(true);
+  assert.strictEqual(geoFetchCount, 0, 'timezoneProtection=false must not trigger a GeoIP lookup');
+  storageData.globalShieldEnabled = false;
+  storageData.timezoneProtection = true;
+  await syncTimezone(true);
+  assert.strictEqual(geoFetchCount, 0, 'globalShieldEnabled=false must not trigger a GeoIP lookup');
+  storageData.globalShieldEnabled = true;
+  storageData.timezoneProtection = true;
+  mockFetchHandler = null;
+
+  // A timezone-only provider response must still be cached so the bridge can
+  // use it; coordinates may be filled later by a forced panel sync.
+  delete storageData.timezone;
+  delete storageData.lastUpdated;
+  delete storageData.ipLatitude;
+  delete storageData.ipLongitude;
+  mockFetchHandler = async () => ({ ok: true, json: async () => ({ timezone: { id: 'Europe/London' } }) });
+  await syncTimezone(true);
+  assert.strictEqual(storageData.timezone, 'Europe/London', 'A coordinate-less successful lookup must cache the timezone');
+  assert.strictEqual(typeof storageData.lastUpdated, 'number', 'A coordinate-less success must record its freshness');
+  mockFetchHandler = null;
+
+  // GET_TIMEZONE must not hand the engine a hardcoded fallback when the cache
+  // is empty; native time should remain untouched until a real target exists.
+  assert.strictEqual(typeof messageListener, 'function', 'Service worker must register a runtime message listener');
+  delete storageData.timezone;
+  const emptyTzResponse = await new Promise((resolve, reject) => {
+    const keepAlive = messageListener({ type: 'GET_TIMEZONE' }, {}, resolve);
+    if (keepAlive !== true) reject(new Error('GET_TIMEZONE listener must keep the response channel open'));
+  });
+  assert.strictEqual(emptyTzResponse.timezone, undefined, 'GET_TIMEZONE must omit the timezone when no real cache exists');
+
+  // Static DNT/GPC/tracker ruleset follows the global shield.
+  storageData.globalShieldEnabled = false;
+  await notifyStorageChanged({ globalShieldEnabled: { newValue: false } });
+  await waitForCondition(() => !enabledRulesets.includes('cyt_rules'), 'static ruleset disable');
+  await waitForCondition(() => scriptingRegistered.length === 0, 'content-script unregistration while shield is off');
+  assert(scriptingCalls.unregister.length >= 1, 'Global off must unregister content scripts, not leave an inert engine');
+  storageData.globalShieldEnabled = true;
+  await notifyStorageChanged({ globalShieldEnabled: { newValue: true } });
+  await waitForCondition(() => enabledRulesets.includes('cyt_rules'), 'static ruleset re-enable');
+  await waitForCondition(() => scriptingRegistered.length === 2, 'content-script re-registration while shield is on');
+  assert.strictEqual(enabledRulesets.includes('cyt_rules'), true, 'Static ruleset must be re-enabled with the global shield');
 
   // Persona machinery was removed entirely: the service worker must NOT
   // export syncUserAgentRule and must not touch declarativeNetRequest.
@@ -1399,8 +1653,16 @@ function dispatchUnauthenticated(win, type, detail) {
   });
 }
 
-// Create mock window for coveryourtracks.eff.org
-const winCYT = createMockWindow('coveryourtracks.eff.org', 'Linux x86_64');
+// The remainder of the suite runs in one async function so every promise is
+// awaited: an assertion inside a `.then()` callback can no longer be dropped
+// or swallowed, and main()'s rejection sets a non-zero exit code.
+async function main() {
+  // Test 3's service-worker assertions run in their own async block; join it
+  // here so the suite cannot report success before they settle.
+  await serviceWorkerTests;
+
+  // Create mock window for coveryourtracks.eff.org
+  const winCYT = createMockWindow('coveryourtracks.eff.org', 'Linux x86_64');
 const contextCYT = vm.createContext(winCYT);
 vm.runInContext(stealthCode, contextCYT);
 
@@ -1497,19 +1759,17 @@ console.log('✓ WebGL Vendor/Renderer correctly spoofed from the pooled Intel/M
 
 console.log('Testing WebRTC SDP sanitization and IP suppression...');
 const pc = new winCYT.RTCPeerConnection();
-pc.createOffer().then(offer => {
-  // Private connection addresses are replaced with 0.0.0.0 (candidate line kept).
-  assert(offer.sdp.includes('a=candidate:1 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'), 'Private IPv4 candidate address must be replaced with 0.0.0.0 (host line kept)');
-  assert(offer.sdp.includes('a=candidate:2 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'), 'Second private IPv4 candidate address must be replaced with 0.0.0.0');
-  assert(!offer.sdp.includes('192.168.1.100 54321'), 'Raw private IPv4 address must not remain as a connection address');
-  assert(!offer.sdp.includes('10.0.0.5 54321'), 'Raw private IPv4 address must not remain as a connection address');
-  assert(offer.sdp.includes('203.0.113.1 54321 typ srflx'), 'Public srflx candidate should be retained');
-  console.log('✓ WebRTC SDP offer private IPv4 connection addresses rewritten to 0.0.0.0.');
-});
-pc.createAnswer().then(answer => {
-  assert(answer.sdp.includes('a=candidate:1 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'), 'Answer SDP must rewrite private candidate address to 0.0.0.0');
-  assert(answer.sdp.includes('203.0.113.1 54321 typ srflx'), 'Public srflx candidate should be retained in answer SDP');
-});
+const offer = await pc.createOffer();
+// Private connection addresses are replaced with 0.0.0.0 (candidate line kept).
+assert(offer.sdp.includes('a=candidate:1 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'), 'Private IPv4 candidate address must be replaced with 0.0.0.0 (host line kept)');
+assert(offer.sdp.includes('a=candidate:2 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'), 'Second private IPv4 candidate address must be replaced with 0.0.0.0');
+assert(!offer.sdp.includes('192.168.1.100 54321'), 'Raw private IPv4 address must not remain as a connection address');
+assert(!offer.sdp.includes('10.0.0.5 54321'), 'Raw private IPv4 address must not remain as a connection address');
+assert(offer.sdp.includes('203.0.113.1 54321 typ srflx'), 'Public srflx candidate should be retained');
+console.log('✓ WebRTC SDP offer private IPv4 connection addresses rewritten to 0.0.0.0.');
+const answer = await pc.createAnswer();
+assert(answer.sdp.includes('a=candidate:1 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'), 'Answer SDP must rewrite private candidate address to 0.0.0.0');
+assert(answer.sdp.includes('203.0.113.1 54321 typ srflx'), 'Public srflx candidate should be retained in answer SDP');
 
 // Test localDescription getter sanitization
 const localDesc = pc.localDescription;
@@ -1546,18 +1806,36 @@ pc.dispatchEvent({
 assert.strictEqual(srflxDispatched, true, 'srflx candidate with public connection address must be delivered (raddr no longer suppresses)');
 console.log('✓ WebRTC candidate suppression targets private connection addresses only.\n');
 
+console.log('Testing WebRTC full-block options...');
+driveConfig(winCYT, { cfg: { webrtcBlockSupport: true } });
+assert.strictEqual(winCYT.RTCPeerConnection, undefined, 'webrtcBlockSupport must hide RTCPeerConnection');
+assert.strictEqual(winCYT.RTCSessionDescription, undefined, 'webrtcBlockSupport must hide RTCSessionDescription');
+// An already-created connection must keep sanitizing even though the public
+// constructor is hidden (the sanitizer uses the saved native constructor).
+pc.setLocalDescription(rawOffer);
+assert(pc.localDescription && pc.localDescription.sdp.includes('a=candidate:1 1 UDP 2122260223 0.0.0.0 54321 typ host'),
+  'localDescription must stay sanitized while RTCSessionDescription is hidden');
+driveConfig(winCYT, { cfg: { webrtcBlockSupport: false } });
+assert.strictEqual(typeof winCYT.RTCPeerConnection, 'function', 'webrtcBlockSupport off must restore RTCPeerConnection');
+assert.strictEqual(typeof winCYT.RTCSessionDescription, 'function', 'webrtcBlockSupport off must restore RTCSessionDescription');
+driveConfig(winCYT, { cfg: { webrtcBlockDevices: true } });
+const blockedDevices = winCYT.navigator.mediaDevices.enumerateDevices();
+driveConfig(winCYT, { cfg: { webrtcBlockDevices: false } });
+const blockedDeviceList = await blockedDevices;
+assert.strictEqual(blockedDeviceList.length, 0, 'webrtcBlockDevices must return an empty device list');
+console.log('✓ WebRTC support/device blocking options toggle correctly.\n');
+
 console.log('Testing MediaDevices device enumeration anonymization & prototype...');
-winCYT.navigator.mediaDevices.enumerateDevices().then(devices => {
-  assert(Array.isArray(devices) && devices.length > 0, 'enumerateDevices must return devices array');
-  for (const d of devices) {
-    assert.strictEqual(d.deviceId, '', 'deviceId must be blank');
-    assert.strictEqual(d.groupId, '', 'groupId must be blank');
-    assert.strictEqual(d.label, '', 'label must be blank');
-    assert(d.kind === 'audioinput' || d.kind === 'videoinput', 'kind must be preserved');
-    assert(d instanceof winCYT.MediaDeviceInfo, 'Device must preserve MediaDeviceInfo prototype');
-  }
-  console.log('✓ Media devices enumerateDevices successfully anonymized and retains MediaDeviceInfo prototype.\n');
-});
+const enumeratedDevices = await winCYT.navigator.mediaDevices.enumerateDevices();
+assert(Array.isArray(enumeratedDevices) && enumeratedDevices.length > 0, 'enumerateDevices must return devices array');
+for (const d of enumeratedDevices) {
+  assert.strictEqual(d.deviceId, '', 'deviceId must be blank');
+  assert.strictEqual(d.groupId, '', 'groupId must be blank');
+  assert.strictEqual(d.label, '', 'label must be blank');
+  assert(d.kind === 'audioinput' || d.kind === 'videoinput', 'kind must be preserved');
+  assert(d instanceof winCYT.MediaDeviceInfo, 'Device must preserve MediaDeviceInfo prototype');
+}
+console.log('✓ Media devices enumerateDevices successfully anonymized and retains MediaDeviceInfo prototype.\n');
 
 console.log('Testing DOMRect geometry integrity and Font metrics...');
 const el = new winCYT.Element();
@@ -1616,6 +1894,14 @@ const dtf = new winCYT.Intl.DateTimeFormat();
 assert.strictEqual(dtf.resolvedOptions().locale, nativeDefaultDTFLocale, 'DateTimeFormat locale must pass through natively (host default)');
 assert.strictEqual(new winCYT.Intl.DateTimeFormat('zh-CN').resolvedOptions().locale, new Intl.DateTimeFormat('zh-CN').resolvedOptions().locale, 'DateTimeFormat zh-CN locale must be preserved natively');
 
+// Before the bridge delivers a validated target, the engine intentionally
+// stays native (activeTimezone = null) rather than synthesising a default
+// zone. Assert that, then drive the LA target explicitly so the conversion
+// assertions below do not depend on the machine running the tests.
+const HOST_REAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+assert.strictEqual(dtf.resolvedOptions().timeZone, HOST_REAL_TZ, 'Before any bridge config, DateTimeFormat must report the real system zone');
+driveConfig(winCYT, { tz: 'America/Los_Angeles' });
+
 const nf = new winCYT.Intl.NumberFormat();
 assert.strictEqual(nf.resolvedOptions().locale, new Intl.NumberFormat().resolvedOptions().locale, 'NumberFormat locale must pass through natively');
 assert.strictEqual(nf.format(1234567.89), new Intl.NumberFormat().format(1234567.89), 'NumberFormat formatting must be fully native');
@@ -1641,12 +1927,11 @@ console.log('✓ Intl locale passthrough verified (zh preserved, timezone still 
 console.log('Testing Timezone Dynamic Auto-sync and Date Hooks...');
 // Host real zone (defined once, reused by the passthrough block below).
 // The LA-targeted assertions in this block test the engine's CONVERSION to
-// America/Los_Angeles and are host-independent; only the native-string
-// equality checks require the host to actually be in LA (target == real zone
-// -> passthrough), so they are guarded.
-const HOST_REAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
-// Initial timezone matches America/Los_Angeles
-assert.strictEqual(dtf.resolvedOptions().timeZone, 'America/Los_Angeles', 'Default detected timezone must be America/Los_Angeles');
+// America/Los_Angeles (driven explicitly above) and are host-independent;
+// only the native-string equality checks require the host to actually be in
+// LA (target == real zone -> passthrough), so they are guarded.
+// Initial target timezone matches America/Los_Angeles.
+assert.strictEqual(dtf.resolvedOptions().timeZone, 'America/Los_Angeles', 'Configured timezone must be America/Los_Angeles');
 
 const testDateSummer = new winCYT.Date('2026-09-29T12:00:00Z');
 const nativeDateSummer = new Date('2026-09-29T12:00:00Z');
@@ -1743,6 +2028,26 @@ if ('Asia/Tokyo' !== HOST_REAL_TZ) {
   assert.strictEqual(new winCYT.Date('2026-09-29T12:00:00Z').toString(), new Date('2026-09-29T12:00:00Z').toString(), 'Tokyo-host passthrough must render the native string');
 }
 assert.strictEqual(new winCYT.Date('2026-09-29T12:00:00Z').getHours(), 21, 'getHours in Tokyo for 12:00 UTC must be 21 (12 + 9)');
+
+// Zone-less string construction and Date.parse must match the numeric-arg
+// constructor in the spoofed zone (otherwise the delta leaks the real zone).
+const tokyoNumericMs = new winCYT.Date(2026, 8, 29, 12, 0, 0).getTime();
+assert.strictEqual(new winCYT.Date('2026-09-29T12:00:00').getTime(), tokyoNumericMs,
+  'new Date(local ISO string) must map the wall clock through the target zone');
+assert.strictEqual(winCYT.Date.parse('2026-09-29T12:00:00'), tokyoNumericMs,
+  'Date.parse(local ISO string) must agree with the numeric Date constructor');
+assert.strictEqual(new winCYT.Date('2026-09-29T12:00:00Z').getTime(), Date.UTC(2026, 8, 29, 12),
+  'Explicit-Z strings must remain native/UTC');
+assert.strictEqual(new winCYT.Date('2026-09-29').getTime(), Date.UTC(2026, 8, 29),
+  'ISO date-only strings must remain native/UTC');
+// Native descriptor shape: Date inherits from Function.prototype, the global is
+// non-enumerable, and the constructor prototype is non-writable.
+assert.strictEqual(Object.getPrototypeOf(winCYT.Date), vm.runInContext('Object.getPrototypeOf(function(){})', contextCYT),
+  'Hooked Date must inherit from the realm Function.prototype like the native global');
+assert.strictEqual(Object.getOwnPropertyDescriptor(winCYT, 'Date').enumerable, false,
+  'Hooked Date must remain a non-enumerable global');
+assert.strictEqual(Object.getOwnPropertyDescriptor(winCYT.Date, 'prototype').writable, false,
+  'Hooked Date.prototype must be non-writable like native Date');
 
 // Test authenticated CE timezone sync and ensure window.postMessage is ignored
 driveConfig(winCYT, { tz: 'Europe/Paris' });
@@ -1851,6 +2156,9 @@ assert.throws(() => winCYT.Date.prototype.getTimezoneOffset.call({}), /TypeError
 console.log('✓ Dynamic Timezone Auto-sync, Date hooks, and error handling verified.\n');
 
 console.log('Testing Font Fingerprint Masking (Hide Chinese Fonts)...');
+// This suite tests the hide-Chinese-fonts feature, so opt into it explicitly:
+// the extension default is now "hide nothing" (blockBuiltin false).
+driveConfig(winCYT, { fonts: { customFonts: [], allowedFonts: [], blockBuiltin: true } });
 // 1. Canvas measureText masking
 const canvasFont = new winCYT.HTMLCanvasElement();
 const ctxFont = canvasFont.getContext('2d');
@@ -1919,25 +2227,22 @@ assert(!voices.some(v => v.name && v.name.includes('Microsoft')), 'Must not leak
 assert(winCYT.speechSynthesis.getVoices.toString().includes('[native code]'), 'speechSynthesis.getVoices must appear native');
 
 // 8. document.fonts.load masking
-winCYT.document.fonts.load('16px "SimSun"').then(fonts => {
-  assert.strictEqual(fonts.length, 0, 'fonts.load for SimSun must return empty array');
-});
-winCYT.document.fonts.load('16px Arial').then(fonts => {
-  assert.strictEqual(fonts.length, 1, 'fonts.load for Arial must return font face');
-});
+const simsunLoadedFonts = await winCYT.document.fonts.load('16px "SimSun"');
+assert.strictEqual(simsunLoadedFonts.length, 0, 'fonts.load for SimSun must return empty array');
+const arialLoadedFonts = await winCYT.document.fonts.load('16px Arial');
+assert.strictEqual(arialLoadedFonts.length, 1, 'fonts.load for Arial must return font face');
 
 // 9. queryLocalFonts masking
-winCYT.queryLocalFonts().then(fonts => {
-  assert(Array.isArray(fonts) && fonts.length > 0, 'queryLocalFonts must return array');
-  for (const f of fonts) {
-    assert(!f.family.includes('SimSun'), 'queryLocalFonts must not contain SimSun');
-    assert(!f.family.includes('Microsoft YaHei'), 'queryLocalFonts must not contain Microsoft YaHei');
-  }
-  const families = fonts.map(f => f.family);
-  assert(families.includes('Arial'), 'queryLocalFonts must retain Arial');
-  assert(families.includes('Times New Roman'), 'queryLocalFonts must retain Times New Roman');
-  console.log('✓ queryLocalFonts correctly masks Chinese fonts while retaining English fonts.');
-});
+const localFonts = await winCYT.queryLocalFonts();
+assert(Array.isArray(localFonts) && localFonts.length > 0, 'queryLocalFonts must return array');
+for (const f of localFonts) {
+  assert(!f.family.includes('SimSun'), 'queryLocalFonts must not contain SimSun');
+  assert(!f.family.includes('Microsoft YaHei'), 'queryLocalFonts must not contain Microsoft YaHei');
+}
+const families = localFonts.map(f => f.family);
+assert(families.includes('Arial'), 'queryLocalFonts must retain Arial');
+assert(families.includes('Times New Roman'), 'queryLocalFonts must retain Times New Roman');
+console.log('✓ queryLocalFonts correctly masks Chinese fonts while retaining English fonts.');
 
 // 10. DOM Range font masking (TraceScope domRange detection)
 const rangeSpan = new winCYT.HTMLElement();
@@ -1988,6 +2293,8 @@ driveConfig(winCYT, { fonts: {
   blockBuiltin: true
 } });
 assert.strictEqual(winCYT.document.fonts.check('16px Arial'), true, 'Whitelisted Arial must return true');
+assert.strictEqual(winCYT.document.fonts.check('16px "Arial Black"'), false,
+  'Whitelisting Arial must not implicitly allow the prefix-sharing Arial Black');
 assert.strictEqual(winCYT.document.fonts.check('16px "Liberation Sans"'), true, 'Whitelisted Liberation Sans must return true');
 assert.strictEqual(winCYT.document.fonts.check('16px "Times New Roman"'), false, 'Non-whitelisted Times New Roman must be masked in whitelist mode');
 assert.strictEqual(winCYT.document.fonts.check('16px "SimSun"'), false, 'Non-whitelisted SimSun must be masked in whitelist mode');
@@ -2001,6 +2308,25 @@ driveConfig(winCYT, { fonts: {
 } });
 assert.strictEqual(winCYT.document.fonts.check('16px "Times New Roman"'), true, 'Times New Roman must be allowed in blacklist mode');
 assert.strictEqual(winCYT.document.fonts.check('16px "SimSun"'), false, 'SimSun must be masked in blacklist mode');
+
+// A blacklist entry is an exact family name too: hiding "Noto Sans" must not
+// also hide "Noto Sans Arabic" (the panel renders the same verdict).
+driveConfig(winCYT, { fonts: {
+  fontMode: 'blacklist',
+  allowedFonts: [],
+  customFonts: ['Noto Sans'],
+  blockBuiltin: false
+} });
+assert.strictEqual(winCYT.document.fonts.check('16px "Noto Sans"'), false,
+  'An exact blacklist entry must hide that family');
+assert.strictEqual(winCYT.document.fonts.check('16px "Noto Sans Arabic"'), true,
+  'A prefix-sharing family must remain visible in blacklist mode');
+driveConfig(winCYT, { fonts: {
+  fontMode: 'blacklist',
+  allowedFonts: [],
+  customFonts: [],
+  blockBuiltin: true
+} });
 
 // 12. Web Worker & SharedWorker cross-context protection
 const worker = new winCYT.Worker('worker.js');
@@ -2183,21 +2509,19 @@ const winLegacy = createMockWindow('legacy-test.com');
 vm.runInContext(stealthCode, vm.createContext(winLegacy));
 const pcLegacy = new winLegacy.RTCPeerConnection();
 let legacyOfferReceived = null;
-pcLegacy.createOffer((offer) => {
+await pcLegacy.createOffer((offer) => {
   legacyOfferReceived = offer;
-}).then(() => {
-  assert(legacyOfferReceived && legacyOfferReceived.sdp.includes('a=candidate:1 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'), 'Legacy createOffer callback must receive sanitized SDP (private address -> 0.0.0.0)');
-  console.log('✓ Legacy createOffer callback receives sanitized SDP.');
 });
+assert(legacyOfferReceived && legacyOfferReceived.sdp.includes('a=candidate:1 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'), 'Legacy createOffer callback must receive sanitized SDP (private address -> 0.0.0.0)');
+console.log('✓ Legacy createOffer callback receives sanitized SDP.');
 
 // Legacy createAnswer callback
 let legacyAnswerReceived = null;
-pcLegacy.createAnswer((answer) => {
+await pcLegacy.createAnswer((answer) => {
   legacyAnswerReceived = answer;
-}).then(() => {
-  assert(legacyAnswerReceived && legacyAnswerReceived.sdp.includes('a=candidate:2 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'), 'Legacy createAnswer callback must receive sanitized SDP');
-  console.log('✓ Legacy createAnswer callback receives sanitized SDP.');
 });
+assert(legacyAnswerReceived && legacyAnswerReceived.sdp.includes('a=candidate:2 1 UDP 2122260223 0.0.0.0 54321 typ host generation 0'), 'Legacy createAnswer callback must receive sanitized SDP');
+console.log('✓ Legacy createAnswer callback receives sanitized SDP.');
 
 // Non-promise createOffer invocation robustness
 const winNonPromise = createMockWindow('nonpromise-test.com');
@@ -2268,9 +2592,11 @@ assert(!dataUrlZero.includes('mockPngR0A0'), 'Canvas toDataURL must mutate even 
 assert.strictEqual(ctxZero._pixels[0], 0, 'Canvas pixel data must be restored after toDataURL');
 assert.strictEqual(ctxZero._pixels[3], 0, 'Canvas alpha channel must be restored after toDataURL');
 
-canvasZero.toBlob((blob) => {
-  assert(blob.r !== 0 || blob.a !== 0, 'Canvas toBlob must mutate transparent pixels');
+const blobZero = await new Promise((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error('toBlob callback did not fire within 2s')), 2000);
+  canvasZero.toBlob((blob) => { clearTimeout(timer); resolve(blob); });
 });
+assert(blobZero && (blobZero.r !== 0 || blobZero.a !== 0), 'Canvas toBlob must mutate transparent pixels');
 console.log('✓ Canvas toDataURL and toBlob safely farbles and restores pure transparent pixels.');
 
 // Element getClientRects integrity
@@ -2289,16 +2615,18 @@ vm.runInContext(stealthCode, vm.createContext(winBot));
 // The architecture is paired with the WebGL renderer of the same pool entry:
 // both are read from the GPU_PROFILES item selected for this host.
 const expectedGpuBot = expectedGpuProfile('apivoid.com');
-winBot.navigator.gpu.requestAdapter().then(adapter => {
-  assert(adapter && adapter.info, 'WebGPU adapter must have info');
-  assert.strictEqual(adapter.info.vendor, 'intel', 'WebGPU vendor must be spoofed to intel');
-  assert.strictEqual(adapter.info.architecture, expectedGpuBot.wgpuArch, 'WebGPU architecture must be the arch paired with the pooled renderer for this host');
-  assert.strictEqual(adapter.info.device, '', 'WebGPU device must be empty for the Intel persona');
-  assert.strictEqual(adapter.info.description, '', 'WebGPU description must be empty for the Intel persona');
+const botAdapter = await winBot.navigator.gpu.requestAdapter();
+{
+  assert(botAdapter && botAdapter.info, 'WebGPU adapter must have info');
+  assert.strictEqual(botAdapter.info.vendor, 'intel', 'WebGPU vendor must be spoofed to intel');
+  assert.strictEqual(botAdapter.info.architecture, expectedGpuBot.wgpuArch, 'WebGPU architecture must be the arch paired with the pooled renderer for this host');
+  assert.strictEqual(botAdapter.info.device, '', 'WebGPU device must be empty for the Intel persona');
+  assert.strictEqual(botAdapter.info.description, '', 'WebGPU description must be empty for the Intel persona');
 
-  adapter.requestAdapterInfo().then(async info => {
-    assert.strictEqual(info.vendor, 'intel', 'WebGPU requestAdapterInfo must return the Intel persona vendor');
-    assert.strictEqual(info.architecture, expectedGpuBot.wgpuArch, 'WebGPU requestAdapterInfo must return the paired pooled architecture');
+  const botInfo = await botAdapter.requestAdapterInfo();
+  {
+    assert.strictEqual(botInfo.vendor, 'intel', 'WebGPU requestAdapterInfo must return the Intel persona vendor');
+    assert.strictEqual(botInfo.architecture, expectedGpuBot.wgpuArch, 'WebGPU requestAdapterInfo must return the paired pooled architecture');
     console.log('✓ WebGPU adapter correctly spoofed with the pooled Intel persona.');
 
     // 7.2 WebGL Standard Parameters
@@ -2409,11 +2737,13 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     }
 
     // 8.6 CreepJS FontFace.load & fonts.check Chinese font masking
+    driveConfig(winBot, { fonts: { customFonts: [], allowedFonts: [], blockBuiltin: true } });
     const simsunFF = new winBot.FontFace('SimSun', 'local("SimSun")');
-    simsunFF.load().then(() => {
-      assert.fail('SimSun font load should reject on privacy profile');
-    }).catch(err => {
+    // Must REJECT. assert.rejects fails if the promise resolves, so the old
+    // `.then(assert.fail).catch(assert)` construct can no longer swallow it.
+    await assert.rejects(simsunFF.load(), (err) => {
       assert(err, 'Chinese font SimSun must reject');
+      return true;
     });
     assert.strictEqual(winBot.document.fonts.check('12px "SimSun"'), false, 'Chinese font SimSun must return false in check');
     assert.strictEqual(winBot.document.fonts.check('16px "Arial"'), true, 'Standard font Arial must return true in check');
@@ -2640,7 +2970,8 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     assert.strictEqual(winFeat.screen.availHeight, 1080, 'With hardwareProtection=false, screen spoof is disabled and availHeight returns the native 1080');
     assert.strictEqual(winFeat.devicePixelRatio, 1.25, 'With hardwareProtection=false, devicePixelRatio returns the native 1.25');
 
-    // Module 6: Font protection toggle
+    // Module 6: Font protection toggle (opt into hiding Chinese first)
+    driveConfig(winFeat, { fonts: { customFonts: [], allowedFonts: [], blockBuiltin: true } });
     driveConfig(winFeat, { cfg: { fontProtection: false } });
     const allFontsDisabled = await winFeat.queryLocalFonts();
     assert(allFontsDisabled.some(f => f.family === 'SimSun'), 'With fontProtection=false, SimSun must NOT be filtered from queryLocalFonts');
@@ -2694,7 +3025,7 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     assert(fontsDefault.some(f => f.family === 'Noto Sans Arabic'), 'By default, Noto Sans Arabic must NOT be filtered');
     assert(fontsDefault.some(f => f.family === 'Amiri'), 'By default, Amiri must NOT be filtered');
     assert(fontsDefault.some(f => f.family === 'Symbola'), 'By default, Symbola must NOT be filtered');
-    assert(!fontsDefault.some(f => f.family === 'SimSun'), 'SimSun must be filtered by default');
+    assert(fontsDefault.some(f => f.family === 'SimSun'), 'SimSun must NOT be filtered by default (hide nothing is the default)');
 
     // Turn ON blockOtherScripts only: scripts are hidden, symbols must NOT be
     driveConfig(winOther, { cfg: { blockOtherScripts: true } });
@@ -2758,6 +3089,11 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
       const hs = getEngineHandshake(winSec);
       assert(/^__bocchi_evt_[0-9a-f]{8,16}$/.test(hs.e), 'engine handshake must use a random per-frame config event name');
       assert(/^[0-9a-f]{32}$/.test(hs.t), 'engine handshake token must be 16 bytes of hex');
+      // Opt into hiding Chinese so the forged blockBuiltin payload would be observable.
+      driveConfig(winSec, { fonts: { customFonts: [], allowedFonts: [], blockBuiltin: true } });
+      // Set a known target so the forged timezone payload is observable: the
+      // active zone must remain LA (not Europe/Berlin) on any test host.
+      driveConfig(winSec, { tz: 'America/Los_Angeles' });
 
       // Forged payloads: correct CE name but wrong token...
       winSec.document.dispatchEvent({ type: hs.e, detail: { t: '0000000000000000000000000000dead', cfg: { globalShieldEnabled: false, webrtcProtection: false } }, stopImmediatePropagation() {} });
@@ -3081,13 +3417,17 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
 
       const winGP = createMockWindow('gamepad-test.example', 'Linux x86_64');
       vm.runInContext(stealthCode, vm.createContext(winGP));
+      const gpDefault = winGP.navigator.getGamepads();
+      assert.strictEqual(gpDefault.length, 1, 'getGamepads must be native by default (hardwareGamepad off)');
+      assert(gpDefault[0].id.includes('Xbox 360'), 'native gamepad entries must pass through by default');
+      driveConfig(winGP, { cfg: { hardwareGamepad: true } });
       const gpOn1 = winGP.navigator.getGamepads();
       const gpOn2 = winGP.navigator.getGamepads();
-      assert.strictEqual(gpOn1.length, 0, 'getGamepads must return [] while hardwareProtection is on');
+      assert.strictEqual(gpOn1.length, 0, 'getGamepads must return [] while hardwareGamepad is on');
       assert.notStrictEqual(gpOn1, gpOn2, 'getGamepads must return a fresh array on every call');
-      driveConfig(winGP, { cfg: { hardwareProtection: false } });
+      driveConfig(winGP, { cfg: { hardwareGamepad: false } });
       const gpOff = winGP.navigator.getGamepads();
-      assert.strictEqual(gpOff.length, 1, 'With hardwareProtection=false, getGamepads returns the native list');
+      assert.strictEqual(gpOff.length, 1, 'With hardwareGamepad=false, getGamepads returns the native list');
       assert(gpOff[0].id.includes('Xbox 360'), 'native gamepad entries must pass through when the toggle is off');
       console.log('✓ performance.now() flooring and getGamepads downgrade verified.');
     }
@@ -3100,6 +3440,7 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
       // 11.1 OffscreenCanvas on a CYT domain: exports farble like toDataURL.
       const winOC = createMockWindow('coveryourtracks.eff.org', 'Linux x86_64');
       vm.runInContext(stealthCode, vm.createContext(winOC));
+      driveConfig(winOC, { fonts: { customFonts: [], allowedFonts: [], blockBuiltin: true } });
 
       const oc = new winOC.OffscreenCanvas(300, 150);
       const octx = oc.getContext('2d');
@@ -3273,6 +3614,7 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     {
       const winFM = createMockWindow('font-cache.example', 'Linux x86_64');
       vm.runInContext(stealthCode, vm.createContext(winFM));
+      driveConfig(winFM, { fonts: { customFonts: [], allowedFonts: [], blockBuiltin: true } });
       driveConfig(winFM, { cfg: { fontProtection: false } });
       const fmEl = new winFM.HTMLElement();
       fmEl.style.fontFamily = '"SimSun", monospace';
@@ -3294,6 +3636,7 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
     {
       const winFIB = createMockWindow('font-inline.example', 'Linux x86_64');
       vm.runInContext(stealthCode, vm.createContext(winFIB));
+      driveConfig(winFIB, { fonts: { customFonts: [], allowedFonts: [], blockBuiltin: true } });
       const fibEl = new winFIB.HTMLElement();
       fibEl.style.fontFamily = 'Arial';
       fibEl.style.font = '12px "SimSun", serif';
@@ -3355,6 +3698,53 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
       console.log('✓ Worker bootstrap converts Date reads/writes in the synced timezone.');
     }
 
+    // 12.6b Worker font whitelist must use the same exact-name semantics as
+    // the page/panel (a prefix-sharing family must not be implicitly allowed).
+    {
+      const winWF = createMockWindow('worker-font.example', 'Linux x86_64');
+      vm.runInContext(stealthCode, vm.createContext(winWF));
+      driveConfig(winWF, { fonts: {
+        fontMode: 'whitelist',
+        allowedFonts: ['Noto Sans'],
+        customFonts: [],
+        blockBuiltin: false
+      } });
+      const wfWorker = new winWF.Worker('font-worker.js');
+      const wfBlob = winWF.URL._created.get(wfWorker.scriptURL);
+      assert(wfBlob, 'Worker must be blob-wrapped for the font check');
+      const wfBootstrap = wfBlob.content.replace(/\n(?:importScripts|import)\b[\s\S]*$/, '\n');
+      const wfSelf = {
+        fonts: { check() { return true; } },
+        navigator: {}
+      };
+      vm.runInContext(wfBootstrap, vm.createContext({ self: wfSelf }));
+      assert.strictEqual(wfSelf.fonts.check('16px "Noto Sans"'), true,
+        'Whitelisted font must remain visible in the worker');
+      assert.strictEqual(wfSelf.fonts.check('16px "Noto Sans Arabic"'), false,
+        'Worker must not implicitly whitelist a prefix-sharing font');
+
+      driveConfig(winWF, { fonts: {
+        fontMode: 'blacklist',
+        allowedFonts: [],
+        customFonts: [],
+        blockBuiltin: false,
+        blockSymbols: true
+      } });
+      const wfSymbolWorker = new winWF.Worker('font-symbols-worker.js');
+      const wfSymbolBlob = winWF.URL._created.get(wfSymbolWorker.scriptURL);
+      const wfSymbolBootstrap = wfSymbolBlob.content.replace(/\n(?:importScripts|import)\b[\s\S]*$/, '\n');
+      const wfSymbolSelf = {
+        fonts: { check() { return true; } },
+        navigator: {}
+      };
+      vm.runInContext(wfSymbolBootstrap, vm.createContext({ self: wfSymbolSelf }));
+      assert.strictEqual(wfSymbolSelf.fonts.check('16px "Noto Sans Symbols 2"'), false,
+        'Worker blockSymbols snapshot must hide symbol fonts');
+      assert.strictEqual(wfSymbolSelf.fonts.check('16px Arial'), true,
+        'Worker blockSymbols must leave ordinary fonts visible');
+      console.log('✓ Worker font whitelist uses exact-name matching and blockSymbols.');
+    }
+
     // 12.7 updateActiveTimezone must accept 'UTC' (a legal IANA id without a
     // '/' segment — the slash-only guard must not reject it).
     {
@@ -3370,6 +3760,14 @@ winBot.navigator.gpu.requestAdapter().then(adapter => {
 
     console.log('✓ First-wave fix regressions fully passed.\n');
 
+    console.log(`ASSERTION_COUNT=${assertionCount}`);
     console.log('=== ALL TESTS PASSED SUCCESSFULLY! ===');
-  });
+  }
+}
+}
+
+main().catch(err => {
+  console.error('\nFATAL: test suite failed');
+  console.error(err && err.stack ? err.stack : err);
+  process.exitCode = 1;
 });

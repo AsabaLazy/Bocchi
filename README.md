@@ -5,15 +5,18 @@ A Manifest V3 Chromium extension engineered for advanced browser fingerprint def
 ## Key Features
 
 - **High-Entropy Vector Randomization**: Canvas 2D, WebGL, and audio fingerprints are randomized per page load on every site. A fresh farbling salt is drawn on each page load; values stay stable within a single page load yet differ across sites and across reloads (refreshing rotates them), so trackers cannot correlate visits into a persistent cross-site profile. Low-entropy signals (user agent and platform) are left native; language spoofing is an explicit opt-in module.
-- **Font Filtering & Masking (Two Modes)**: Hides fonts from canvas measurement, `@font-face`, and local font enumeration (`queryLocalFonts`) probes. Default **blacklist mode** hides built-in Chinese/CJK fonts (toggleable) plus user-defined custom entries, and can hide other non-Latin script fonts or symbol/dingbat fonts by filtering the list by type and applying a batch hide — everything else stays visible. Optional **whitelist mode** restricts enumeration to a user-curated allow list. Font allow/block lists are global; per-site control is via the shield bypass list.
+- **Font Filtering & Masking (Two Modes)**: Hides fonts from canvas measurement, `@font-face`, and local font enumeration (`queryLocalFonts`) probes. Default **blacklist mode** starts with nothing hidden; user-defined custom entries and language-based selection hide fonts on demand; optional **whitelist mode** restricts enumeration to a user-curated allow list. Font allow/block lists are global; per-site control is via the shield bypass list. The font list also has a multi-select **按语言选择** menu: check one or more languages (e.g. 阿拉伯文 + 希伯来文) to select every matching font, then use the existing **隐藏所选 / 显示所选** batch buttons. Each language shows its matching font count. Coverage comes from a generated fontconfig map and is approximate.
 - **Automatic Timezone Alignment**: Syncs the browser timezone (`Date`, `Intl.DateTimeFormat`) to match the network egress IP, eliminating timezone/IP discrepancies; a manual override is available via an IANA selector or an offline world-map picker, optionally linked with the spoofed geolocation.
 - **Geolocation Spoofing (opt-in)**: Reports user-chosen coordinates (manual latitude/longitude or an offline world-map picker) through `navigator.geolocation`; disabled by default.
 - **Language Spoofing (opt-in)**: A target locale is applied consistently to `navigator.language`/`languages`, Intl default locales (DateTimeFormat, NumberFormat, Collator, etc.), Date/Number toLocale helpers, dedicated workers, and the Accept-Language request header. The module is off by default and has three independent sub-switches. Site Service Workers and SharedWorkers cannot be injected and remain native.
-- **WebRTC Leak Prevention (Three Switches)**:
-  - Device-list masking, local-IP scrubbing, and non-proxied UDP blocking are independent. The UDP switch is the one that can affect WebRTC video calls.
-  - UDP on enforces `disable_non_proxied_udp`; UDP off with local-IP cleaning on uses `default_public_interface_only` (video works, public IP may be visible); both off restores the browser default.
+- **WebRTC Leak Prevention (Six Switches)**:
+  - Support-detection hiding (`RTCPeerConnection`, `MediaStreamTrack`, `RTCSessionDescription`), additional-object hiding (`RTCIceCandidate`, `RTCDataChannel`, `RTCConfiguration`), media-device blocking (`enumerateDevices`/`getUserMedia`), device-list masking, local-IP scrubbing, and non-proxied UDP blocking are independent.
+  - Device-list masking and local-IP scrubbing are on by default. The three full-block options and non-proxied UDP blocking are off by default because they break WebRTC video calls, low-latency WebRTC streams, and sites that require media devices.
+  - UDP on enforces `disable_non_proxied_udp`; UDP off with local-IP cleaning on uses `default_public_interface_only` (video works, public IP may be visible); both off restores the browser default. Proxy/VPN users can opt into UDP blocking.
   - Local-IP scrubbing (when enabled) removes private SDP/ICE candidates in both policy configurations.
-- **Per-Module Sub-Switches**: Canvas exposes 2D export, 2D pixel reads, and WebGL export separately; Audio exposes getChannelData and copyFromChannel; Hardware exposes GPU/WebGL persona, screen/DPR, timer precision, and gamepad downgrade. Turn off only the surface that breaks a site while the other protections stay active. Fonts and Time & Place keep their existing options.
+- **Per-Module Sub-Switches**: Canvas exposes 2D export, 2D pixel reads, and WebGL export separately; Audio exposes getChannelData and copyFromChannel; Hardware exposes GPU/WebGL persona, screen/DPR, and timer precision, with gamepad downgrade off by default for controller compatibility. Turn off only the surface that breaks a site while the other protections stay active. Fonts and Time & Place keep their existing options.
+- **Per-Site Bypass & Settings Backup**: Manage the bypass list from the settings panel, add/remove domains, and export/import protection settings as JSON. Bypassed sites receive no injected scripts.
+- **Privacy-conscious GeoIP**: Exit-IP timezone lookups run only while timezone protection and the global shield are enabled. No analytics, telemetry, or browsing-history uploads; see `PRIVACY.md`.
 - **Network Privacy**:
   - DeclarativeNetRequest rules block intrusive tracking domains (`trackersimulator.org`, `eviltracker.net`, etc.).
   - Enforces `DNT: 1` and `Sec-GPC: 1` privacy signal headers.
@@ -39,13 +42,17 @@ A Manifest V3 Chromium extension engineered for advanced browser fingerprint def
 │   ├── popup.html             # Toolbar popup markup (shield status & quick toggles)
 │   └── popup.js               # Toolbar popup logic (global & per-site shield toggles)
 ├── panel/
-│   ├── panel.css              # Font privacy panel styles
-│   ├── panel.html             # Font privacy panel markup
-│   └── panel.js               # Font privacy panel logic (font enumeration & masking preferences)
+│   ├── panel.css              # Settings panel styles
+│   ├── panel.html             # Settings panel markup (modules, bypass manager, backup)
+│   ├── panel.js               # Settings, help, bypass, and backup logic
+│   └── font-language-coverage.json # Generated family → BCP 47 language coverage map
+├── tools/
+│   └── generate-font-language-coverage.py # Regenerate coverage from Linux fontconfig
 ├── rules/
 │   └── cyt_rules.json         # DeclarativeNetRequest network rules
 ├── tests/
 │   ├── stealth.test.js        # Core unit & integration test suite
+│   ├── extension_smoke.js     # Real-browser registration/injection smoke (CFT)
 │   ├── live_creep_verify.js   # CDP automated live verification against CreepJS
 │   ├── check_apivoid_live.js  # CDP live check against APIVoid bot-detection test page
 │   ├── diagnose_apivoid.js    # CDP diagnostics for APIVoid detection results
@@ -53,6 +60,10 @@ A Manifest V3 Chromium extension engineered for advanced browser fingerprint def
 │   ├── perf_bench.js          # CDP performance baseline: extension off vs on (deltas)
 │   └── soak_verify.js         # CDP leak soak: mixed workload + retained-heap sampling
 ├── CHROMEWEBSTORE.md          # Chrome Web Store listing, permissions & review notes
+├── PRIVACY.md                 # Privacy policy
+├── CHANGELOG.md               # Release notes
+├── store-assets/              # Store screenshots and promo tiles
+├── .github/workflows/ci.yml   # Unit, timezone, packaging & extension-smoke CI
 └── package-extension.sh       # Extension zip packager
 ```
 
@@ -70,15 +81,20 @@ To produce a production zip archive ready for distribution:
 ./package-extension.sh
 ```
 
-This generates `bocchi-privacy-shield-v1.0.0.zip`.
+This generates `bocchi-privacy-shield-v1.1.0.zip` (the version comes from `manifest.json`; the packager also verifies `package.json` and `CHANGELOG.md` agree).
+
+## Compatibility Notes
+
+The MAIN-world engine injects at `document_start`, while its authenticated config arrives from the isolated-world bridge asynchronously. Global off removes both content scripts entirely. Individual module switches use fail-closed defaults for the brief pre-handshake window, so a page's very first inline script can see a disabled module active; reload the page after changing a module switch if earliest inline code misbehaves. This trade-off keeps fingerprinting protections from failing open on every navigation.
 
 ## Testing
 
-Run the test suites with Node.js (all live scripts need a local Chromium, override the binary via `CHROME_BIN`):
+Run the test suites with Node.js 22+ (all live scripts need a local Chromium, override the binary via `CHROME_BIN`):
 
 ```bash
 npm test              # unit suite (no browser, ~0.2s)
 npm run test:tz       # unit suite × 5 timezones (portability matrix)
+npm run test:extension # real-browser injection/Date/canvas/font/WebRTC smoke (needs CHROME_BIN)
 npm run test:live     # live regression chain, sequential (creep gate → apivoid → tamper)
 npm run test:headed   # same chain in visible desktop windows (deployment-realistic)
 npm run bench         # engine-hook performance benchmark (~6s, report in tests/reports/)
@@ -95,4 +111,4 @@ are diagnostics (no gate) — note APIVoid rate-limits rapid POSTs and its
 verdict can flip between runs where only the extension's per-session
 randomized canvas/webgl/audio hashes differ.
 
-The live verification scripts (`live_creep_verify.js`, `check_apivoid_live.js`, `diagnose_apivoid.js`, `test_apivoid_tamper.js`, `perf_bench.js`, `soak_verify.js`) drive a real browser over the Chrome DevTools Protocol and therefore require a local Chromium installation (override the binary via the `CHROME_BIN` environment variable). **Note:** branded Google Chrome 137+ silently ignores `--load-extension` — for live/bench scripts use Chromium or Chrome for Testing (`npx @puppeteer/browsers install chrome@stable --path /tmp/cft`). The unit test suite runs under plain Node.js with no browser required.
+The live verification scripts (`extension_smoke.js`, `live_creep_verify.js`, `check_apivoid_live.js`, `diagnose_apivoid.js`, `test_apivoid_tamper.js`, `perf_bench.js`, `soak_verify.js`) drive a real browser over the Chrome DevTools Protocol and therefore require a local Chromium installation (override the binary via the `CHROME_BIN` environment variable). **Note:** branded Google Chrome 137+ silently ignores `--load-extension` — use Chromium or Chrome for Testing (`npx @puppeteer/browsers install chrome@stable --path /tmp/cft`). `extension_smoke.js` is a deterministic local-page gate for dynamic registration, bridge injection, Date/canvas/font/WebRTC behavior and bypass-site non-injection; the apivoid scripts remain optional diagnostics. The unit test suite runs under plain Node.js with no browser required.

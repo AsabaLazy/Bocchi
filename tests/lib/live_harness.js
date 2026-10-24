@@ -22,6 +22,15 @@ const net = require('net');
 const os = require('os');
 const path = require('path');
 
+// The harness speaks CDP over the global WebSocket added in Node 22. Fail with
+// a direct explanation instead of a bare `ReferenceError: WebSocket is not
+// defined` on older runtimes (CI pins 22; package.json declares engines).
+if (typeof WebSocket !== 'function') {
+  throw new Error(
+    `tests/lib/live_harness.js requires Node >= 22 (global WebSocket); current is ${process.version}`
+  );
+}
+
 // Patch mark the extension engine leaves on the page window once the content
 // script has applied. This is an *expression snippet* (not a bare key) that
 // gets interpolated into Runtime.evaluate expressions.
@@ -425,5 +434,6 @@ module.exports = {
   cleanup,
   saveReport,
   runWithRetry,
-  EngineMissingError
+  EngineMissingError,
+  CDPClient
 };
