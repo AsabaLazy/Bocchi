@@ -7,22 +7,23 @@
   <link rel="stylesheet" href="panel.css">
 </head>
 <body>
+  <a class="skip-link" href="#settings-content">跳到设置内容</a>
   <div class="shell settings-shell">
 
     <!-- 页头:品牌锚点 + 全局总开关(与 popup 共用 globalShieldEnabled) -->
     <header class="masthead">
       <div class="brand">
-        <div class="brand-name">Bocchi</div>
+        <h1 class="brand-name">Bocchi</h1>
       </div>
       <div class="masthead-actions">
         <button type="button" class="icon-btn" id="themeToggle" aria-label="切换主题"></button>
         <button type="button" class="reset-btn" id="btnResetDefaults" data-help="恢复扩展的全局默认设置；保留主题与网站例外名单。">
           <span aria-hidden="true">↺</span> 恢复默认
         </button>
-        <label class="status-pill" id="statusPill" title="扩展全局开关：关闭后暂停所有防护">
-          <span class="status-text" id="statusText">拓展开关</span>
+        <label class="status-pill" id="statusPill" title="全局防护：关闭后暂停所有防护">
+          <span class="status-text" id="statusText">全局防护</span>
           <span class="switch">
-            <input type="checkbox" id="globalShieldEnabled" checked aria-label="扩展全局开关">
+            <input type="checkbox" id="globalShieldEnabled" checked aria-label="全局防护">
             <i></i>
           </span>
         </label>
@@ -41,66 +42,68 @@
       <!-- 左侧模块导航 -->
       <nav class="settings-nav" aria-label="设置模块">
         <button type="button" class="nav-item" data-view="canvas" aria-current="page">
-          <span class="nav-dot" data-key="canvasProtection" aria-hidden="true"></span>画布与图形
+          画布与 3D
         </button>
         <button type="button" class="nav-item" data-view="audio">
-          <span class="nav-dot" data-key="audioProtection" aria-hidden="true"></span>音频
+          音频指纹
         </button>
         <button type="button" class="nav-item" data-view="webrtc">
-          <span class="nav-dot" data-key="webrtcProtection" aria-hidden="true"></span>视频通话
+          WebRTC
         </button>
         <button type="button" class="nav-item" data-view="timezone">
-          <span class="nav-dot" data-key="timezoneProtection" data-key-any="geolocationProtection" aria-hidden="true"></span>时间与位置
+          时区与位置
         </button>
         <button type="button" class="nav-item" data-view="hardware">
-          <span class="nav-dot" data-key="hardwareProtection" aria-hidden="true"></span>设备信息
+          硬件指纹
         </button>
         <button type="button" class="nav-item" data-view="language">
-          <span class="nav-dot" data-key="languageProtection" aria-hidden="true"></span>语言
+          语言伪装
         </button>
         <button type="button" class="nav-item" data-view="fonts">
-          <span class="nav-dot" data-key="fontProtection" aria-hidden="true"></span>字体
+          字体指纹
         </button>
         <button type="button" class="nav-item" data-view="bypass">
-          <span class="nav-dot" aria-hidden="true"></span>网站例外
+          网站例外
+        </button>
+        <button type="button" class="nav-item" data-view="backup">
+          备份与恢复
         </button>
       </nav>
 
       <!-- 右侧内容区 -->
-      <main class="settings-content">
+      <main class="settings-content" id="settings-content" tabindex="-1">
 
         <!-- ═════════ 字体模块 ═════════ -->
         <section class="view" id="view-fonts" data-view="fonts">
           <div class="view-head">
             <div class="view-title">
-              <h2>字体</h2>
-              <button type="button" class="help-trigger" data-help-view="fonts" aria-label="查看字体选项说明" aria-expanded="false" aria-haspopup="dialog">
+              <h2>字体指纹</h2>
+              <button type="button" class="help-trigger" data-help-view="fonts" aria-label="查看字体指纹选项说明" aria-expanded="false" aria-haspopup="dialog">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
               </button>
             </div>
-            <label class="switch" title="字体探测防护总开关">
-              <input type="checkbox" id="fontProtection" checked aria-label="字体探测防护">
+            <label class="switch" title="字体指纹防护总开关">
+              <input type="checkbox" id="fontProtection" checked aria-label="字体指纹防护">
               <i></i>
             </label>
           </div>
 
           <!-- 工具条:默认态(点阵即语义) + 语种批处理(样字即内容) + 搜索 -->
           <div class="toolbar">
-            <span class="ctl-label">默认行为</span>
-            <div class="mode-seg" id="modeControl" role="group" aria-label="字体默认行为">
+            <div class="mode-seg" id="modeControl" role="group" aria-label="字体默认可见性">
               <button class="mode-btn" type="button" data-mode="blacklist" data-help="默认显示全部字体；只有你隐藏的字体对网站探测不可见。">
                 <span class="mode-dots" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span>
-                显示
+                默认显示
               </button>
               <button class="mode-btn" type="button" data-mode="whitelist" data-help="默认隐藏全部字体；只有你放行的字体对网站可见。">
                 <span class="mode-dots" aria-hidden="true"><i></i><i></i><i></i><i></i><i class="on"></i><i class="on"></i></span>
-                隐藏
+                默认隐藏
               </button>
             </div>
 
             <label class="search">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-              <input type="text" id="searchInput" class="search-input" placeholder="搜索字体…" spellcheck="false" autocomplete="off">
+              <input type="text" id="searchInput" name="font-search" class="search-input" placeholder="搜索字体…" aria-label="搜索字体" spellcheck="false" autocomplete="off">
               <span class="kbd">/</span>
             </label>
             <span class="font-count" id="fontCount"></span>
@@ -173,22 +176,22 @@
         <section class="view" id="view-language" data-view="language" hidden>
           <div class="view-head">
             <div class="view-title">
-              <h2>语言</h2>
-              <button type="button" class="help-trigger" data-help-view="language" aria-label="查看语言选项说明" aria-expanded="false" aria-haspopup="dialog">
+              <h2>语言伪装</h2>
+              <button type="button" class="help-trigger" data-help-view="language" aria-label="查看语言伪装选项说明" aria-expanded="false" aria-haspopup="dialog">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
               </button>
             </div>
-            <label class="switch" title="语言替换开关">
-              <input type="checkbox" id="languageProtection" aria-label="语言替换">
+            <label class="switch" title="语言伪装开关">
+              <input type="checkbox" id="languageProtection" aria-label="语言伪装">
               <i></i>
             </label>
           </div>
           <div class="view-options-stack">
             <div class="opt-row opt-row-select" data-help="让浏览器报告的语言、日期数字格式和发给网站的语言偏好保持一致。">
               <span class="opt-copy">
-                <span class="opt-title">目标语言</span>
+                <span class="opt-title">伪装为</span>
               </span>
-              <select id="languageTarget" class="lang-select" aria-label="目标语言">
+              <select id="languageTarget" class="lang-select" aria-label="伪装语言">
                 <option value="zh-CN">中文（简体，中国）</option>
                 <option value="zh-TW">中文（繁体，台湾）</option>
                 <option value="en-US" selected>英语（美国）</option>
@@ -213,21 +216,21 @@
             </div>
             <label class="opt-row">
               <span class="opt-copy">
-                <span class="opt-title">浏览器报告的语言</span>
+                <span class="opt-title">网站读取的语言</span>
               </span>
-              <span class="switch" data-help="改变网页读取到的语言列表（navigator.language / languages）。"><input type="checkbox" id="languageNavigator" checked aria-label="浏览器报告的语言"><i></i></span>
+              <span class="switch" data-help="改变网页读取到的语言列表（navigator.language / languages）。"><input type="checkbox" id="languageNavigator" checked aria-label="网站读取的语言"><i></i></span>
             </label>
             <label class="opt-row">
               <span class="opt-copy">
-                <span class="opt-title">日期和数字的默认格式</span>
+                <span class="opt-title">日期与数字格式</span>
               </span>
-              <span class="switch" data-help="改变日期、数字和排序使用的默认语言（Intl）。"><input type="checkbox" id="languageIntl" checked aria-label="日期和数字的默认格式"><i></i></span>
+              <span class="switch" data-help="改变日期、数字和排序使用的默认语言（Intl）。"><input type="checkbox" id="languageIntl" checked aria-label="日期与数字格式"><i></i></span>
             </label>
             <label class="opt-row">
               <span class="opt-copy">
-                <span class="opt-title">发送给网站的语言偏好</span>
+                <span class="opt-title">网站收到的语言偏好</span>
               </span>
-              <span class="switch" data-help="改变网站收到的语言偏好（Accept-Language）。"><input type="checkbox" id="languageHeader" checked aria-label="发送给网站的语言偏好"><i></i></span>
+              <span class="switch" data-help="改变网站收到的语言偏好（Accept-Language）。"><input type="checkbox" id="languageHeader" checked aria-label="网站收到的语言偏好"><i></i></span>
             </label>
           </div>
           <div class="lang-result" id="languageResult" aria-live="polite">
@@ -237,7 +240,7 @@
             </div>
             <div class="lang-result-grid">
               <div class="lang-result-item">
-                <span class="lang-result-key">页面看到的语言</span>
+                <span class="lang-result-key">网页读取的语言</span>
                 <code class="lang-result-value is-native" id="languageResultNavigator">原生</code>
               </div>
               <div class="lang-result-item">
@@ -256,34 +259,34 @@
         <section class="view" id="view-canvas" data-view="canvas" hidden>
           <div class="view-head">
             <div class="view-title">
-              <h2>画布与图形</h2>
-              <button type="button" class="help-trigger" data-help-view="canvas" aria-label="查看画布与图形选项说明" aria-expanded="false" aria-haspopup="dialog">
+              <h2>画布与 3D 指纹</h2>
+              <button type="button" class="help-trigger" data-help-view="canvas" aria-label="查看画布与 3D 指纹选项说明" aria-expanded="false" aria-haspopup="dialog">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
               </button>
             </div>
-            <label class="switch" title="画布与图形防护开关">
-              <input type="checkbox" id="canvasProtection" checked aria-label="画布与图形防护">
+            <label class="switch" title="画布指纹防护开关">
+              <input type="checkbox" id="canvasProtection" checked aria-label="画布指纹防护">
               <i></i>
             </label>
           </div>
           <div class="view-options view-options-stack">
             <label class="opt-row">
               <span class="opt-copy">
-                <span class="opt-title">干扰画布图片导出</span>
+                <span class="opt-title">画布像素读取</span>
               </span>
-              <span class="switch" data-help="阻止网站用画布导出的图片识别你的设备（toDataURL / toBlob）。"><input type="checkbox" id="canvas2dExport" checked aria-label="干扰画布图片导出"><i></i></span>
+              <span class="switch" data-help="网站直接读取画布像素时加入细微噪声（getImageData）；读取仍会成功。"><input type="checkbox" id="canvas2dPixels" checked aria-label="画布像素读取"><i></i></span>
             </label>
             <label class="opt-row">
               <span class="opt-copy">
-                <span class="opt-title">干扰画布像素读取</span>
+                <span class="opt-title">画布图片导出</span>
               </span>
-              <span class="switch" data-help="阻止网站读取画布像素来生成设备特征（getImageData）。"><input type="checkbox" id="canvas2dPixels" checked aria-label="干扰画布像素读取"><i></i></span>
+              <span class="switch" data-help="网站把画布保存为图片时加入细微噪声（toDataURL / toBlob）；导出仍会成功。"><input type="checkbox" id="canvas2dExport" checked aria-label="画布图片导出"><i></i></span>
             </label>
             <label class="opt-row">
               <span class="opt-copy">
-                <span class="opt-title">干扰 3D 画布导出</span>
+                <span class="opt-title">3D 画面读取</span>
               </span>
-              <span class="switch" data-help="阻止网站用 3D 画布导出的内容生成设备特征。"><input type="checkbox" id="canvasWebglExport" checked aria-label="干扰 3D 画布导出"><i></i></span>
+              <span class="switch" data-help="网站读取 3D 画面时加入细微噪声（WebGL readPixels / toDataURL）；3D 场景仍正常显示。"><input type="checkbox" id="canvasWebglExport" checked aria-label="3D 画面读取"><i></i></span>
             </label>
           </div>
         </section>
@@ -292,28 +295,28 @@
         <section class="view" id="view-audio" data-view="audio" hidden>
           <div class="view-head">
             <div class="view-title">
-              <h2>音频</h2>
-              <button type="button" class="help-trigger" data-help-view="audio" aria-label="查看音频选项说明" aria-expanded="false" aria-haspopup="dialog">
+              <h2>音频指纹</h2>
+              <button type="button" class="help-trigger" data-help-view="audio" aria-label="查看音频指纹选项说明" aria-expanded="false" aria-haspopup="dialog">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
               </button>
             </div>
-            <label class="switch" title="音频防护开关">
-              <input type="checkbox" id="audioProtection" checked aria-label="音频防护">
+            <label class="switch" title="音频指纹防护开关">
+              <input type="checkbox" id="audioProtection" checked aria-label="音频指纹防护">
               <i></i>
             </label>
           </div>
           <div class="view-options view-options-stack">
             <label class="opt-row">
               <span class="opt-copy">
-                <span class="opt-title">干扰音频特征</span>
+                <span class="opt-title">音频数据读取</span>
               </span>
-              <span class="switch" data-help="读取音频样本时加入随机噪声，降低音频特征识别（AudioBuffer.getChannelData）。"><input type="checkbox" id="audioGetChannelData" checked aria-label="干扰音频特征"><i></i></span>
+              <span class="switch" data-help="网站读取音频样本时加入细微噪声（AudioBuffer.getChannelData）；音频仍可正常播放。"><input type="checkbox" id="audioGetChannelData" checked aria-label="音频数据读取"><i></i></span>
             </label>
             <label class="opt-row">
               <span class="opt-copy">
-                <span class="opt-title">干扰播放数据</span>
+                <span class="opt-title">播放数据读取</span>
               </span>
-              <span class="switch" data-help="读取播放数据时同样加噪；关闭可提升部分网站的音频兼容性（copyFromChannel）。"><input type="checkbox" id="audioCopyFromChannel" checked aria-label="干扰播放数据"><i></i></span>
+              <span class="switch" data-help="网站读取播放数据时加入细微噪声（copyFromChannel）；关闭可提升部分网站的音频兼容性。"><input type="checkbox" id="audioCopyFromChannel" checked aria-label="播放数据读取"><i></i></span>
             </label>
           </div>
         </section>
@@ -322,22 +325,22 @@
         <section class="view" id="view-webrtc" data-view="webrtc" hidden>
           <div class="view-head">
             <div class="view-title">
-              <h2>视频通话（WebRTC）</h2>
-              <button type="button" class="help-trigger" data-help-view="webrtc" aria-label="查看视频通话选项说明" aria-expanded="false" aria-haspopup="dialog">
+              <h2>WebRTC 泄露防护</h2>
+              <button type="button" class="help-trigger" data-help-view="webrtc" aria-label="查看 WebRTC 选项说明" aria-expanded="false" aria-haspopup="dialog">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
               </button>
             </div>
-            <label class="switch" title="视频通话防护开关">
-              <input type="checkbox" id="webrtcProtection" checked aria-label="视频通话防护">
+            <label class="switch" title="WebRTC 泄露防护开关">
+              <input type="checkbox" id="webrtcProtection" checked aria-label="WebRTC 泄露防护">
               <i></i>
             </label>
           </div>
           <div class="view-options view-options-stack">
             <label class="opt-row">
               <span class="opt-copy">
-                <span class="opt-title">隐藏视频通话支持检测</span>
+                <span class="opt-title">隐藏 WebRTC 支持检测</span>
               </span>
-              <span class="switch" data-help="隐藏视频通话的核心接口（RTCPeerConnection、MediaStreamTrack、RTCSessionDescription），网站无法检测 WebRTC 支持；可能影响视频通话。"><input type="checkbox" id="webrtcBlockSupport" aria-label="隐藏视频通话支持检测"><i></i></span>
+              <span class="switch" data-help="隐藏 WebRTC 的核心接口（RTCPeerConnection、MediaStreamTrack、RTCSessionDescription），网站无法检测 WebRTC 支持；可能影响视频通话。"><input type="checkbox" id="webrtcBlockSupport" aria-label="隐藏 WebRTC 支持检测"><i></i></span>
             </label>
             <label class="opt-row">
               <span class="opt-copy">
@@ -347,9 +350,9 @@
             </label>
             <label class="opt-row">
               <span class="opt-copy">
-                <span class="opt-title">隐藏其他视频通话接口</span>
+                <span class="opt-title">隐藏其他 WebRTC 接口</span>
               </span>
-              <span class="switch" data-help="隐藏其他视频通话接口（RTCIceCandidate、RTCDataChannel、RTCConfiguration）；可能影响视频通话。"><input type="checkbox" id="webrtcBlockObjects" aria-label="隐藏其他视频通话接口"><i></i></span>
+              <span class="switch" data-help="隐藏其他 WebRTC 接口（RTCIceCandidate、RTCDataChannel、RTCConfiguration）；可能影响视频通话。"><input type="checkbox" id="webrtcBlockObjects" aria-label="隐藏其他 WebRTC 接口"><i></i></span>
             </label>
             <label class="opt-row">
               <span class="opt-copy">
@@ -359,15 +362,15 @@
             </label>
             <label class="opt-row">
               <span class="opt-copy">
-                <span class="opt-title">隐藏本地网络地址</span>
+                <span class="opt-title">隐藏本地 IP 地址</span>
               </span>
-              <span class="switch" data-help="从视频通话连接信息中移除本地网络地址（IPv4/IPv6）。"><input type="checkbox" id="webrtcLocalIp" checked aria-label="隐藏本地网络地址"><i></i></span>
+              <span class="switch" data-help="从 WebRTC 连接信息中移除本地网络地址（IPv4/IPv6）。"><input type="checkbox" id="webrtcLocalIp" checked aria-label="隐藏本地 IP 地址"><i></i></span>
             </label>
             <label class="opt-row">
               <span class="opt-copy">
-                <span class="opt-title">阻止直连视频流量</span>
+                <span class="opt-title">阻止 WebRTC 泄露公网 IP</span>
               </span>
-              <span class="switch" data-help="阻止网站看到你的公网 IP（非代理 UDP）；关闭后视频通话更兼容。"><input type="checkbox" id="webrtcUdp" aria-label="阻止直连视频流量"><i></i></span>
+              <span class="switch" data-help="阻止非代理 UDP 直连，避免网站看到你的公网 IP；关闭后视频通话更兼容。"><input type="checkbox" id="webrtcUdp" aria-label="阻止 WebRTC 泄露公网 IP"><i></i></span>
             </label>
           </div>
         </section>
@@ -376,24 +379,24 @@
         <section class="view" id="view-timezone" data-view="timezone" hidden>
           <div class="view-head">
             <div class="view-title">
-              <h2>时间与位置</h2>
-              <button type="button" class="help-trigger" data-help-view="timezone" aria-label="查看时间与位置选项说明" aria-expanded="false" aria-haspopup="dialog">
+              <h2>时区与位置</h2>
+              <button type="button" class="help-trigger" data-help-view="timezone" aria-label="查看时区与位置选项说明" aria-expanded="false" aria-haspopup="dialog">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
               </button>
             </div>
             <div class="tp-layer-group" role="group" aria-label="地图图层">
               <div class="tp-layer-switches">
                 <label class="tp-layer-switch">
-                  <span>时区</span>
-                  <span class="switch" data-help="让网站看到你选择的时区。">
-                    <input type="checkbox" id="timezoneProtection" checked aria-label="动态时区对齐">
+                  <span>时区伪装</span>
+                  <span class="switch" data-help="让网站看到你选择的时区，而不是真实时区。">
+                    <input type="checkbox" id="timezoneProtection" checked aria-label="时区伪装">
                     <i></i>
                   </span>
                 </label>
                 <label class="tp-layer-switch">
-                  <span>位置</span>
-                  <span class="switch" data-help="允许拖动定位点；开启后时区跟随位置。">
-                    <input type="checkbox" id="geolocationProtection" aria-label="模拟位置">
+                  <span>位置伪装</span>
+                  <span class="switch" data-help="让网站看到你选择的位置；开启后时区默认跟随位置。">
+                    <input type="checkbox" id="geolocationProtection" aria-label="位置伪装">
                     <i></i>
                   </span>
                 </label>
@@ -497,40 +500,40 @@
         <section class="view" id="view-hardware" data-view="hardware" hidden>
           <div class="view-head">
             <div class="view-title">
-              <h2>设备信息</h2>
-              <button type="button" class="help-trigger" data-help-view="hardware" aria-label="查看设备信息选项说明" aria-expanded="false" aria-haspopup="dialog">
+              <h2>硬件指纹</h2>
+              <button type="button" class="help-trigger" data-help-view="hardware" aria-label="查看硬件指纹选项说明" aria-expanded="false" aria-haspopup="dialog">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
               </button>
             </div>
-            <label class="switch" title="设备信息防护开关">
-              <input type="checkbox" id="hardwareProtection" checked aria-label="设备信息防护">
+            <label class="switch" title="硬件指纹防护开关">
+              <input type="checkbox" id="hardwareProtection" checked aria-label="硬件指纹防护">
               <i></i>
             </label>
           </div>
           <div class="view-options view-options-stack">
             <label class="opt-row">
               <span class="opt-copy">
-                <span class="opt-title">隐藏显卡与图形信息</span>
+                <span class="opt-title">隐藏显卡与 WebGL 信息</span>
               </span>
-              <span class="switch" data-help="替换显卡和图形渲染信息，并干扰像素读取（readPixels）。"><input type="checkbox" id="hardwareGpu" checked aria-label="隐藏显卡与图形信息"><i></i></span>
+              <span class="switch" data-help="替换显卡型号和 WebGL 渲染器信息，并给 readPixels 读取结果加噪。"><input type="checkbox" id="hardwareGpu" checked aria-label="隐藏显卡与 WebGL 信息"><i></i></span>
             </label>
             <label class="opt-row">
               <span class="opt-copy">
-                <span class="opt-title">统一屏幕尺寸与缩放</span>
+                <span class="opt-title">统一屏幕参数</span>
               </span>
-              <span class="switch" data-help="统一屏幕尺寸、色深和页面缩放比例（devicePixelRatio）。"><input type="checkbox" id="hardwareScreen" checked aria-label="统一屏幕尺寸与缩放"><i></i></span>
+              <span class="switch" data-help="统一屏幕尺寸、色深和页面缩放比例（devicePixelRatio）。"><input type="checkbox" id="hardwareScreen" checked aria-label="统一屏幕参数"><i></i></span>
             </label>
             <label class="opt-row">
               <span class="opt-copy">
-                <span class="opt-title">降低计时精度</span>
+                <span class="opt-title">限制高精度计时</span>
               </span>
-              <span class="switch" data-help="把高精度计时器降到 1 毫秒（performance.now）。"><input type="checkbox" id="hardwareTimer" checked aria-label="降低计时精度"><i></i></span>
+              <span class="switch" data-help="把高精度计时器降到 1 毫秒（performance.now）。"><input type="checkbox" id="hardwareTimer" checked aria-label="限制高精度计时"><i></i></span>
             </label>
             <label class="opt-row">
               <span class="opt-copy">
-                <span class="opt-title">隐藏游戏手柄信息</span>
+                <span class="opt-title">隐藏游戏手柄</span>
               </span>
-              <span class="switch" data-help="让网站查不到已连接的游戏手柄（getGamepads）。"><input type="checkbox" id="hardwareGamepad" aria-label="隐藏游戏手柄信息"><i></i></span>
+              <span class="switch" data-help="让网站查不到已连接的游戏手柄（getGamepads）。"><input type="checkbox" id="hardwareGamepad" aria-label="隐藏游戏手柄"><i></i></span>
             </label>
           </div>
         </section>
@@ -545,24 +548,27 @@
               </button>
             </div>
           </div>
-          <p class="view-note">加入例外后，该网站不会加载防护脚本（字体、画布/音频、时区/语言等页面级保护会停用），适合网站被防护影响时使用。全局的追踪拦截和视频通话网络策略仍会生效；保存后刷新页面。</p>
           <div class="bypass-form">
-            <input id="bypassInput" class="bypass-input" type="text" placeholder="example.com 或 https://example.com" autocomplete="off" spellcheck="false" aria-label="要加入例外的域名或网址">
+            <input id="bypassInput" name="bypass-domain" class="bypass-input" type="text" placeholder="example.com 或 https://example.com" autocomplete="off" spellcheck="false" aria-label="要加入例外的域名或网址">
             <button type="button" class="sel-btn" id="bypassAdd">添加</button>
           </div>
           <div class="bypass-status" id="bypassStatus" role="status" aria-live="polite"></div>
           <div class="view-options-stack" id="bypassList" hidden></div>
-          <p class="bypass-empty" id="bypassEmpty">暂无例外网站。</p>
-          <div class="settings-backup">
-            <div class="settings-backup-title">设置备份</div>
-            <p class="view-note">导出或导入防护开关、子选项、字体、语言、时区、设备和网站例外名单；不包含 IP、时区等缓存。</p>
-            <div class="bypass-form">
-              <button type="button" class="sel-btn" id="exportSettings">导出设置</button>
-              <button type="button" class="sel-btn" id="importSettings">导入设置</button>
-              <input id="importSettingsFile" type="file" accept=".json,application/json" hidden>
+        </section>
+
+        <!-- ═════════ 备份与恢复 ═════════ -->
+        <section class="view" id="view-backup" data-view="backup" hidden>
+          <div class="view-head">
+            <div class="view-title">
+              <h2>备份与恢复</h2>
             </div>
-            <div class="bypass-status" id="backupStatus" role="status" aria-live="polite"></div>
           </div>
+          <div class="bypass-form backup-actions" role="group" aria-label="设置备份">
+            <button type="button" class="sel-btn" id="exportSettings">导出设置</button>
+            <button type="button" class="sel-btn" id="importSettings">导入设置</button>
+            <input id="importSettingsFile" type="file" accept=".json,application/json" hidden>
+          </div>
+          <div class="bypass-status" id="backupStatus" role="status" aria-live="polite"></div>
         </section>
 
       </main>

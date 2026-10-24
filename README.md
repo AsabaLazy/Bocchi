@@ -16,7 +16,7 @@ A Manifest V3 Chromium extension engineered for advanced browser fingerprint def
   - Local-IP scrubbing (when enabled) removes private SDP/ICE candidates in both policy configurations.
 - **Per-Module Sub-Switches**: Canvas exposes 2D export, 2D pixel reads, and WebGL export separately; Audio exposes getChannelData and copyFromChannel; Hardware exposes GPU/WebGL persona, screen/DPR, and timer precision, with gamepad downgrade off by default for controller compatibility. Turn off only the surface that breaks a site while the other protections stay active. Fonts and Time & Place keep their existing options.
 - **Per-Site Bypass & Settings Backup**: Manage the bypass list from the settings panel, add/remove domains, and export/import protection settings as JSON. Bypassed sites receive no injected scripts.
-- **Privacy-conscious GeoIP**: Exit-IP timezone lookups run only while timezone protection and the global shield are enabled. No analytics, telemetry, or browsing-history uploads; see `PRIVACY.md`.
+- **Privacy-conscious GeoIP**: Exit-IP timezone lookups run only while timezone protection and the global shield are enabled. Timezone protection is on by default; turn it off in the popup or panel to stop GeoIP requests. No analytics, telemetry, or browsing-history uploads; see `PRIVACY.md`.
 - **Network Privacy**:
   - DeclarativeNetRequest rules block intrusive tracking domains (`trackersimulator.org`, `eviltracker.net`, etc.).
   - Enforces `DNT: 1` and `Sec-GPC: 1` privacy signal headers.

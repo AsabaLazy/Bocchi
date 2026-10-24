@@ -90,7 +90,6 @@ const $btnResetDefaults = document.getElementById('btnResetDefaults');
 const $bypassInput = document.getElementById('bypassInput');
 const $bypassAdd = document.getElementById('bypassAdd');
 const $bypassList = document.getElementById('bypassList');
-const $bypassEmpty = document.getElementById('bypassEmpty');
 const $bypassStatus = document.getElementById('bypassStatus');
 const $exportSettings = document.getElementById('exportSettings');
 const $importSettings = document.getElementById('importSettings');
@@ -455,8 +454,8 @@ function updateEngineClasses() {
 }
 
 function fontEyeTooltip(hidden) {
-  if (!globalShieldEnabled) return '防护已全局关闭：当前没有任何字体被隐藏';
-  if (!isFontProtectionOn()) return '字体防护已关闭：当前没有任何字体被隐藏';
+  if (!globalShieldEnabled) return '全局防护已关闭：当前没有任何字体被隐藏';
+  if (!isFontProtectionOn()) return '字体指纹防护已关闭：当前没有任何字体被隐藏';
   return hidden ? '已隐藏，点击恢复可见' : '网站可见，点击隐藏';
 }
 
@@ -966,11 +965,10 @@ function setBypassStatus(message, isError = false) {
 }
 
 function renderBypassList() {
-  if (!$bypassList || !$bypassEmpty) return;
+  if (!$bypassList) return;
   const sites = [...new Set(bypassSites.map(normalizeBypassSite).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   $bypassList.replaceChildren();
   $bypassList.hidden = sites.length === 0;
-  $bypassEmpty.hidden = sites.length > 0;
   for (const site of sites) {
     const row = document.createElement('div');
     row.className = 'opt-row opt-row-select';
@@ -1099,7 +1097,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (wasChecked !== val) moduleChanged = true;
   }
   if (moduleChanged) {
-    syncNavDotsFromInputs();
+    syncModuleUi();
     renderConsole();
   }
   if (changes.timezone || changes.targetTimezone || changes.timezoneMode || changes.manualTimezone || changes.geoTimezone) {
@@ -1147,13 +1145,7 @@ for (const key of MODULE_KEYS) {
   if (el) moduleInputs[key] = el;
 }
 
-function syncNavDotsFromInputs() {
-  document.querySelectorAll('.nav-dot').forEach(dot => {
-    const primary = moduleInputs[dot.dataset.key];
-    const anyInput = dot.dataset.keyAny ? moduleInputs[dot.dataset.keyAny] : null;
-    const on = (primary && primary.checked) || (anyInput && anyInput.checked);
-    dot.classList.toggle('on', !!on);
-  });
+function syncModuleUi() {
   updateLanguagePreview();
 }
 
@@ -1429,7 +1421,13 @@ function showView(name) {
 document.querySelectorAll('.nav-item').forEach(btn => {
   btn.addEventListener('click', () => showView(btn.dataset.view));
 });
-window.addEventListener('hashchange', () => showView((location.hash || '#canvas').slice(1)));
+window.addEventListener('hashchange', () => {
+  if (location.hash === '#settings-content') {
+    document.getElementById('settings-content')?.focus();
+    return;
+  }
+  showView((location.hash || '#canvas').slice(1));
+});
 
 // 时区 / 位置控制台:地图是唯一交互面,两个眼睛是信号层
 const GEO_DEFAULT = { lat: 34.0522, lng: -118.2437 };
@@ -1980,8 +1978,8 @@ function renderConsole() {
 
   // Normal mode is already legible from the active source chip; only surface exceptions.
   let note = '';
-  if (!tzOn) note = '时区层已关闭，网站看到真实时区';
-  else if (!geoOn && tzMode === 'geo') note = '位置层已关闭，时区回退出口 IP';
+  if (!tzOn) note = '时区伪装已关闭，网站看到真实时区';
+  else if (!geoOn && tzMode === 'geo') note = '位置伪装已关闭，时区回退到网络出口';
   if ($tzNote) $tzNote.textContent = note;
 }
 
@@ -2027,9 +2025,9 @@ if ($tzSelect) {
   });
 }
 
-// 模块开关变化:开启位置层时,时区默认跟随位置(仅从自动切换)
+// 模块开关变化:开启位置伪装时,时区默认跟随位置(仅从自动切换)
 function onModuleToggle(key, on) {
-  syncNavDotsFromInputs();
+  syncModuleUi();
   if (key === 'geolocationProtection' && on && tzMode === 'auto') {
     const derived = nearestTz(geoLat, geoLng);
     const patch = { timezoneMode: 'geo' };
@@ -2428,7 +2426,7 @@ async function init() {
           if (!moduleInputs[key]) continue;
           moduleInputs[key].checked = (key === 'geolocationProtection' || key === 'languageProtection') ? res[key] === true : res[key] !== false;
         }
-        syncNavDotsFromInputs();
+        syncModuleUi();
         applyTzUI(res);
         applyGeoUI(res);
         applyIpUI(res);
@@ -2521,11 +2519,9 @@ function collectHelpEntries(viewId) {
 
   if (viewId === 'bypass') {
     return [
-      { title: '网站例外', text: '加入例外后，该网站不会加载防护脚本，页面级保护会停用；全局追踪拦截和视频通话网络策略仍会生效。' },
+      { title: '网站例外', text: '加入例外后，该网站不会加载防护脚本，页面级保护会停用；全局追踪拦截和 WebRTC 网络策略仍会生效。' },
       { title: '添加网站', text: '输入域名或网址即可，支持子域；保存后刷新该网站即可生效。' },
-      { title: '移除网站', text: '从名单移除后，刷新该网站即可恢复防护。' },
-      { title: '导出设置', text: '导出防护开关、子选项、字体、语言、时区、设备和网站例外名单；不包含 IP 与时区缓存。' },
-      { title: '导入设置', text: '从 JSON 备份恢复设置；导入前会再次确认，导入后刷新设置页。' }
+      { title: '移除网站', text: '从名单移除后，刷新该网站即可恢复防护。' }
     ];
   }
 

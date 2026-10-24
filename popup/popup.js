@@ -304,7 +304,7 @@ function updateUI() {
     } else if (match.exact) {
       $siteActionDesc.textContent = '关闭开关可恢复此网站的防护';
     } else {
-      $siteActionDesc.textContent = '对此网站暂停防护（加入例外名单）';
+      $siteActionDesc.textContent = '对此网站暂停防护';
     }
   }
 }

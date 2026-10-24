@@ -36,9 +36,9 @@ storage removes it. Raw IP addresses are not stored by the extension.
 
 ### GeoIP timezone lookup
 
-When **timezone protection** and the **global shield** are enabled, the
-extension may request an approximate exit-point timezone from one of these
-third-party GeoIP providers:
+Timezone protection is enabled by default. When it and the **global shield**
+are enabled, the extension may request an approximate exit-point timezone from
+one of these third-party GeoIP providers:
 
 - https://ipwho.is/
 - https://get.geojs.io/
@@ -48,8 +48,9 @@ The providers receive the request and the user's IP address, as with any HTTPS
 request. The extension uses only the returned timezone and approximate location
 to keep the reported timezone consistent with the connection. The result is
 cached locally, and the lookup is skipped entirely when timezone protection or
-the global shield is disabled. Each provider's own privacy policy applies to its
-processing.
+the global shield is disabled. Turn off timezone protection in the popup or
+settings panel to stop these requests. Each provider's own privacy policy applies
+to its processing.
 
 ### City-name localization
 

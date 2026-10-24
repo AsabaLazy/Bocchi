@@ -15,7 +15,14 @@
 
 - Reordered the settings navigation so Canvas & WebGL is first and Fonts is not
   the default/first item.
-- Standardized setting names around Chinese-first standard terminology.
+- Standardized setting names around fingerprinting terminology: fingerprint
+  protection, canvas readout/export, WebRTC leaks, and timezone/location
+  spoofing. Refreshed the store screenshots to match.
+- Cleaned up the settings surface: removed redundant nav dots and active-state
+  bars, moved backup/restore to its own view, wrapped the narrow-screen nav,
+  deferred off-screen font rows, and added a skip link.
+- Kept timezone protection enabled by default and documented the default-on
+  GeoIP lookup behavior explicitly, including how to stop it.
 - Compatibility defaults: non-proxied UDP blocking and gamepad fingerprint
   hiding are now off for fresh installs and after “恢复默认”.
 - Flattened decorative highlights: switch/knob shadows, raised selected states,

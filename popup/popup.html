@@ -14,7 +14,7 @@
         <svg class="shield-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
         </svg>
-        <span class="title">Bocchi Privacy Shield</span>
+        <h1 class="title">Bocchi Privacy Shield</h1>
       </div>
       <div class="status-badge" id="statusBadge">
         <span class="status-dot" id="statusDot"></span>
@@ -25,8 +25,7 @@
     <!-- Master Switch Card -->
     <div class="card master-card">
       <div class="card-info">
-        <span class="card-title">全局防护开关</span>
-        <span class="card-desc">一键开启或暂停所有防护</span>
+        <span class="card-title">全局防护</span>
       </div>
       <label class="switch" title="开启或暂停全局防护">
         <input type="checkbox" id="globalShieldEnabled" checked aria-label="全局防护开关">
@@ -44,7 +43,7 @@
         <span class="site-status-badge" id="siteStatusText">受保护</span>
       </div>
       <div class="site-action">
-        <span class="site-action-desc" id="siteActionDesc">对此网站暂停防护（加入例外名单）</span>
+        <span class="site-action-desc" id="siteActionDesc">对此网站暂停防护</span>
         <label class="switch switch-sm" title="对此网站暂停防护">
           <input type="checkbox" id="siteBypass" aria-label="对此网站暂停防护">
           <span class="slider"></span>
@@ -53,84 +52,83 @@
     </div>
 
     <!-- Modules Group -->
-    <div class="section-title">防护模块</div>
-    <div class="modules-list" id="modulesList">
-      <div class="module-item" title="阻止网站通过元素尺寸和画布识别设备">
+    <div class="modules-list" id="modulesList" role="group" aria-label="指纹防护模块">
+      <div class="module-item" title="防止网站通过本机字体列表识别设备">
         <div class="module-info">
-          <span class="module-name">字体探测防护</span>
+          <span class="module-name">字体指纹防护</span>
         </div>
-        <label class="switch switch-sm" title="切换字体探测防护">
-          <input type="checkbox" id="fontProtection" checked aria-label="字体探测防护">
+        <label class="switch switch-sm" title="切换字体指纹防护">
+          <input type="checkbox" id="fontProtection" checked aria-label="字体指纹防护">
           <span class="slider"></span>
         </label>
       </div>
 
-      <div class="module-item" title="统一浏览器语言、日期数字格式和网站收到的语言偏好">
+      <div class="module-item" title="统一网页读取和发送的语言、日期与数字格式">
         <div class="module-info">
-          <span class="module-name">语言替换</span>
+          <span class="module-name">语言伪装</span>
         </div>
-        <label class="switch switch-sm" title="切换语言替换">
-          <input type="checkbox" id="languageProtection" aria-label="语言替换">
+        <label class="switch switch-sm" title="切换语言伪装">
+          <input type="checkbox" id="languageProtection" aria-label="语言伪装">
           <span class="slider"></span>
         </label>
       </div>
 
-      <div class="module-item" title="干扰网站读取画布和 3D 图形内容">
+      <div class="module-item" title="防止网站通过画布和 3D 画面识别设备">
         <div class="module-info">
-          <span class="module-name">画布与图形防护</span>
+          <span class="module-name">画布指纹防护</span>
         </div>
-        <label class="switch switch-sm" title="切换画布与图形防护">
-          <input type="checkbox" id="canvasProtection" checked aria-label="画布与图形防护">
+        <label class="switch switch-sm" title="切换画布指纹防护">
+          <input type="checkbox" id="canvasProtection" checked aria-label="画布指纹防护">
           <span class="slider"></span>
         </label>
       </div>
 
-      <div class="module-item" title="干扰网站对音频特征的分析">
+      <div class="module-item" title="防止网站通过音频处理结果识别设备">
         <div class="module-info">
-          <span class="module-name">音频防护</span>
+          <span class="module-name">音频指纹防护</span>
         </div>
-        <label class="switch switch-sm" title="切换音频防护">
-          <input type="checkbox" id="audioProtection" checked aria-label="音频防护">
+        <label class="switch switch-sm" title="切换音频指纹防护">
+          <input type="checkbox" id="audioProtection" checked aria-label="音频指纹防护">
           <span class="slider"></span>
         </label>
       </div>
 
-      <div class="module-item" title="隐藏本地网络信息，并提供可选的直连流量限制">
+      <div class="module-item" title="隐藏本地 IP 和网络信息，阻止 WebRTC 泄露">
         <div class="module-info">
-          <span class="module-name">视频通话防护</span>
+          <span class="module-name">WebRTC 泄露防护</span>
         </div>
-        <label class="switch switch-sm" title="切换视频通话防护">
-          <input type="checkbox" id="webrtcProtection" checked aria-label="视频通话防护">
+        <label class="switch switch-sm" title="切换 WebRTC 泄露防护">
+          <input type="checkbox" id="webrtcProtection" checked aria-label="WebRTC 泄露防护">
           <span class="slider"></span>
         </label>
       </div>
 
-      <div class="module-item" title="按当前网络自动匹配日期、时间和时区">
+      <div class="module-item" title="让网站看到你选择的时区，而不是真实时区">
         <div class="module-info">
-          <span class="module-name">自动匹配时区</span>
+          <span class="module-name">时区伪装</span>
         </div>
-        <label class="switch switch-sm" title="切换自动匹配时区">
-          <input type="checkbox" id="timezoneProtection" checked aria-label="自动匹配时区">
+        <label class="switch switch-sm" title="切换时区伪装">
+          <input type="checkbox" id="timezoneProtection" checked aria-label="时区伪装">
           <span class="slider"></span>
         </label>
       </div>
 
-      <div class="module-item" title="向网站报告你选择的位置，而不是真实位置">
+      <div class="module-item" title="让网站看到你选择的位置，而不是真实位置">
         <div class="module-info">
-          <span class="module-name">模拟位置</span>
+          <span class="module-name">位置伪装</span>
         </div>
-        <label class="switch switch-sm" title="切换模拟位置">
-          <input type="checkbox" id="geolocationProtection" aria-label="模拟位置">
+        <label class="switch switch-sm" title="切换位置伪装">
+          <input type="checkbox" id="geolocationProtection" aria-label="位置伪装">
           <span class="slider"></span>
         </label>
       </div>
 
-      <div class="module-item" title="统一处理器、内存和逻辑核心信息">
+      <div class="module-item" title="统一显卡、屏幕、CPU 和内存等信息">
         <div class="module-info">
-          <span class="module-name">设备信息防护</span>
+          <span class="module-name">硬件指纹防护</span>
         </div>
-        <label class="switch switch-sm" title="切换设备信息防护">
-          <input type="checkbox" id="hardwareProtection" checked aria-label="设备信息防护">
+        <label class="switch switch-sm" title="切换硬件指纹防护">
+          <input type="checkbox" id="hardwareProtection" checked aria-label="硬件指纹防护">
           <span class="slider"></span>
         </label>
       </div>

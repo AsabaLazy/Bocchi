@@ -50,8 +50,8 @@ English
 | Marquee Promo Tile | 1400×560 | ✅ Created | `store-assets/promo-marquee.png` |
 
 ### Screenshot Notes
-- Screenshot 1: Canvas & WebGL settings with per-surface sub-switches.
-- Screenshot 2: WebRTC settings showing leak protection and the explicit full-block options.
+- Screenshot 1: Canvas & 3D fingerprint settings with per-surface sub-switches.
+- Screenshot 2: WebRTC leak protection settings, including the explicit full-block options.
 
 ## Permissions Justification
 

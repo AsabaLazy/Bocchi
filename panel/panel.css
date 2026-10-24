@@ -5,6 +5,7 @@
    ═════════════════════════════════════════════════════════════════ */
 
 :root {
+  color-scheme: dark;
   --bg: #09090b;
   --surface: #111113;
   --surface-2: #18181b;
@@ -36,6 +37,7 @@
 
 /* 浅色模式:同一套 zinc 中性 token,无彩色强调 */
 html[data-theme="light"] {
+  color-scheme: light;
   --bg: #fafafa;
   --surface: #ffffff;
   --surface-2: #f4f4f5;
@@ -74,6 +76,14 @@ body {
 
 ::selection { background: var(--primary); color: var(--primary-foreground); }
 
+.skip-link {
+  position: fixed; left: 12px; top: 12px; z-index: 200;
+  padding: 8px 12px; border: 1px solid var(--ring); border-radius: var(--radius-s);
+  background: var(--surface); color: var(--text); font-size: 13px;
+  text-decoration: none; transform: translateY(-200%);
+}
+.skip-link:focus-visible { transform: translateY(0); outline: 2px solid var(--ring); outline-offset: 2px; }
+
 .shell { max-width: 860px; margin: 0 auto; padding: 26px 24px 64px; }
 
 /* ───────────────── 设置页布局:侧栏 + 内容区 ───────────────── */
@@ -96,8 +106,7 @@ body {
   gap: 2px;
 }
 .nav-item {
-  position: relative;
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center;
   width: 100%; text-align: left;
   font: inherit; font-size: 13px; color: var(--muted);
   background: transparent; border: 0; border-radius: var(--radius-s);
@@ -109,17 +118,6 @@ body {
 .nav-item[aria-current="page"] {
   color: var(--text); background: var(--accent); font-weight: 500;
 }
-/* 选中强调条:独立直线,不随项圆角弯曲 */
-.nav-item[aria-current="page"]::before {
-  content: "";
-  position: absolute;
-  left: 0; top: 7px; bottom: 7px;
-  width: 2px;
-  background: var(--primary);
-}
-.nav-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--faint); flex: none; }
-.nav-dot.on { background: var(--primary); }
-
 .settings-content { min-width: 0; }
 
 /* 设置读取失败:全局错误条放在可交互区域之外,内容区由 inert 禁用 */
@@ -143,7 +141,7 @@ body {
 .view-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .view-head h2 { font-size: 20px; font-weight: 600; letter-spacing: -.015em; }
 
-.view-head .switch { margin-left: 10px; flex: none; }
+.view-head > .switch { margin-left: 10px; margin-right: 15px; flex: none; }
 
 /* 模块标题旁的 shadcn 风格帮助按钮 */
 .help-trigger {
@@ -187,10 +185,9 @@ html[data-theme="light"] .help-entry-note { background: #fef9c3; border-left-col
 }
 .help-popover-close:hover { color: var(--text); background: var(--accent-hover); }
 .help-popover-close:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
-.view-note { font-size: 12px; color: var(--muted); line-height: 1.6; padding: 0 0 14px; max-width: 72ch; }
-
 /* 站点旁路管理 */
 .bypass-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.backup-actions .sel-btn { min-width: 96px; }
 .bypass-input {
   flex: 1; min-width: 180px; height: var(--control-lg); padding: 0 10px;
   background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-s);
@@ -200,9 +197,6 @@ html[data-theme="light"] .help-entry-note { background: #fef9c3; border-left-col
 .bypass-status { min-height: 18px; padding: 6px 0 8px; font-size: 11.5px; color: var(--muted); }
 .bypass-status.error { color: #f87171; }
 html[data-theme="light"] .bypass-status.error { color: #b91c1c; }
-.bypass-empty { padding: 12px 2px; font-size: 12px; color: var(--muted); }
-.settings-backup { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border); }
-.settings-backup-title { margin-bottom: 4px; font-size: 13px; font-weight: 500; color: var(--text); }
 #bypassList .opt-row { cursor: default; }
 .bypass-domain { overflow-wrap: anywhere; }
 .view-options { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 2px 0 8px; }
@@ -511,13 +505,11 @@ html[data-theme="light"] .tp-results { box-shadow: 0 10px 30px rgba(0,0,0,.08); 
 
 @media (max-width: 760px) {
   .settings-body { grid-template-columns: 1fr; gap: 14px; }
-  .settings-nav { position: static; flex-direction: row; overflow-x: auto; padding-bottom: 6px; }
-  .nav-item { width: auto; white-space: nowrap; }
-  .nav-item[aria-current="page"] { box-shadow: none; }
-  .nav-item[aria-current="page"]::before {
-    top: auto; left: 10px; right: 10px; bottom: 0;
-    width: auto; height: 2px;
+  .settings-nav {
+    position: static; flex-direction: row; flex-wrap: wrap;
+    gap: 4px; overflow: visible; padding-bottom: 6px;
   }
+  .nav-item { width: auto; white-space: nowrap; }
 }
 
 /* ───────────────── 页头 ───────────────── */
@@ -531,15 +523,14 @@ html[data-theme="light"] .tp-results { box-shadow: 0 10px 30px rgba(0,0,0,.08); 
   display: flex; align-items: center; gap: 8px;
 }
 
-.brand-name { font-size: 14px; font-weight: 600; letter-spacing: -.01em; }
+.brand-name { font-size: 14px; font-weight: 600; line-height: inherit; letter-spacing: -.01em; }
 
 /* 状态胶囊 = 全局总开关:与 popup 共用 globalShieldEnabled */
 .status-pill {
-  margin-left: 4px;
-  display: flex; align-items: center; gap: 7px;
-  height: var(--control-lg);
-  font-size: 11.5px; color: var(--muted);
-  padding: 0 4px 0 10px;
+  display: flex; align-items: center; justify-content: space-between; gap: 7px;
+  height: var(--control-lg); min-width: 121px;
+  font-size: 13px; color: var(--muted);
+  padding: 0 14px 0 10px;
   border: 1px solid var(--border); border-radius: var(--radius-s);
   background: var(--surface);
   cursor: pointer; user-select: none;
@@ -550,7 +541,7 @@ body.off .status-text { color: var(--faint); }
 
 /* 恢复默认:两步确认(第一次点击变成"确认恢复？",3 秒内再点生效) */
 .reset-btn {
-  height: var(--control-lg); padding: 0 12px;
+  height: var(--control-lg); min-width: 121px; padding: 0 12px;
   font: inherit; font-size: 13px; color: var(--muted);
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius-s); cursor: pointer;
@@ -763,6 +754,8 @@ body.off input[type="checkbox"].row-select { opacity: .4; pointer-events: none; 
   transition: background .12s;
   min-width: 0;
   max-width: 100%;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 48px;
 }
 .col-name { min-width: 0; overflow: hidden; }
 .font-row:not(.selected):hover { background: var(--accent-hover); }
