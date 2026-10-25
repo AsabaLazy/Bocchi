@@ -1,6 +1,6 @@
-# Bocchi Privacy Shield
+# Bocchi
 
-A Manifest V3 Chromium extension engineered for advanced browser fingerprint defense, WebRTC leak prevention, and cross-site tracker neutralization.
+Privacy-first browser extension for fingerprint protection, WebRTC leak prevention, and timezone spoofing.
 
 ## Key Features
 
@@ -81,7 +81,7 @@ To produce a production zip archive ready for distribution:
 ./package-extension.sh
 ```
 
-This generates `bocchi-privacy-shield-v1.1.0.zip` (the version comes from `manifest.json`; the packager also verifies `package.json` and `CHANGELOG.md` agree).
+This generates `bocchi-v1.1.0.zip` (the version comes from `manifest.json`; the packager also verifies `package.json` and `CHANGELOG.md` agree).
 
 ## Compatibility Notes
 

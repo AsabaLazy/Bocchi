@@ -13,6 +13,8 @@
 
 ### Changed
 
+- Renamed the product from Bocchi Privacy Shield to Bocchi across the manifest,
+  interface, documentation, and distribution archive.
 - Reordered the settings navigation so Canvas & WebGL is first and Fonts is not
   the default/first item.
 - Standardized setting names around fingerprinting terminology: fingerprint

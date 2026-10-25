@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Bocchi Privacy Shield - Background Service Worker
+ * Bocchi - Background Service Worker
  *
  * Responsibilities:
  *  - Enforce the WebRTC IP handling policy from the independent UDP-block and
@@ -63,9 +63,9 @@ async function applyWebRTCPolicy(specifiedEnabled) {
       await chrome.privacy.network.webRTCIPHandlingPolicy.set({
         value: policyValue
       });
-      console.log(`[Bocchi Privacy Shield] WebRTC IP handling policy configured: ${policyValue}`);
+      console.log(`[Bocchi] WebRTC IP handling policy configured: ${policyValue}`);
     } catch (err) {
-      console.error('[Bocchi Privacy Shield] Failed to set webRTCIPHandlingPolicy:', err);
+      console.error('[Bocchi] Failed to set webRTCIPHandlingPolicy:', err);
     }
   }
 }
@@ -320,9 +320,9 @@ async function syncTimezoneNow(force, options) {
         [GEO_FAILURE_UNTIL_KEY]: attemptedAt + GEOIP_FAILURE_BACKOFF_MS
       });
     } catch (err) {
-      console.error('[Bocchi Privacy Shield] Failed to persist GeoIP backoff:', err);
+      console.error('[Bocchi] Failed to persist GeoIP backoff:', err);
     }
-    console.warn('[Bocchi Privacy Shield] GeoIP lookup failed; keeping cached timezone.');
+    console.warn('[Bocchi] GeoIP lookup failed; keeping cached timezone.');
     return cachedTimezone || DEFAULT_TIMEZONE;
   }
 
@@ -343,7 +343,7 @@ async function syncTimezoneNow(force, options) {
   // egress timezone changed and no provider had coordinates, drop the stale
   // location instead of pairing the new zone with an old city.
   if (!hasCoordinates) {
-    console.warn('[Bocchi Privacy Shield] GeoIP response had no coordinates; caching timezone only.');
+    console.warn('[Bocchi] GeoIP response had no coordinates; caching timezone only.');
   }
 
   try {
@@ -356,16 +356,16 @@ async function syncTimezoneNow(force, options) {
       [GEO_LAST_ATTEMPT_KEY]: attemptedAt,
       [GEO_FAILURE_UNTIL_KEY]: 0
     });
-    console.log('[Bocchi Privacy Shield] Egress timezone synchronized:', info.timezone);
+    console.log('[Bocchi] Egress timezone synchronized:', info.timezone);
   } catch (err) {
-    console.error('[Bocchi Privacy Shield] Failed to cache egress timezone:', err);
+    console.error('[Bocchi] Failed to cache egress timezone:', err);
   }
   return info.timezone;
 }
 
 function syncTimezone(force = false, options) {
   const task = timezoneSyncTail.then(() => syncTimezoneNow(force, options)).catch((err) => {
-    console.error('[Bocchi Privacy Shield] Failed to sync timezone:', err);
+    console.error('[Bocchi] Failed to sync timezone:', err);
     return DEFAULT_TIMEZONE;
   });
   // Keep the queue alive after a rejected task; the caller still receives the
@@ -403,7 +403,7 @@ async function withRetry(label, fn, attempts = 2) {
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (i === 0) console.warn(`[Bocchi Privacy Shield] ${label} failed, retrying:`, err);
+      if (i === 0) console.warn(`[Bocchi] ${label} failed, retrying:`, err);
     }
   }
   throw lastErr;
@@ -427,7 +427,7 @@ async function syncStaticRulesetNow() {
   } catch (err) {
     // Without a confirmed target we must not guess: log loudly and leave the
     // currently enabled/disabled rulesets untouched.
-    console.error('[Bocchi Privacy Shield] Failed to read global shield state after retry; static ruleset left unchanged:', err);
+    console.error('[Bocchi] Failed to read global shield state after retry; static ruleset left unchanged:', err);
     return;
   }
 
@@ -441,7 +441,7 @@ async function syncStaticRulesetNow() {
         // The target state is known even if the current state is not; the
         // update below is idempotent, so apply it rather than silently
         // keeping a stale DNT/Sec-GPC/tracker ruleset state.
-        console.error('[Bocchi Privacy Shield] Failed to list static rulesets after retry; applying target state:', err);
+        console.error('[Bocchi] Failed to list static rulesets after retry; applying target state:', err);
       }
     }
     if (currentlyEnabled === enabled) return;
@@ -450,9 +450,9 @@ async function syncStaticRulesetNow() {
       ? { enableRulesetIds: [STATIC_RULESET_ID] }
       : { disableRulesetIds: [STATIC_RULESET_ID] };
     await withRetry('static ruleset toggle', () => dnr.updateEnabledRulesets(opts));
-    console.log(`[Bocchi Privacy Shield] Static ruleset ${STATIC_RULESET_ID} ${enabled ? 'enabled' : 'disabled'}.`);
+    console.log(`[Bocchi] Static ruleset ${STATIC_RULESET_ID} ${enabled ? 'enabled' : 'disabled'}.`);
   } catch (err) {
-    console.error('[Bocchi Privacy Shield] Failed to toggle static ruleset:', err);
+    console.error('[Bocchi] Failed to toggle static ruleset:', err);
   }
 }
 
@@ -642,7 +642,7 @@ function contentScriptDefinition(spec, excludeMatches) {
 }
 
 async function repairContentScript(spec, excludeMatches, wasRegistered, originalError, scripting) {
-  console.error(`[Bocchi Privacy Shield] Content script ${spec.id} sync failed; retrying without bypass exclusions:`, originalError);
+  console.error(`[Bocchi] Content script ${spec.id} sync failed; retrying without bypass exclusions:`, originalError);
   // Never unregister first: a failed re-registration would disable protection
   // on every site. Prefer a safe update/registration without excludeMatches;
   // the bypass list may be temporarily ineffective, but the shield stays on.
@@ -659,10 +659,10 @@ async function repairContentScript(spec, excludeMatches, wasRegistered, original
       await withRetry(`register content script ${spec.id} (safe)`,
         () => scripting.registerContentScripts([safeDefinition]));
     }
-    console.error(`[Bocchi Privacy Shield] ${spec.id} registered without bypass exclusions; remove invalid entries from the exception list.`);
+    console.error(`[Bocchi] ${spec.id} registered without bypass exclusions; remove invalid entries from the exception list.`);
     return true;
   } catch (fallbackErr) {
-    console.error(`[Bocchi Privacy Shield] Content script ${spec.id} could not be registered safely:`, fallbackErr);
+    console.error(`[Bocchi] Content script ${spec.id} could not be registered safely:`, fallbackErr);
     return false;
   }
 }
@@ -694,7 +694,7 @@ async function syncContentScriptsNow() {
     excludeMatches = bypassExcludeMatches(res && res.siteBypassList);
     shieldEnabled = !res || res.globalShieldEnabled !== false;
   } catch (err) {
-    console.error('[Bocchi Privacy Shield] Failed to read bypass list after retry; keeping current content-script registrations:', err);
+    console.error('[Bocchi] Failed to read bypass list after retry; keeping current content-script registrations:', err);
     return;
   }
 
@@ -712,11 +712,11 @@ async function syncContentScriptsNow() {
       existing = await withRetry('list content scripts (shield off)',
         () => scripting.getRegisteredContentScripts());
     } catch (err) {
-      console.error('[Bocchi Privacy Shield] Failed to list content scripts after retry; keeping current registrations:', err);
+      console.error('[Bocchi] Failed to list content scripts after retry; keeping current registrations:', err);
       return;
     }
     if (!Array.isArray(existing)) {
-      console.error('[Bocchi Privacy Shield] Content-script list was not an array; keeping current registrations.');
+      console.error('[Bocchi] Content-script list was not an array; keeping current registrations.');
       return;
     }
     const ids = existing
@@ -728,14 +728,14 @@ async function syncContentScriptsNow() {
       await withRetry('unregister content scripts (shield off)',
         () => scripting.unregisterContentScripts({ ids }));
     } catch (err) {
-      console.error('[Bocchi Privacy Shield] Failed to unregister content scripts; retrying per ID:', err);
+      console.error('[Bocchi] Failed to unregister content scripts; retrying per ID:', err);
       for (const id of ids) {
         try {
           await scripting.unregisterContentScripts({ ids: [id] });
         } catch (idErr) {
           // A concurrent sync may have removed the ID already.
           if (!isNonexistentScriptError(idErr)) {
-            console.error(`[Bocchi Privacy Shield] Failed to unregister content script ${id}:`, idErr);
+            console.error(`[Bocchi] Failed to unregister content script ${id}:`, idErr);
           }
         }
       }
@@ -751,12 +751,12 @@ async function syncContentScriptsNow() {
     const existing = await withRetry('list content scripts',
       () => scripting.getRegisteredContentScripts());
     if (!Array.isArray(existing)) {
-      console.error('[Bocchi Privacy Shield] Content-script list was not an array; keeping current registrations.');
+      console.error('[Bocchi] Content-script list was not an array; keeping current registrations.');
       return;
     }
     existingIds = new Set(existing.map(s => s && s.id).filter(Boolean));
   } catch (err) {
-    console.error('[Bocchi Privacy Shield] Failed to list content scripts after retry; keeping current registrations:', err);
+    console.error('[Bocchi] Failed to list content scripts after retry; keeping current registrations:', err);
     return;
   }
 
@@ -769,7 +769,7 @@ async function syncContentScriptsNow() {
 
   const reportFailure = (spec, fallbackErr) => {
     // Losing registration means no protection at all: surface it loudly.
-    console.error(`[Bocchi Privacy Shield] Content script ${spec.id} registration failed:`, fallbackErr);
+    console.error(`[Bocchi] Content script ${spec.id} registration failed:`, fallbackErr);
   };
 
   // Update all existing registrations in one call and register all missing
@@ -827,7 +827,7 @@ async function setupPeriodicTimezoneAlarm() {
       await chrome.alarms.create(TIMEZONE_ALARM, { periodInMinutes: 60 });
     }
   } catch (err) {
-    console.error('[Bocchi Privacy Shield] Failed to schedule timezone alarm:', err);
+    console.error('[Bocchi] Failed to schedule timezone alarm:', err);
   }
 }
 
@@ -867,7 +867,7 @@ async function applyLanguageHeaderNow() {
   } catch (err) {
     // The target state is unknown. Never silently keep a stale header rule:
     // leave a loud trace so the panel/support can see the failed reconcile.
-    console.error('[Bocchi Privacy Shield] Failed to read language config after retry; dynamic rules left unchanged:', err);
+    console.error('[Bocchi] Failed to read language config after retry; dynamic rules left unchanged:', err);
     return;
   }
   res = res || {};
@@ -885,11 +885,11 @@ async function applyLanguageHeaderNow() {
     if (Array.isArray(existing)) {
       removeRuleIds = existing.filter(r => r && r.id === LANGUAGE_RULE_ID).map(r => r.id);
     } else {
-      console.error('[Bocchi Privacy Shield] Dynamic rules response was not an array; reconciling rule by id.');
+      console.error('[Bocchi] Dynamic rules response was not an array; reconciling rule by id.');
       removeRuleIds = [LANGUAGE_RULE_ID];
     }
   } catch (err) {
-    console.error('[Bocchi Privacy Shield] Failed to list dynamic rules after retry; reconciling rule by id:', err);
+    console.error('[Bocchi] Failed to list dynamic rules after retry; reconciling rule by id:', err);
     removeRuleIds = [LANGUAGE_RULE_ID];
   }
 
@@ -898,7 +898,7 @@ async function applyLanguageHeaderNow() {
       try {
         await withRetry('remove Accept-Language rule', () => dnr.updateDynamicRules({ removeRuleIds }));
       } catch (err) {
-        console.error('[Bocchi Privacy Shield] Failed to remove Accept-Language rule after retry:', err);
+        console.error('[Bocchi] Failed to remove Accept-Language rule after retry:', err);
       }
     }
     return;
@@ -930,7 +930,7 @@ async function applyLanguageHeaderNow() {
     await withRetry('apply Accept-Language rule',
       () => dnr.updateDynamicRules({ removeRuleIds, addRules: [rule] }));
   } catch (err) {
-    console.error('[Bocchi Privacy Shield] Failed to apply Accept-Language rule after retry:', err);
+    console.error('[Bocchi] Failed to apply Accept-Language rule after retry:', err);
   }
 }
 
@@ -1023,7 +1023,7 @@ if (typeof chrome !== 'undefined' && chrome.runtime) {
               sendResponse({});
             }
           } catch (err) {
-            console.error('[Bocchi Privacy Shield] Failed to read timezone cache:', err);
+            console.error('[Bocchi] Failed to read timezone cache:', err);
             sendResponse({});
           }
         })();

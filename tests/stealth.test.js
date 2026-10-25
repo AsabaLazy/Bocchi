@@ -30,7 +30,7 @@ const assert = new Proxy(rawAssert, {
   }
 });
 
-console.log('=== Running Bocchi Privacy Shield Comprehensive Test Suite ===\n');
+console.log('=== Running Bocchi Comprehensive Test Suite ===\n');
 
 // 1. Test manifest.json
 console.log('[Test 1] Validating manifest.json...');

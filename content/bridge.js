@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Bocchi Privacy Shield - Isolated World Bridge
+ * Bocchi - Isolated World Bridge
  *
  * Runs in ISOLATED world at document_start.
  * Reads egress IP timezone and privacy shield configuration cached in chrome.storage.local

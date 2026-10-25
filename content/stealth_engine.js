@@ -1,5 +1,5 @@
 /**
- * Bocchi Privacy Shield - Stealth Engine
+ * Bocchi - Stealth Engine
  *
  * Runs in MAIN world (run_at: document_start).
  * Provides deterministic, multi-realm evasion against advanced browser fingerprinting

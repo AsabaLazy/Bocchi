@@ -1,14 +1,14 @@
 #!/bin/bash
-# package-extension.sh — Creates a clean ZIP for Chrome Web Store submission.
+# package-extension.sh — Creates a clean ZIP for distribution.
 #
 # The shipped file set is an explicit allowlist (not "everything except ..."),
-# so a new test/doc/asset cannot leak into the store zip merely because it was
-# not added to an exclusion list. The same list drives the zip branch, the
-# python fallback and the post-build verification.
+# so a new test/doc/asset cannot leak into the distribution zip merely because
+# it was not added to an exclusion list. The same list drives the zip branch,
+# the python fallback and the post-build verification.
 
 set -euo pipefail
 
-EXTENSION_NAME="bocchi-privacy-shield"
+EXTENSION_NAME="bocchi"
 
 # Exact shipped-file allowlist. Update this list (and nothing else) when the
 # runtime bundle intentionally changes. panel/font-language-coverage.json is a

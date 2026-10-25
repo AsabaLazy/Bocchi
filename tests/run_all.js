@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * Unified test entry point for the Bocchi Privacy Shield extension.
+ * Unified test entry point for the Bocchi extension.
  *
  * Usage: node tests/run_all.js <mode>
  * Run without arguments to see all available modes.
@@ -144,7 +144,7 @@ function modeTz() {
 }
 
 /**
- * Package mode: build the store zip and require both a clean exit and the
+ * Package mode: build the distribution zip and require both a clean exit and the
  * exact allowlist/version verification marker emitted by
  * package-extension.sh. This prevents a "zero files packaged" success from
  * slipping through as exit 0.
@@ -260,7 +260,7 @@ function modeAll() {
 /* ------------------------------------------------------------------ usage */
 
 function printUsage() {
-  console.log(`Bocchi Privacy Shield - unified test runner
+  console.log(`Bocchi - unified test runner
 
 Usage:
   node tests/run_all.js <mode>
@@ -273,7 +273,7 @@ Modes:
            (${TZ_MATRIX.join(', ')}) and print a summary table
            (TZ | result | duration). Each run must pass the same
            marker/count gate. Exits 1 if any timezone fails.
-  package  Build the store zip with package-extension.sh and require its
+  package  Build the distribution zip with package-extension.sh and require its
            "PACKAGING VERIFY OK (<n> files, v<version>)" marker (exact file
            allowlist + manifest/package.json/CHANGELOG version agreement).
            No browser required.

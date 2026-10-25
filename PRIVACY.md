@@ -1,8 +1,8 @@
-# Bocchi Privacy Shield — Privacy Policy
+# Bocchi — Privacy Policy
 
-Last updated: 2026-10-23
+Last updated: 2026-10-24
 
-Bocchi Privacy Shield is a Manifest V3 browser extension that reduces browser
+Bocchi is a Manifest V3 browser extension that reduces browser
 fingerprinting and WebRTC leaks. This policy explains what the extension stores,
 what it sends off-device, and what it never collects.
 

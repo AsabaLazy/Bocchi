@@ -1,19 +1,19 @@
-# Chrome Web Store Listing — Bocchi Privacy Shield
+# Chrome Web Store Listing — Bocchi
 
 > Last Updated: 2026-10-23
 
 ## Store Listing
 
 **Extension Name** [REQUIRED]
-Bocchi Privacy Shield
+Bocchi
 
 **Short Description** [REQUIRED]
-Protect your privacy by blocking browser fingerprinting, preventing WebRTC IP leaks, and neutralizing cross-site tracking.
+Privacy-first browser extension for fingerprint protection, WebRTC leak prevention, and timezone spoofing.
 
 **Detailed Description** [REQUIRED]
-Bocchi Privacy Shield protects your online identity by neutralizing advanced browser fingerprinting and cross-site tracking techniques without breaking websites.
+Bocchi protects your online identity by neutralizing advanced browser fingerprinting and cross-site tracking techniques without breaking websites.
 
-Most websites track users not just through cookies, but through subtle device characteristics like screen rendering, audio hardware, installed fonts, and network leaks. Bocchi Privacy Shield prevents tracking networks from building a persistent profile of your device.
+Most websites track users not just through cookies, but through subtle device characteristics like screen rendering, audio hardware, installed fonts, and network leaks. Bocchi prevents tracking networks from building a persistent profile of your device.
 
 Key Features:
 - Anti-Fingerprinting Protection: Randomizes high-entropy device characteristics (canvas, audio, and font signals) per session so trackers cannot link your visits across websites.
@@ -23,12 +23,12 @@ Key Features:
 - Low-Breakage Defaults: Low-entropy signals stay native, and the settings that commonly break WebRTC calls, low-latency streams, controllers, or locale-sensitive sites are off by default. Every module can be bypassed per site.
 
 How to Use:
-1. Install Bocchi Privacy Shield.
+1. Install Bocchi.
 2. The shield activates automatically in the background on all websites you visit.
 3. Browse normally with continuous protection against passive device identification.
 
 Privacy Commitment:
-Bocchi Privacy Shield is privacy-focused. All fingerprinting protections and calculations run strictly inside your local browser. The extension does not collect, record, or transmit your browsing history, page content, or personal communications to developer servers. There are two disclosed network features: (1) when timezone protection and the global shield are enabled, exit-timezone lookups go to third-party GeoIP services (ipwho.is, get.geojs.io, ipapi.co); (2) when the settings panel localizes built-in city names, it may query the Wikipedia API for translations of a fixed city list. These providers necessarily receive the IP address as part of the request. The timezone, approximate coordinates, and city translations are cached locally; the raw IP is not stored, and GeoIP lookups are skipped when the feature is disabled.
+Bocchi is privacy-focused. All fingerprinting protections and calculations run strictly inside your local browser. The extension does not collect, record, or transmit your browsing history, page content, or personal communications to developer servers. There are two disclosed network features: (1) when timezone protection and the global shield are enabled, exit-timezone lookups go to third-party GeoIP services (ipwho.is, get.geojs.io, ipapi.co); (2) when the settings panel localizes built-in city names, it may query the Wikipedia API for translations of a fixed city list. These providers necessarily receive the IP address as part of the request. The timezone, approximate coordinates, and city translations are cached locally; the raw IP is not stored, and GeoIP lookups are skipped when the feature is disabled.
 
 **Category** [REQUIRED]
 Productivity
