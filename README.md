@@ -2,113 +2,30 @@
 
 Privacy-first browser extension for fingerprint protection, WebRTC leak prevention, and timezone spoofing.
 
-## Key Features
+## Install
 
-- **High-Entropy Vector Randomization**: Canvas 2D, WebGL, and audio fingerprints are randomized per page load on every site. A fresh farbling salt is drawn on each page load; values stay stable within a single page load yet differ across sites and across reloads (refreshing rotates them), so trackers cannot correlate visits into a persistent cross-site profile. Low-entropy signals (user agent and platform) are left native; language spoofing is an explicit opt-in module.
-- **Font Filtering & Masking (Two Modes)**: Hides fonts from canvas measurement, `@font-face`, and local font enumeration (`queryLocalFonts`) probes. Default **blacklist mode** starts with nothing hidden; user-defined custom entries and language-based selection hide fonts on demand; optional **whitelist mode** restricts enumeration to a user-curated allow list. Font allow/block lists are global; per-site control is via the shield bypass list. The font list also has a multi-select **按语言选择** menu: check one or more languages (e.g. 阿拉伯文 + 希伯来文) to select every matching font, then use the existing **隐藏所选 / 显示所选** batch buttons. Each language shows its matching font count. Coverage comes from a generated fontconfig map and is approximate.
-- **Automatic Timezone Alignment**: Syncs the browser timezone (`Date`, `Intl.DateTimeFormat`) to match the network egress IP, eliminating timezone/IP discrepancies; a manual override is available via an IANA selector or an offline world-map picker, optionally linked with the spoofed geolocation.
-- **Geolocation Spoofing (opt-in)**: Reports user-chosen coordinates (manual latitude/longitude or an offline world-map picker) through `navigator.geolocation`; disabled by default.
-- **Language Spoofing (opt-in)**: A target locale is applied consistently to `navigator.language`/`languages`, Intl default locales (DateTimeFormat, NumberFormat, Collator, etc.), Date/Number toLocale helpers, dedicated workers, and the Accept-Language request header. The module is off by default and has three independent sub-switches. Site Service Workers and SharedWorkers cannot be injected and remain native.
-- **WebRTC Leak Prevention (Six Switches)**:
-  - Support-detection hiding (`RTCPeerConnection`, `MediaStreamTrack`, `RTCSessionDescription`), additional-object hiding (`RTCIceCandidate`, `RTCDataChannel`, `RTCConfiguration`), media-device blocking (`enumerateDevices`/`getUserMedia`), device-list masking, local-IP scrubbing, and non-proxied UDP blocking are independent.
-  - Device-list masking and local-IP scrubbing are on by default. The three full-block options and non-proxied UDP blocking are off by default because they break WebRTC video calls, low-latency WebRTC streams, and sites that require media devices.
-  - UDP on enforces `disable_non_proxied_udp`; UDP off with local-IP cleaning on uses `default_public_interface_only` (video works, public IP may be visible); both off restores the browser default. Proxy/VPN users can opt into UDP blocking.
-  - Local-IP scrubbing (when enabled) removes private SDP/ICE candidates in both policy configurations.
-- **Per-Module Sub-Switches**: Canvas exposes 2D export, 2D pixel reads, and WebGL export separately; Audio exposes getChannelData and copyFromChannel; Hardware exposes GPU/WebGL persona, screen/DPR, and timer precision, with gamepad downgrade off by default for controller compatibility. Turn off only the surface that breaks a site while the other protections stay active. Fonts and Time & Place keep their existing options.
-- **Per-Site Bypass & Settings Backup**: Manage the bypass list from the settings panel, add/remove domains, and export/import protection settings as JSON. Bypassed sites receive no injected scripts.
-- **Privacy-conscious GeoIP**: Exit-IP timezone lookups run only while timezone protection and the global shield are enabled. Timezone protection is on by default; turn it off in the popup or panel to stop GeoIP requests. No analytics, telemetry, or browsing-history uploads; see `PRIVACY.md`.
-- **Network Privacy**:
-  - DeclarativeNetRequest rules block intrusive tracking domains (`trackersimulator.org`, `eviltracker.net`, etc.).
-  - Enforces `DNT: 1` and `Sec-GPC: 1` privacy signal headers.
-- **LibreWolf-Style Reductions**: Clamps timer precision, degrades the Gamepad API and high-resolution device enumeration (media devices). `hardwareConcurrency`/`deviceMemory` stay native on purpose: their fixed-value degradation cannot be kept consistent across realms (SharedWorker script URLs cannot be safely wrapped), and consistency beats a marginal entropy reduction on these low-signal vectors.
-- **Worker Cross-Context Protection**: Injects cross-context protections into dedicated Web Workers (classic and module, via blob URL instrumentation). SharedWorkers are intentionally left unwrapped: blob-wrapping a SharedWorker breaks cross-tab worker sharing (a documented Vite/Parcel regression class), and the resulting inconsistency would be worse than the exposed values.
-- **Secure Cross-World Config Sync**: ISOLATED↔MAIN world configuration synchronization uses a secured channel with a one-time token handshake (randomized event names + token validation), so page scripts cannot forge or eavesdrop on shield configuration.
+1. Download and unzip the latest `bocchi-v*.zip` from [Releases](https://github.com/AsabaLazy/Bocchi/releases), or [build from source](CONTRIBUTING.md#build).
+2. Open `chrome://extensions/` and enable **Developer mode**.
+3. Click **Load unpacked** and select the unzipped folder.
 
-## Directory Structure
+## Description
 
-```text
-├── manifest.json              # Extension Manifest V3 configuration
-├── background/
-│   └── service_worker.js      # Background service worker (WebRTC policy, GeoIP timezone sync, periodic alarms)
-├── content/
-│   ├── bridge.js              # ISOLATED world bridge for timezone synchronization
-│   └── stealth_engine.js      # MAIN world script executing all prototype protections
-├── icons/
-│   ├── icon-16.png            # 16×16 toolbar icon
-│   ├── icon-48.png            # 48×48 extension management icon
-│   └── icon-128.png           # 128×128 Chrome Web Store icon
-├── popup/
-│   ├── popup.css              # Toolbar popup styles
-│   ├── popup.html             # Toolbar popup markup (shield status & quick toggles)
-│   └── popup.js               # Toolbar popup logic (global & per-site shield toggles)
-├── panel/
-│   ├── panel.css              # Settings panel styles
-│   ├── panel.html             # Settings panel markup (modules, bypass manager, backup)
-│   ├── panel.js               # Settings, help, bypass, and backup logic
-│   └── font-language-coverage.json # Generated family → BCP 47 language coverage map
-├── tools/
-│   └── generate-font-language-coverage.py # Regenerate coverage from Linux fontconfig
-├── rules/
-│   └── cyt_rules.json         # DeclarativeNetRequest network rules
-├── tests/
-│   ├── stealth.test.js        # Core unit & integration test suite
-│   ├── extension_smoke.js     # Real-browser registration/injection smoke (CFT)
-│   ├── live_creep_verify.js   # CDP automated live verification against CreepJS
-│   ├── check_apivoid_live.js  # CDP live check against APIVoid bot-detection test page
-│   ├── diagnose_apivoid.js    # CDP diagnostics for APIVoid detection results
-│   ├── test_apivoid_tamper.js # CDP tamper-resistance test on APIVoid bot-detection page
-│   ├── perf_bench.js          # CDP performance baseline: extension off vs on (deltas)
-│   └── soak_verify.js         # CDP leak soak: mixed workload + retained-heap sampling
-├── CHROMEWEBSTORE.md          # Chrome Web Store listing, permissions & review notes
-├── PRIVACY.md                 # Privacy policy
-├── CHANGELOG.md               # Release notes
-├── store-assets/              # Store screenshots and promo tiles
-├── .github/workflows/ci.yml   # Unit, timezone, packaging & extension-smoke CI
-└── package-extension.sh       # Extension zip packager
-```
+Bocchi is a Manifest V3 extension that reduces the signals trackers use to link visits. It covers canvas, WebGL, audio, fonts, Workers, WebRTC leaks, timezone, location, and hardware surfaces.
 
-## Installation & Development
+Processing stays local. Language and geolocation spoofing are off by default, WebRTC full blocking is off by default, and every module can be bypassed per site. See [PRIVACY.md](PRIVACY.md) for the GeoIP disclosure.
 
-1. Open Chromium or Google Chrome and navigate to `chrome://extensions/`.
-2. Enable **Developer mode** in the top right corner.
-3. Click **Load unpacked** and select this directory (`/path/to/Bocchi`).
+## Changelog
 
-## Packaging
+See [CHANGELOG.md](CHANGELOG.md), or the [Releases](https://github.com/AsabaLazy/Bocchi/releases) page.
 
-To produce a production zip archive ready for distribution:
+## Issues
 
-```bash
-./package-extension.sh
-```
+Report extension bugs and feature requests in [Issues](https://github.com/AsabaLazy/Bocchi/issues).
 
-This generates `bocchi-v1.1.0.zip` (the version comes from `manifest.json`; the packager also verifies `package.json` and `CHANGELOG.md` agree).
+## FAQ
 
-## Compatibility Notes
+See [docs/FAQ.md](docs/FAQ.md).
 
-The MAIN-world engine injects at `document_start`, while its authenticated config arrives from the isolated-world bridge asynchronously. Global off removes both content scripts entirely. Individual module switches use fail-closed defaults for the brief pre-handshake window, so a page's very first inline script can see a disabled module active; reload the page after changing a module switch if earliest inline code misbehaves. This trade-off keeps fingerprinting protections from failing open on every navigation.
+---
 
-## Testing
-
-Run the test suites with Node.js 22+ (all live scripts need a local Chromium, override the binary via `CHROME_BIN`):
-
-```bash
-npm test              # unit suite (no browser, ~0.2s)
-npm run test:tz       # unit suite × 5 timezones (portability matrix)
-npm run test:extension # real-browser injection/Date/canvas/font/WebRTC smoke (needs CHROME_BIN)
-npm run test:live     # live regression chain, sequential (creep gate → apivoid → tamper)
-npm run test:headed   # same chain in visible desktop windows (deployment-realistic)
-npm run bench         # engine-hook performance benchmark (~6s, report in tests/reports/)
-npm run soak          # long-run leak soak, default 30 minutes (npm run soak -- 5 to shorten)
-```
-
-Every live script runs on the shared harness (`tests/lib/live_harness.js`): it
-discovers the browser, allocates a free port, retries transient launch
-failures, verifies the engine actually applied before probing (a bare
-browser cannot masquerade as a result), cleans up its temp profile and drops
-a timestamped JSON report under `tests/reports/`. `live_creep_verify.js` is a
-gated regression test (13 checks, exits 1 on failure); the apivoid scripts
-are diagnostics (no gate) — note APIVoid rate-limits rapid POSTs and its
-verdict can flip between runs where only the extension's per-session
-randomized canvas/webgl/audio hashes differ.
-
-The live verification scripts (`extension_smoke.js`, `live_creep_verify.js`, `check_apivoid_live.js`, `diagnose_apivoid.js`, `test_apivoid_tamper.js`, `perf_bench.js`, `soak_verify.js`) drive a real browser over the Chrome DevTools Protocol and therefore require a local Chromium installation (override the binary via the `CHROME_BIN` environment variable). **Note:** branded Google Chrome 137+ silently ignores `--load-extension` — use Chromium or Chrome for Testing (`npx @puppeteer/browsers install chrome@stable --path /tmp/cft`). `extension_smoke.js` is a deterministic local-page gate for dynamic registration, bridge injection, Date/canvas/font/WebRTC behavior and bypass-site non-injection; the apivoid scripts remain optional diagnostics. The unit test suite runs under plain Node.js with no browser required.
+[Privacy](PRIVACY.md) · [Architecture](docs/ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md)
