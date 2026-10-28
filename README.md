@@ -28,4 +28,4 @@ See [docs/FAQ.md](docs/FAQ.md).
 
 ---
 
-[Privacy](PRIVACY.md) · [Architecture](docs/ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md)
+[PRD](PRD.md) · [Architecture](ARCHITECTURE.md) · [Design](DESIGN.md) · [Rules](RULES.md) · [Privacy](PRIVACY.md) · [Contributing](CONTRIBUTING.md)

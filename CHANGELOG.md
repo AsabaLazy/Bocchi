@@ -9,6 +9,7 @@
   and additional-object hiding.
 - Site-bypass manager in the settings panel (add, validate, and remove domains).
 - Privacy policy, Chrome Web Store screenshots, and promo tiles.
+- PRD, architecture, design-system, and engineering-rules documents.
 - CI workflow for the unit, timezone, packaging and real-browser extension smoke suites.
 
 ### Changed
