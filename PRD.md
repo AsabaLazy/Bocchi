@@ -2,7 +2,7 @@
 
 ## Summary
 
-Bocchi is a Manifest V3 privacy extension for Chromium that reduces browser fingerprint linkability and WebRTC leaks while keeping sites usable. It is distributed through GitHub Releases, not the Chrome Web Store.
+Bocchi is a Manifest V3 privacy extension for Chromium that reduces browser fingerprint linkability and WebRTC leaks while keeping sites usable. Distribution target: GitHub Releases, not the Chrome Web Store.
 
 The product is for people who want stronger fingerprint protection than a browser's default without adopting a hardened anonymity browser or hand-editing a list of technical switches.
 

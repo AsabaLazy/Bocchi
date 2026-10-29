@@ -33,7 +33,7 @@ package-extension.sh          Allowlisted distribution ZIP
 
 **Service worker.** Owns state that must survive page navigation: content-script registration, the DNR ruleset, WebRTC policy, GeoIP lookup and cache, and alarms. It is event-driven and may be suspended between events.
 
-**Bridge.** Runs in the ISOLATED world at `document_start`. Reads stored settings and sends one authenticated configuration payload per frame.
+**Bridge.** Runs in the ISOLATED world at `document_start`. Reads stored settings, sends the initial authenticated configuration payload, then sends storage-driven updates over the same channel.
 
 **Engine.** Runs in the MAIN world at `document_start`. Installs the per-page fingerprint protections and accepts configuration only through the bridge handshake.
 
