@@ -395,7 +395,7 @@
                 </label>
                 <label class="tp-layer-switch">
                   <span>位置伪装</span>
-                  <span class="switch" data-help="让网站看到你选择的位置；开启后时区默认跟随位置。">
+                  <span class="switch" data-help="让网站看到虚拟位置；未手动选点时默认跟随网络出口。">
                     <input type="checkbox" id="geolocationProtection" aria-label="位置伪装">
                     <i></i>
                   </span>
@@ -436,7 +436,7 @@
                     <circle class="tp-pin-ring" r="7"></circle>
                     <circle class="tp-pin-dot" r="2.6"></circle>
                   </g>
-                  <text class="tp-pin-label" y="-13" text-anchor="middle">东京</text>
+                  <text class="tp-pin-label" y="-13" text-anchor="middle"></text>
                   <circle class="tp-pin-hit" r="17" fill="transparent" pointer-events="all"></circle>
                 </g>
               </svg>
@@ -445,8 +445,8 @@
 
             <div class="tp-hud">
               <div class="tp-hud-place">
-                <span class="tp-place" id="tpPlace">东京</span>
-                <span class="tp-place-en" id="tpPlaceEn">(Tokyo)</span>
+                <span class="tp-place" id="tpPlace">—</span>
+                <span class="tp-place-en" id="tpPlaceEn"></span>
               </div>
               <div class="tp-clock" id="tpClock">--:--</div>
               <div class="tp-hud-meta">
@@ -457,12 +457,12 @@
                 <span id="tpDate">—</span>
               </div>
               <div class="tp-hud-zone" id="tpHudZone">
-                <span class="tp-zone-name" id="tpZone">Asia/Tokyo</span>
-                <span class="tp-zone-offset">(<span id="tpOffset">GMT+9</span>)</span>
+                <span class="tp-zone-name" id="tpZone">UTC</span>
+                <span class="tp-zone-offset">(<span id="tpOffset">GMT</span>)</span>
                 <span class="tp-off-tag" id="tpTzOff" hidden>真实时区</span>
               </div>
               <button class="tp-coords" id="tpCoords" type="button" title="编辑精确坐标">
-                <span id="tpCoordsText">35.6762, 139.6503</span>
+                <span id="tpCoordsText">0.0000, 0.0000</span>
                 <span class="tp-inactive" id="tpCoordsOff" hidden>未生效</span>
               </button>
             </div>
@@ -485,10 +485,10 @@
 
             <div class="tp-coords-pop" id="coordsPop" hidden>
               <label class="tp-coords-field">纬度
-                <input type="number" id="geoLat" step="0.0001" min="-90" max="90" placeholder="34.0522" inputmode="decimal">
+                <input type="number" id="geoLat" step="0.0001" min="-90" max="90" placeholder="0.0000" inputmode="decimal">
               </label>
               <label class="tp-coords-field">经度
-                <input type="number" id="geoLng" step="0.0001" min="-180" max="180" placeholder="-118.2437" inputmode="decimal">
+                <input type="number" id="geoLng" step="0.0001" min="-180" max="180" placeholder="0.0000" inputmode="decimal">
               </label>
               <button type="button" class="tp-coords-apply" id="coordsApply">应用</button>
               <button type="button" class="tp-coords-close" id="coordsClose" aria-label="关闭坐标编辑">×</button>

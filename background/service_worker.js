@@ -18,7 +18,13 @@
  * content-script engine.
  */
 
-const DEFAULT_TIMEZONE = 'America/Los_Angeles';
+const DEFAULT_TIMEZONE = (() => {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (typeof tz === 'string' && tz.trim()) return tz.trim();
+  } catch (_) {}
+  return 'UTC';
+})();
 
 /* ------------------------------------------------------------------ *
  * WebRTC

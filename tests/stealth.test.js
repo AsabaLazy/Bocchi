@@ -431,7 +431,7 @@ const serviceWorkerTests = (async () => {
   // Fallback on all network errors
   mockFetchError = true;
   const fallbackTz = await fetchEgressTimezone();
-  assert.strictEqual(fallbackTz, 'America/Los_Angeles', 'fetchEgressTimezone should fallback to America/Los_Angeles on error');
+  assert.strictEqual(fallbackTz, swModule.exports.DEFAULT_TIMEZONE, 'fetchEgressTimezone should fallback to DEFAULT_TIMEZONE on error');
 
   // syncTimezone stores the timezone and the IP location. Force it because the
   // preceding service-worker init may already have cached a fresh LA lookup.
@@ -648,6 +648,29 @@ if (bridgeStorageChangedListener) {
   const latestGeoFallback = dispatchedBridgeEvents[dispatchedBridgeEvents.length - 1];
   assert.strictEqual(latestGeoFallback.detail.tz, 'Asia/Tokyo',
     'geo mode must fall back to the IP cache until the panel derives a zone');
+
+  // Geolocation coordinates: fall back to egress IP coordinates when no custom pin is stored,
+  // and ignore legacy auto-seeded Los Angeles defaults (34.0522, -118.2437).
+  bridgeStorageData.ipLatitude = 40.7895;
+  bridgeStorageData.ipLongitude = -74.0565;
+  delete bridgeStorageData.geolocationLatitude;
+  delete bridgeStorageData.geolocationLongitude;
+  bridgeStorageChangedListener({ ipLatitude: { newValue: 40.7895 } }, 'local');
+  const latestIpGeo = dispatchedBridgeEvents.filter(e => e.detail && e.detail.geo).pop();
+  assert.strictEqual(latestIpGeo.detail.geo.latitude, 40.7895, 'geo payload must fall back to ipLatitude');
+  assert.strictEqual(latestIpGeo.detail.geo.longitude, -74.0565, 'geo payload must fall back to ipLongitude');
+
+  bridgeStorageData.geolocationLatitude = 34.0522;
+  bridgeStorageData.geolocationLongitude = -118.2437;
+  bridgeStorageData.geoTimezone = 'America/Los_Angeles';
+  bridgeStorageChangedListener({ geolocationLatitude: { newValue: 34.0522 } }, 'local');
+  const legacySeedGeo = dispatchedBridgeEvents.filter(e => e.detail && e.detail.geo).pop();
+  const legacySeedTz = dispatchedBridgeEvents.filter(e => e.detail && typeof e.detail.tz === 'string').pop();
+  assert.strictEqual(legacySeedGeo.detail.geo.latitude, 40.7895, 'legacy LA seed must not override ipLatitude');
+  assert.strictEqual(legacySeedTz.detail.tz, 'Asia/Tokyo', 'legacy LA geoTimezone seed must fall back to egress IP timezone');
+  delete bridgeStorageData.geolocationLatitude;
+  delete bridgeStorageData.geolocationLongitude;
+  delete bridgeStorageData.geoTimezone;
 
   // Restore auto mode for the remaining bridge assertions.
   bridgeStorageData.timezoneMode = 'auto';
@@ -2562,6 +2585,18 @@ const frameRendererB = new winFrameB.WebGLRenderingContext().getParameter(37446)
 assert.strictEqual(frameRendererA, frameRendererB, 'Same-site frames (a.example.com / b.example.com) must report an identical GPU renderer despite independent per-load salts');
 assert.strictEqual(frameRendererA, expectedGpuProfile('a.example.com').renderer, 'Same-site frame renderer must be the pool entry selected by djb2(eTLD+1) % 5');
 console.log('✓ Same-site frames agree on the GPU persona (salt-independent eTLD+1 derivation).');
+
+// Cross-platform GPU pool adaptation (Windows Direct3D11 ANGLE & macOS Metal/OpenGL ANGLE)
+const winWin32 = createMockWindow('win-test.com', 'Win32');
+vm.runInContext(stealthCode, vm.createContext(winWin32));
+const glWin32 = new winWin32.WebGLRenderingContext();
+assert(glWin32.getParameter(37446).includes('Direct3D11'), 'Windows platform must use a Direct3D11 ANGLE GPU renderer');
+assert.strictEqual(glWin32.getParameter(37445), 'Google Inc. (Intel)', 'Windows platform must report Intel vendor');
+
+const winMacIntel = createMockWindow('apple-test.com', 'MacIntel');
+vm.runInContext(stealthCode, vm.createContext(winMacIntel));
+const glMacIntel = new winMacIntel.WebGLRenderingContext();
+assert(glMacIntel.getParameter(37446).startsWith('ANGLE ('), 'macOS platform must use a macOS ANGLE GPU renderer');
 
 // Plugin description passes through natively in every frame: no salt, no
 // host derivation, no replaced getter. (The old host-derived space padding

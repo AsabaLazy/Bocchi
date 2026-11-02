@@ -619,26 +619,45 @@
    * generation is ambiguous the closest documented value is used (approximate,
    * see per-entry notes).
    */
-  const GPU_PROFILES = [
-    // Comet Lake (10th gen) — the previous hardcoded persona; Dawn reports Gen9.
-    { renderer: 'Mesa Intel(R) UHD Graphics (CML GT2)', wgpuArch: 'gen-9' },
+  const GPU_PROFILES_LINUX = [
+    // Comet Lake (10th gen) — Dawn reports Gen9.
+    { vendor: 'Google Inc. (Intel)', wgpuVendor: 'intel', renderer: 'Mesa Intel(R) UHD Graphics (CML GT2)', wgpuArch: 'gen-9' },
     // Tiger Lake (11th gen, Xe) — Dawn reports Gen12LP.
-    { renderer: 'Mesa Intel(R) Iris(R) Xe Graphics (TGL GT2)', wgpuArch: 'gen-12lp' },
+    { vendor: 'Google Inc. (Intel)', wgpuVendor: 'intel', renderer: 'Mesa Intel(R) Iris(R) Xe Graphics (TGL GT2)', wgpuArch: 'gen-12lp' },
     // Kaby Lake (7th gen) — Gen9.
-    { renderer: 'Mesa Intel(R) UHD Graphics 620 (KBL GT2)', wgpuArch: 'gen-9' },
+    { vendor: 'Google Inc. (Intel)', wgpuVendor: 'intel', renderer: 'Mesa Intel(R) UHD Graphics 620 (KBL GT2)', wgpuArch: 'gen-9' },
     // Skylake (6th gen) — Gen9.
-    { renderer: 'Mesa Intel(R) HD Graphics 530 (SKL GT2)', wgpuArch: 'gen-9' },
-    // Ice Lake (10th gen, Gen11 graphics) — Dawn reports Gen11 (approximate:
-    // Ice Lake is sometimes bucketed as gen-12lp like Tiger Lake).
-    { renderer: 'Mesa Intel(R) Iris(R) Plus Graphics (ICL GT2)', wgpuArch: 'gen-11' }
+    { vendor: 'Google Inc. (Intel)', wgpuVendor: 'intel', renderer: 'Mesa Intel(R) HD Graphics 530 (SKL GT2)', wgpuArch: 'gen-9' },
+    // Ice Lake (10th gen, Gen11 graphics) — Dawn reports Gen11.
+    { vendor: 'Google Inc. (Intel)', wgpuVendor: 'intel', renderer: 'Mesa Intel(R) Iris(R) Plus Graphics (ICL GT2)', wgpuArch: 'gen-11' }
   ];
 
-  // Linux Intel vendor tokens: WebGL's UNMASKED_VENDOR_WEBGL is the full
-  // 'Google Inc. (Intel)' string, WebGPU's adapter.info vendor is the short
-  // lowercase token. Both are crowd-common, hardware-driven values and stay
-  // constant across the pool.
-  const GPU_VENDOR_WEBGL = 'Google Inc. (Intel)';
-  const GPU_VENDOR_WGPU = 'intel';
+  const GPU_PROFILES_WINDOWS = [
+    { vendor: 'Google Inc. (Intel)', wgpuVendor: 'intel', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 630 (0x00003E92) Direct3D11 vs_5_0 ps_5_0, D3D11)', wgpuArch: 'gen-9' },
+    { vendor: 'Google Inc. (Intel)', wgpuVendor: 'intel', renderer: 'ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x00009A49) Direct3D11 vs_5_0 ps_5_0, D3D11)', wgpuArch: 'gen-12lp' },
+    { vendor: 'Google Inc. (Intel)', wgpuVendor: 'intel', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 620 (0x00005917) Direct3D11 vs_5_0 ps_5_0, D3D11)', wgpuArch: 'gen-9' },
+    { vendor: 'Google Inc. (Intel)', wgpuVendor: 'intel', renderer: 'ANGLE (Intel, Intel(R) HD Graphics 530 (0x00001912) Direct3D11 vs_5_0 ps_5_0, D3D11)', wgpuArch: 'gen-9' },
+    { vendor: 'Google Inc. (Intel)', wgpuVendor: 'intel', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 770 (0x00004680) Direct3D11 vs_5_0 ps_5_0, D3D11)', wgpuArch: 'gen-12lp' }
+  ];
+
+  const GPU_PROFILES_MAC = [
+    { vendor: 'Google Inc. (Apple)', wgpuVendor: 'apple', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)', wgpuArch: 'metal-3' },
+    { vendor: 'Google Inc. (Apple)', wgpuVendor: 'apple', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)', wgpuArch: 'metal-3' },
+    { vendor: 'Google Inc. (Apple)', wgpuVendor: 'apple', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M3, Unspecified Version)', wgpuArch: 'metal-3' },
+    { vendor: 'Google Inc. (Intel Inc.)', wgpuVendor: 'intel', renderer: 'ANGLE (Intel Inc., Intel(R) Iris(TM) Plus Graphics 640, OpenGL 4.1)', wgpuArch: 'gen-9' },
+    { vendor: 'Google Inc. (Intel Inc.)', wgpuVendor: 'intel', renderer: 'ANGLE (Intel Inc., Intel(R) UHD Graphics 630, OpenGL 4.1)', wgpuArch: 'gen-9' }
+  ];
+
+  function selectGpuPool(win) {
+    let plat = '';
+    try {
+      plat = (win && win.navigator && win.navigator.platform) || (typeof navigator !== 'undefined' && navigator.platform) || '';
+    } catch (_) {}
+    const p = String(plat).toLowerCase();
+    if (p.startsWith('win')) return GPU_PROFILES_WINDOWS;
+    if (p.startsWith('mac')) return GPU_PROFILES_MAC;
+    return GPU_PROFILES_LINUX;
+  }
 
   /**
    * Deterministic non-clamping pixel perturbation:
@@ -852,7 +871,8 @@
     // WebGL/WebGPU section and the section-10 worker bootstrap below all read
     // the exact same profile: a worker that reported a different renderer than
     // the main thread would itself be a cross-context inconsistency signal.
-    const gpuProfile = GPU_PROFILES[djb2(host.split('.').slice(-2).join('.')) % GPU_PROFILES.length];
+    const gpuPool = selectGpuPool(targetWin);
+    const gpuProfile = gpuPool[djb2(host.split('.').slice(-2).join('.')) % gpuPool.length];
 
     const isShieldActive = (feature) => isProtectionActive(feature, targetWin);
     // Closure-local hooks run after an authenticated bridge config payload is
@@ -1644,7 +1664,7 @@
       // (crowd-common for these GPUs).
       function getSpoofedInfo() {
         return {
-          vendor: GPU_VENDOR_WEBGL,
+          vendor: gpuProfile.vendor,
           renderer: gpuProfile.renderer
         };
       }
@@ -1759,7 +1779,7 @@
         // WebGPU generation matches the WebGL renderer the same page sees
         // (a fixed 'gen-12lp' next to an older renderer was itself a mismatch).
         const spoofedGpuInfo = {
-          vendor: GPU_VENDOR_WGPU,
+          vendor: gpuProfile.wgpuVendor,
           architecture: gpuProfile.wgpuArch,
           device: '',
           description: ''
@@ -3085,7 +3105,7 @@
             const coords = {
               latitude: geoConfig.latitude,
               longitude: geoConfig.longitude,
-              accuracy: 25,
+              accuracy: 15 + (seeds.canvas % 21) + ((seeds.audio % 89) + 11) / 100,
               altitude: null,
               altitudeAccuracy: null,
               heading: null,
@@ -3172,7 +3192,12 @@
         try {
           const ow = targetWin.outerWidth;
           const oh = targetWin.outerHeight;
+          const iw = targetWin.innerWidth;
+          const ih = targetWin.innerHeight;
           if ((typeof ow === 'number' && ow > SCREEN_PROFILE.width) || (typeof oh === 'number' && oh > SCREEN_PROFILE.height)) {
+            return false;
+          }
+          if ((typeof iw === 'number' && iw > SCREEN_PROFILE.width) || (typeof ih === 'number' && ih > SCREEN_PROFILE.height)) {
             return false;
           }
           if (realScreenW > 0 && realScreenW < SCREEN_PROFILE.width) {
@@ -3361,6 +3386,15 @@
             }
             return spoofedVoiceObjects;
           };
+          const isWinPlatform = (() => {
+            try {
+              const p = (targetWin.navigator && targetWin.navigator.platform) || '';
+              return String(p).toLowerCase().startsWith('win');
+            } catch (_) {
+              return false;
+            }
+          })();
+          const CJK_VOICE_REGEX = /(?:^(?:zh|cmn|yue)\b|chinese|mandarin|cantonese|putonghua|huihui|kangkang|yaoyao|xiaoxiao|yunxi|tingting|sin-?ji|mei-?jia|普通话|粤语|國語|中文)/i;
           const hookedGetVoices = createNativeFunction(function getVoices() {
             if (!isShieldActive()) {
               return origGetVoices.call(this);
@@ -3368,7 +3402,14 @@
             let raw = [];
             try { raw = origGetVoices.call(this) || []; } catch (_) {}
             if (Array.isArray(raw) && raw.length > 0) {
-              const filtered = raw.filter(v => v && v.name && !v.name.includes('Microsoft'));
+              const hideCjkVoices = fontConfig.blockBuiltinChineseFonts ||
+                (shieldConfig.languageProtection && !/^zh/i.test(shieldConfig.languageTarget || ''));
+              const filtered = raw.filter(v => {
+                if (!v || !v.name) return false;
+                if (!isWinPlatform && v.name.includes('Microsoft')) return false;
+                if (hideCjkVoices && (CJK_VOICE_REGEX.test(v.lang || '') || CJK_VOICE_REGEX.test(v.name))) return false;
+                return true;
+              });
               if (filtered.length > 0) {
                 return filtered;
               }
@@ -5558,7 +5599,7 @@
             // renderer than its page is a cross-context contradiction and would
             // be a detection point. Pool strings are plain literals (no quotes
             // or backslashes), so single-quoted interpolation is safe here.
-            if (pname === 37445) return '${GPU_VENDOR_WEBGL}';
+            if (pname === 37445) return '${gpuProfile.vendor}';
             if (pname === 37446) return '${gpuProfile.renderer}';
             // MAX_TEXTURE_SIZE: keep worker reads identical to the main-thread
             // GPU persona (16384, crowd-common for these Intel GPUs).
@@ -5828,7 +5869,7 @@
       if (gpuObj && typeof gpuObj.requestAdapter === 'function') {
         const origReqAdapter = gpuObj.requestAdapter;
         const spoofedGpuInfo = {
-          vendor: '${GPU_VENDOR_WGPU}',
+          vendor: '${gpuProfile.wgpuVendor}',
           architecture: '${gpuProfile.wgpuArch}',
           device: '',
           description: ''

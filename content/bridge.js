@@ -41,6 +41,7 @@
   const ALL_KEYS = [
     'timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone',
     'geolocationProtection', 'geolocationLatitude', 'geolocationLongitude',
+    'ipLatitude', 'ipLongitude',
     'customHiddenFonts', 'customAllowedFonts', 'blockBuiltinChineseFonts', 'fontMode', 'blockOtherScripts', 'blockSymbols',
     'globalShieldEnabled', 'siteBypassList',
     'canvasProtection', 'webrtcProtection', 'audioProtection', 'timezoneProtection', 'hardwareProtection', 'fontProtection',
@@ -242,11 +243,21 @@
     };
   }
 
+  function isLegacyGeoSeed(res) {
+    return !!(res && res.geolocationLatitude === 34.0522 && res.geolocationLongitude === -118.2437);
+  }
+
   function buildGeoDetail(res) {
+    const lat = normalizeCoordinate(res && res.geolocationLatitude, -90, 90);
+    const lng = normalizeCoordinate(res && res.geolocationLongitude, -180, 180);
+    const hasCustom = lat !== undefined && lng !== undefined && !isLegacyGeoSeed(res);
+    const ipLat = normalizeCoordinate(res && res.ipLatitude, -90, 90);
+    const ipLng = normalizeCoordinate(res && res.ipLongitude, -180, 180);
+    const hasIp = ipLat !== undefined && ipLng !== undefined;
     return {
       enabled: res ? res.geolocationProtection === true : false,
-      latitude: normalizeCoordinate(res && res.geolocationLatitude, -90, 90),
-      longitude: normalizeCoordinate(res && res.geolocationLongitude, -180, 180)
+      latitude: hasCustom ? lat : (hasIp ? ipLat : undefined),
+      longitude: hasCustom ? lng : (hasIp ? ipLng : undefined)
     };
   }
 
@@ -319,9 +330,10 @@
     const ipTz = (res && (res.timezone || res.targetTimezone)) || '';
     if (mode === 'manual') return normalizeTimezone(manual);
     if (mode === 'geo') {
-      // 位置模块关闭时与面板一致:回退出口 IP,不跟随一个并未生效的位置
+      // 位置模块关闭或仅有旧版自动种入的默认坐标时回退出口 IP
       const geoOn = res && res.geolocationProtection === true;
-      return (geoOn && typeof res.geoTimezone === 'string' && res.geoTimezone)
+      const legacyGeo = isLegacyGeoSeed(res) && res.geoTimezone === 'America/Los_Angeles';
+      return (geoOn && !legacyGeo && typeof res.geoTimezone === 'string' && res.geoTimezone)
         ? normalizeTimezone(res.geoTimezone)
         : normalizeTimezone(ipTz);
     }
@@ -383,15 +395,15 @@
         return;
       }
 
-      if (changes.timezone || changes.targetTimezone || changes.timezoneMode || changes.manualTimezone || changes.geoTimezone || changes.geolocationProtection) {
-        chrome.storage.local.get(['timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone', 'geolocationProtection'], (res) => {
+      if (changes.timezone || changes.targetTimezone || changes.timezoneMode || changes.manualTimezone || changes.geoTimezone || changes.geolocationProtection || changes.geolocationLatitude || changes.geolocationLongitude) {
+        chrome.storage.local.get(['timezone', 'targetTimezone', 'timezoneMode', 'manualTimezone', 'geoTimezone', 'geolocationProtection', 'geolocationLatitude', 'geolocationLongitude'], (res) => {
           // Always send: an empty resolution is an explicit null reset, not
           // "leave the previous manual zone in place".
           sendPayload({ tz: resolveTimezone(res) || null });
         });
       }
-      if (changes.geolocationProtection || changes.geolocationLatitude || changes.geolocationLongitude) {
-        chrome.storage.local.get(['geolocationProtection', 'geolocationLatitude', 'geolocationLongitude'], (res) => {
+      if (changes.geolocationProtection || changes.geolocationLatitude || changes.geolocationLongitude || changes.ipLatitude || changes.ipLongitude) {
+        chrome.storage.local.get(['geolocationProtection', 'geolocationLatitude', 'geolocationLongitude', 'ipLatitude', 'ipLongitude'], (res) => {
           sendPayload({ geo: buildGeoDetail(res) });
         });
       }

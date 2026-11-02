@@ -1430,9 +1430,10 @@ window.addEventListener('hashchange', () => {
 });
 
 // 时区 / 位置控制台:地图是唯一交互面,两个眼睛是信号层
-const GEO_DEFAULT = { lat: 34.0522, lng: -118.2437 };
-let geoLat = GEO_DEFAULT.lat;
-let geoLng = GEO_DEFAULT.lng;
+const LEGACY_GEO_SEED = { lat: 34.0522, lng: -118.2437 };
+let geoLat = 0;
+let geoLng = 0;
+let hasCustomGeo = false;
 let ipLat = NaN;
 let ipLng = NaN;
 let ipCity = '';
@@ -1813,6 +1814,30 @@ function populateTzSelect() {
   }
 }
 
+function defaultGeoPoint() {
+  if (Number.isFinite(ipLat) && Number.isFinite(ipLng)) {
+    return { lat: ipLat, lng: ipLng };
+  }
+  if (autoTzValue) {
+    const rep = tzRepPoint(autoTzValue);
+    if (rep) return rep;
+  }
+  if (hostTz) {
+    const hostRep = tzRepPoint(hostTz);
+    if (hostRep) return hostRep;
+  }
+  return { lat: 0, lng: 0 };
+}
+
+function syncDefaultGeoFromEgress() {
+  if (hasCustomGeo || dragging) return;
+  const pt = defaultGeoPoint();
+  geoLat = pt.lat;
+  geoLng = pt.lng;
+  if ($geoLat) $geoLat.value = geoLat;
+  if ($geoLng) $geoLng.value = geoLng;
+}
+
 function applyTzUI(res) {
   const mode = res && res.timezoneMode;
   tzMode = mode === 'manual' ? 'manual' : (mode === 'geo' ? 'geo' : 'auto');
@@ -1820,6 +1845,7 @@ function applyTzUI(res) {
   tzGeo = res && typeof res.geoTimezone === 'string' ? res.geoTimezone : '';
   const autoTz = res && (res.timezone || res.targetTimezone);
   autoTzValue = autoTz || '';
+  syncDefaultGeoFromEgress();
   populateTzSelect();
   if ($tzSelect) {
     const fallback = autoTz || 'UTC';
@@ -1838,10 +1864,15 @@ function applyTzUI(res) {
 
 function applyGeoUI(res) {
   if (dragging) return;
-  const lat = res && typeof res.geolocationLatitude === 'number' && isFinite(res.geolocationLatitude)
-    ? res.geolocationLatitude : GEO_DEFAULT.lat;
-  const lng = res && typeof res.geolocationLongitude === 'number' && isFinite(res.geolocationLongitude)
-    ? res.geolocationLongitude : GEO_DEFAULT.lng;
+  const hasLat = res && typeof res.geolocationLatitude === 'number' && isFinite(res.geolocationLatitude);
+  const hasLng = res && typeof res.geolocationLongitude === 'number' && isFinite(res.geolocationLongitude);
+  const isLegacySeed = hasLat && hasLng &&
+    res.geolocationLatitude === LEGACY_GEO_SEED.lat &&
+    res.geolocationLongitude === LEGACY_GEO_SEED.lng;
+  hasCustomGeo = !!(hasLat && hasLng && !isLegacySeed);
+  const fallback = defaultGeoPoint();
+  const lat = hasCustomGeo ? res.geolocationLatitude : fallback.lat;
+  const lng = hasCustomGeo ? res.geolocationLongitude : fallback.lng;
   geoLat = lat;
   geoLng = lng;
   if ($geoLat) $geoLat.value = lat;
@@ -1854,6 +1885,7 @@ function applyIpUI(res) {
   ipLat = res && typeof res.ipLatitude === 'number' && isFinite(res.ipLatitude) ? res.ipLatitude : NaN;
   ipLng = res && typeof res.ipLongitude === 'number' && isFinite(res.ipLongitude) ? res.ipLongitude : NaN;
   ipCity = res && typeof res.ipCity === 'string' ? res.ipCity : '';
+  syncDefaultGeoFromEgress();
   renderConsole();
 }
 
@@ -1873,13 +1905,20 @@ function saveGeo() {
 
 function commitPin() {
   if (!settingsLoaded) return;
+  hasCustomGeo = true;
   saveGeo();
-  if (tzMode === 'geo') {
+  if (tzMode === 'geo' || (tzMode === 'auto' && geoLayerOn())) {
     const derived = nearestTz(geoLat, geoLng);
+    const patch = {};
+    if (tzMode === 'auto') {
+      patch.timezoneMode = 'geo';
+      tzMode = 'geo';
+    }
     if (derived && derived !== tzGeo) {
       tzGeo = derived;
-      chrome.storage.local.set({ geoTimezone: derived });
+      patch.geoTimezone = derived;
     }
+    if (Object.keys(patch).length) chrome.storage.local.set(patch);
   }
   renderConsole();
 }
@@ -1980,6 +2019,7 @@ function renderConsole() {
   let note = '';
   if (!tzOn) note = '时区伪装已关闭，网站看到真实时区';
   else if (!geoOn && tzMode === 'geo') note = '位置伪装已关闭，时区回退到网络出口';
+  else if (tzMode !== 'auto' && autoTzValue && zone !== autoTzValue) note = '当前时区与网络出口（' + autoTzValue + '）不一致';
   if ($tzNote) $tzNote.textContent = note;
 }
 
@@ -2008,7 +2048,11 @@ function setTzSource(mode) {
     }
     tzMode = 'manual';
   } else {
+    hasCustomGeo = false;
+    tzGeo = '';
+    syncDefaultGeoFromEgress();
     chrome.storage.local.set({ timezoneMode: 'auto' });
+    chrome.storage.local.remove(['geolocationLatitude', 'geolocationLongitude', 'geoTimezone']);
     tzMode = 'auto';
   }
   renderConsole();
@@ -2025,15 +2069,15 @@ if ($tzSelect) {
   });
 }
 
-// 模块开关变化:开启位置伪装时,时区默认跟随位置(仅从自动切换)
+// 模块开关变化:开启位置伪装时若尚未拿到出口坐标,触发一次出口同步;不强制改动 timezoneMode
 function onModuleToggle(key, on) {
   syncModuleUi();
-  if (key === 'geolocationProtection' && on && tzMode === 'auto') {
-    const derived = nearestTz(geoLat, geoLng);
-    const patch = { timezoneMode: 'geo' };
-    if (derived) { patch.geoTimezone = derived; tzGeo = derived; }
-    chrome.storage.local.set(patch);
-    tzMode = 'geo';
+  if (key === 'geolocationProtection' && on && !hasCustomGeo && !(Number.isFinite(ipLat) && Number.isFinite(ipLng))) {
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+      try {
+        chrome.runtime.sendMessage({ type: 'SYNC_EGRESS' }, () => { void chrome.runtime.lastError; });
+      } catch (_) {}
+    }
   }
   renderConsole();
 }
@@ -2292,20 +2336,6 @@ if ($coordsClose) $coordsClose.addEventListener('click', () => { if ($coordsPop)
   });
 });
 
-// 首次开启位置伪装时,若从未设置过坐标,种入默认坐标,避免 0,0
-const $geoProtection = document.getElementById('geolocationProtection');
-if ($geoProtection) {
-  $geoProtection.addEventListener('change', () => {
-    if (!settingsLoaded || !$geoProtection.checked) return;
-    chrome.storage.local.get(['geolocationLatitude', 'geolocationLongitude'], (r) => {
-      if (chrome.runtime.lastError) return;
-      if (typeof r.geolocationLatitude !== 'number' || typeof r.geolocationLongitude !== 'number') {
-        chrome.storage.local.set({ geolocationLatitude: geoLat, geolocationLongitude: geoLng });
-      }
-    });
-  });
-}
-
 // 地图底图 / 经纬网
 if ($worldPath && window.BOCCHI_WORLD_MAP_PATH) {
   $worldPath.setAttribute('d', window.BOCCHI_WORLD_MAP_PATH);
@@ -2426,10 +2456,21 @@ async function init() {
           if (!moduleInputs[key]) continue;
           moduleInputs[key].checked = (key === 'geolocationProtection' || key === 'languageProtection') ? res[key] === true : res[key] !== false;
         }
+        if (res.geolocationLatitude === LEGACY_GEO_SEED.lat && res.geolocationLongitude === LEGACY_GEO_SEED.lng) {
+          delete res.geolocationLatitude;
+          delete res.geolocationLongitude;
+          chrome.storage.local.remove(['geolocationLatitude', 'geolocationLongitude'], () => { void chrome.runtime.lastError; });
+          if (res.timezoneMode === 'geo' && res.geoTimezone === 'America/Los_Angeles') {
+            res.timezoneMode = 'auto';
+            delete res.geoTimezone;
+            chrome.storage.local.set({ timezoneMode: 'auto' }, () => { void chrome.runtime.lastError; });
+            chrome.storage.local.remove(['geoTimezone'], () => { void chrome.runtime.lastError; });
+          }
+        }
         syncModuleUi();
+        applyIpUI(res);
         applyTzUI(res);
         applyGeoUI(res);
-        applyIpUI(res);
         applyCityLanguage('system');
         if ($languageTarget) $languageTarget.value = normalizeLanguageTarget(res.languageTarget);
         const storedBypass = Array.isArray(res.siteBypassList) ? res.siteBypassList : [];
